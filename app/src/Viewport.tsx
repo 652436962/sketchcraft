@@ -3013,9 +3013,14 @@ export default function Viewport(props: Props) {
           if (wall && sn.face && (L.placeAsset === "door" || L.placeAsset === "garage_door")) at.z = Math.min(...sn.face.outer.map((q) => q[2]));
           const k = L.placeAsset;
           // a library file, a component already in the model, or a starter asset
-          if (k.startsWith("file:")) await run({ cmd: "insert_file", path: k.slice(5), at: arr(at), rotate: r4(rot) });
-          else if (k.startsWith("component:")) await run({ cmd: "place", component: Number(k.slice(10)), at: arr(at), rotate: r4(rot) });
-          else await run({ cmd: "insert", asset: k, at: arr(at), rotate: r4(rot) });
+          // dropped on a face: doors, windows (and components set to) cut their opening there
+          const host = wall && sn.face ? sn.face.id : undefined;
+          let r: Reply;
+          if (k.startsWith("file:")) r = await run({ cmd: "insert_file", path: k.slice(5), at: arr(at), rotate: r4(rot) });
+          else if (k.startsWith("component:")) r = await run({ cmd: "place", component: Number(k.slice(10)), at: arr(at), rotate: r4(rot), host });
+          else r = await run({ cmd: "insert", asset: k, at: arr(at), rotate: r4(rot), host });
+          const op = r.opening as { error?: string } | null | undefined;
+          if (op?.error) L.onToast(`Placed, but no opening: ${op.error}`, true);
           return;
         }
       }

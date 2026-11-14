@@ -566,6 +566,17 @@ export function EntityInfo({ scene, sel, run }: { scene: Scene; sel: Sel; run: R
           </select>
         </label>
       )}
+      {insts.length === 1 &&
+        (() => {
+          const comp = scene.components.find((c) => c.id === insts[0].component);
+          if (!comp) return null;
+          return (
+            <label className="field check" title="Placed on a wall (or any face), it cuts a hole there, through the wall when it's thick">
+              <input type="checkbox" checked={!!comp.cuts} onChange={(e) => run({ cmd: "component_cuts", id: comp.id, cuts: e.target.checked })} />
+              <span>Cuts an opening where placed</span>
+            </label>
+          );
+        })()}
       {insts.length === 1 && <ComponentOptions key={`o${insts[0].id}:${JSON.stringify(insts[0].attrs ?? {})}`} id={insts[0].id} run={run} />}
       {insts.length === 1 && <AttrEditor key={`a${insts[0].id}:${JSON.stringify(insts[0].attrs ?? {})}`} id={insts[0].id} attrs={insts[0].attrs ?? {}} run={run} />}
       {taggable.length > 0 && (

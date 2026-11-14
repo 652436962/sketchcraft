@@ -147,7 +147,12 @@ pub enum Command {
         rotate: f64,
         #[serde(default)]
         name: Option<String>,
+        /// the face it's placed on: a component that cuts openings cuts one there
+        #[serde(default)]
+        host: Option<Id>,
     },
+    /// Whether a component cuts an opening in the face it's placed on.
+    ComponentCuts { id: Id, cuts: bool },
     /// Open a group, or a component's definition through one of its placements; `close` to finish.
     Edit { id: Id },
     Close,
@@ -837,6 +842,9 @@ pub enum Command {
         at: [f64; 3],
         #[serde(default)]
         rotate: f64,
+        /// the face it's placed on (doors and windows cut their opening there)
+        #[serde(default)]
+        host: Option<Id>,
     },
     /// List the built-in assets.
     Assets,
@@ -1446,13 +1454,21 @@ impl Engine {
                 let inst = m.make_component(&ids, n)?;
                 json!({"instance": inst, "component": m.instances[&inst].def})
             }
-            Command::Place { component, at, rotate, name } => {
+            Command::Place { component, at, rotate, name, host } => {
                 let key = match &component {
                     Value::String(s) => s.clone(),
                     other => other.to_string(),
                 };
                 let Some(def) = m.find_definition(&key) else { bail!("no component {key}") };
-                json!({"instance": m.place(def, v3(at), rotate, name)?})
+                let instance = m.place(def, v3(at), rotate, name)?;
+                let opening = place_cut(m, instance, host);
+                json!({"instance": instance, "opening": opening})
+            }
+            Command::ComponentCuts { id, cuts } => {
+                let def = m.instances.get(&id).map(|i| i.def).unwrap_or(id);
+                let d = m.definitions.get_mut(&def).ok_or_else(|| anyhow::anyhow!("{id} is not a component"))?;
+                d.cuts = cuts;
+                json!({"component": def, "cuts": cuts})
             }
             Command::Edit { id } => {
                 if m.groups.contains_key(&id) {
@@ -2379,9 +2395,11 @@ impl Engine {
             }
             Command::Roof { face, kind, pitch, overhang, thickness } => json!({"group": m.roof(face, &kind, pitch, overhang, thickness)?}),
             Command::Column { at, size, height, round } => json!({"group": m.column(v3(at), size, height, round)?}),
-            Command::Insert { asset, at, rotate } => {
+            Command::Insert { asset, at, rotate, host } => {
                 let def = crate::assets::definition(m, &asset)?;
-                json!({"instance": m.place(def, v3(at), rotate, None)?, "component": def})
+                let instance = m.place(def, v3(at), rotate, None)?;
+                let opening = place_cut(m, instance, host);
+                json!({"instance": instance, "component": def, "opening": opening})
             }
             Command::Assets => json!({"assets": crate::assets::ASSETS.iter().map(|a| json!({"key": a.key, "name": a.name, "about": a.about})).collect::<Vec<_>>()}),
             Command::ExportObj { path } => {
@@ -2389,6 +2407,20 @@ impl Engine {
                 json!({"path": path, "triangles": tris})
             }
         })
+    }
+}
+
+/// After placing: a component that cuts openings, put on a face, cuts one.
+/// What happened, for the reply (null when nothing was asked).
+fn place_cut(m: &mut Model, instance: Id, host: Option<Id>) -> Value {
+    let Some(host) = host else { return Value::Null };
+    let Some(i) = m.instances.get(&instance) else { return Value::Null };
+    let (def_id, t) = (i.def, i.transform);
+    let Some(d) = m.definitions.get(&def_id).filter(|d| d.cuts) else { return Value::Null };
+    let def = d.model.clone();
+    match crate::openings::cut(m, &def, t, host) {
+        Ok(n) => json!({"faces": n}),
+        Err(e) => json!({"error": e.to_string()}),
     }
 }
 

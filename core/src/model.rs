@@ -91,6 +91,9 @@ pub struct Definition {
     /// the library file it came from (placing that file again reuses it)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// placed on a face, it cuts an opening there (doors, windows)
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cuts: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

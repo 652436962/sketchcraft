@@ -124,7 +124,7 @@ pub fn build(root: &Model, ctx: Option<u32>) -> Value {
             // placed in the model, and placed inside other components (parts)
             let top = root.instances.values().filter(|i| i.def == *id).count();
             let inside: usize = root.definitions.values().map(|o| o.model.instances.values().filter(|i| i.def == *id).count()).sum();
-            json!({"id": id, "name": d.name, "placed": top, "inside": inside, "source": d.source})
+            json!({"id": id, "name": d.name, "placed": top, "inside": inside, "source": d.source, "cuts": d.cuts})
         })
         .collect();
     // Rounded so big imports stay a few MB of JSON: 0.01 mm positions,

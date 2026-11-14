@@ -35,6 +35,7 @@ pub mod mcp;
 pub mod mesh;
 pub mod matchphoto;
 pub mod model;
+pub mod openings;
 pub mod photomodel;
 pub mod photoproject;
 pub mod pt;

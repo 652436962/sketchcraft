@@ -119,7 +119,7 @@ pub fn adopt(root: &mut Model, mut src: Model, name: &str, source: Option<String
         root.materials.entry(k.clone()).or_insert(mat.clone());
     }
     let id = root.new_id();
-    root.definitions.insert(id, Definition { name: name.to_string(), model: std::sync::Arc::new(src), attrs: Default::default(), source });
+    root.definitions.insert(id, Definition { name: name.to_string(), model: std::sync::Arc::new(src), attrs: Default::default(), source, cuts: false });
     id
 }
 

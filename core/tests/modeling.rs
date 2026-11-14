@@ -2176,3 +2176,40 @@ fn section_planes_named_switch_and_save() {
     assert_eq!((e2.model.sections.len(), e2.model.active_section), (1, None));
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// Doors and windows cut their opening: a window through a 20 cm wall (both
+/// faces, with reveals), a door notched up from the floor.
+#[test]
+fn doors_and_windows_cut_openings_through_walls() {
+    let mut e = Engine::new();
+    // a 6 m wall, 0.2 thick, 2.7 high; its street side faces -Y at y = 0
+    let f = run(&mut e, json!({"cmd":"rect","from":[0,0,0],"to":[6,0.2,0]}))["face"].as_u64().unwrap();
+    run(&mut e, json!({"cmd":"pushpull","face":f,"distance":2.7,"toward":[0,0,1]}));
+    let front = |e: &mut Engine| -> u64 {
+        let r = e.exec_json(&json!({"cmd":"faces"}).to_string());
+        r["faces"].as_array().unwrap().iter().find(|x| x["normal"][1].as_f64().unwrap() < -0.99 && x["center"][1].as_f64().unwrap().abs() < 1e-6).unwrap()["id"].as_u64().unwrap()
+    };
+    let wall = front(&mut e);
+    let area0: f64 = 6.0 * 2.7;
+    // a 1.2 x 1.5 window, sill at 0.9
+    let r = run(&mut e, json!({"cmd":"insert","asset":"window","at":[1,0,0.9],"host":wall}));
+    assert_eq!(r["opening"]["faces"], 2, "front and back of the wall: {r}");
+    let faces = run(&mut e, json!({"cmd":"faces"}))["faces"].as_array().unwrap().clone();
+    let street: f64 = faces.iter().filter(|x| x["normal"][1].as_f64().unwrap() < -0.99 && x["center"][1].as_f64().unwrap().abs() < 1e-6).map(|x| x["area"].as_f64().unwrap()).sum();
+    assert!((street - (area0 - 1.8)).abs() < 1e-3, "the street face lost the window: {street}");
+    let garden: f64 = faces.iter().filter(|x| x["normal"][1].as_f64().unwrap() > 0.99 && (x["center"][1].as_f64().unwrap() - 0.2).abs() < 1e-6).map(|x| x["area"].as_f64().unwrap()).sum();
+    assert!((garden - (area0 - 1.8)).abs() < 1e-3, "and so did the garden face: {garden}");
+    // reveals: four 0.2-deep sides, facing into the opening
+    let reveals = faces.iter().filter(|x| (x["area"].as_f64().unwrap() - 0.2 * 1.2).abs() < 1e-6 || (x["area"].as_f64().unwrap() - 0.2 * 1.5).abs() < 1e-6).count();
+    assert_eq!(reveals, 4);
+    // a 1 x 2.1 door at x = 4, from the floor: a notch in the wall's outline
+    let wall = front(&mut e);
+    let r = run(&mut e, json!({"cmd":"insert","asset":"door","at":[4,0,0],"host":wall}));
+    assert_eq!(r["opening"]["faces"], 2, "{r}");
+    let faces = run(&mut e, json!({"cmd":"faces"}))["faces"].as_array().unwrap().clone();
+    let street: f64 = faces.iter().filter(|x| x["normal"][1].as_f64().unwrap() < -0.99 && x["center"][1].as_f64().unwrap().abs() < 1e-6).map(|x| x["area"].as_f64().unwrap()).sum();
+    assert!((street - (area0 - 1.8 - 2.1)).abs() < 1e-3, "{street}");
+    // not on a wall: placed, no opening, no error
+    let r = run(&mut e, json!({"cmd":"insert","asset":"window","at":[20,5,0]}));
+    assert!(r["opening"].is_null());
+}

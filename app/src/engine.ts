@@ -53,6 +53,8 @@ export interface InstanceInfo {
 
 export interface ComponentInfo {
   id: number;
+  /** cuts an opening in the face it's placed on */
+  cuts?: boolean;
   name: string;
   /** placements in the model */
   placed: number;
