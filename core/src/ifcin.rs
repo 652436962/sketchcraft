@@ -154,7 +154,7 @@ fn build(m: &mut Model, data: Out, name: &str) -> Result<IfcResult> {
                     .entry(key)
                     .or_insert_with(|| {
                         let n = format!("ifc:{:02x}{:02x}{:02x}{}", key.0, key.1, key.2, if key.3 < 255 { format!("-{:02x}", key.3) } else { String::new() });
-                        m.materials.entry(n.clone()).or_insert(crate::model::Material { color: [c[0] as f32, c[1] as f32, c[2] as f32], texture: None, opacity: (c[3] as f32).clamp(0.05, 1.0) });
+                        m.materials.entry(n.clone()).or_insert(crate::model::Material { color: [c[0] as f32, c[1] as f32, c[2] as f32], texture: None, opacity: (c[3] as f32).clamp(0.05, 1.0), ..Default::default() });
                         n
                     })
                     .clone()

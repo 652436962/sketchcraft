@@ -792,6 +792,17 @@ export function formatArea(m2: number, units: string): string {
 
 
 /** Image materials: add one from a photo, paint with it, size it, project it. */
+/** How a surface reflects: SketchUp-style presets over physically based values. */
+const FINISHES: { label: string; roughness?: number; metalness?: number; glass?: boolean; emission?: number }[] = [
+  { label: "Matte", roughness: 0.9, metalness: 0 },
+  { label: "Satin", roughness: 0.5, metalness: 0 },
+  { label: "Gloss", roughness: 0.12, metalness: 0 },
+  { label: "Metal", roughness: 0.25, metalness: 1 },
+  { label: "Brushed metal", roughness: 0.55, metalness: 1 },
+  { label: "Glass", roughness: 0.02, glass: true },
+  { label: "Glow", roughness: 0.9, emission: 3 },
+];
+
 export function Textures({
   scene,
   paintMaterial,
@@ -837,6 +848,14 @@ export function Textures({
   const ids = [...sel.faces, ...sel.groups];
   return (
     <div className="section">
+      <div className="section-title">Finish</div>
+      <div className="finishes" title={ids.length ? "Applies to the selection, keeping each face's color or image" : "Select faces or groups first"}>
+        {FINISHES.map((f) => (
+          <button key={f.label} className="btn small ghost" disabled={!ids.length} onClick={() => run({ cmd: "finish", ids, ...f }).then((r) => r.ok && onToast(`${f.label}: renders, and Faces › Physically based, show it`))}>
+            {f.label}
+          </button>
+        ))}
+      </div>
       <div className="section-title">Textures</div>
       <div className="swatches">
         {textures.map((m) => (

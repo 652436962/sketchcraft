@@ -484,6 +484,20 @@ pub enum Command {
         #[serde(default)]
         reset: bool,
     },
+    /// A finish on faces (or everything in groups): each keeps its color or
+    /// image, as a material "<its material> (<label>)" with these values.
+    Finish {
+        ids: Vec<Id>,
+        label: String,
+        #[serde(default)]
+        roughness: Option<f32>,
+        #[serde(default)]
+        metalness: Option<f32>,
+        #[serde(default)]
+        glass: Option<bool>,
+        #[serde(default)]
+        emission: Option<f32>,
+    },
     /// Component Options: the attributes a placement offers its user (those
     /// with an `_name_access` of textbox, list or view).
     Options { id: Id },
@@ -585,7 +599,21 @@ pub enum Command {
     /// A named material with a color (paint with it by name). Names say what
     /// it is to the photoreal renderer: glass / window, metal / steel /
     /// chrome, light / lamp; anything else is paint.
-    Material { name: String, color: [f32; 3] },
+    /// `roughness` 0..1, `metalness` 0..1, `glass`, `emission`: how it looks
+    /// in renders (and the viewport's physically based style).
+    Material {
+        name: String,
+        #[serde(default)]
+        color: Option<[f32; 3]>,
+        #[serde(default)]
+        roughness: Option<f32>,
+        #[serde(default)]
+        metalness: Option<f32>,
+        #[serde(default)]
+        glass: Option<bool>,
+        #[serde(default)]
+        emission: Option<f32>,
+    },
     /// Photoreal render (path traced): sun from azimuth (degrees from north,
     /// clockwise) and altitude; `samples` per pixel (16 preview, 128+ final).
     Photoreal {
@@ -2210,6 +2238,33 @@ impl Engine {
                 m.active_section = None;
                 json!({})
             }
+            Command::Finish { ids, label, roughness, metalness, glass, emission } => {
+                let faces = m.faces_of(&ids)?;
+                let label: String = label.trim().chars().take(40).collect();
+                if label.is_empty() {
+                    bail!("name the finish");
+                }
+                let mut made = std::collections::BTreeSet::new();
+                for fid in &faces {
+                    let base = m.faces.get(fid).and_then(|f| f.material.clone());
+                    // the base without an earlier finish's suffix
+                    let root = base.as_deref().map(|b| b.rsplit_once(" (").filter(|(_, s)| s.ends_with(')')).map(|(r, _)| r.to_string()).unwrap_or_else(|| b.to_string()));
+                    let name = format!("{} ({label})", root.as_deref().unwrap_or("Default"));
+                    if !m.materials.contains_key(&name) {
+                        let mut mat = root.as_deref().and_then(|r| m.materials.get(r)).or_else(|| base.as_deref().and_then(|b| m.materials.get(b))).cloned().unwrap_or_default();
+                        mat.roughness = roughness.map(|x| x.clamp(0.0, 1.0));
+                        mat.metalness = metalness.map(|x| x.clamp(0.0, 1.0));
+                        mat.glass = glass;
+                        mat.emission = emission.map(|x| x.clamp(0.0, 100.0));
+                        m.materials.insert(name.clone(), mat);
+                    }
+                    if let Some(f) = m.faces.get_mut(fid) {
+                        f.material = Some(name.clone());
+                    }
+                    made.insert(name);
+                }
+                json!({"faces": faces.len(), "materials": made})
+            }
             Command::Options { id } => {
                 let i = m.instances.get(&id).ok_or_else(|| anyhow::anyhow!("{id} is not a component placement"))?;
                 json!({"options": crate::dynamic::options(i, m.definitions.get(&i.def))})
@@ -2375,9 +2430,24 @@ impl Engine {
                 let groups = m.slice(id, v3(origin), v3(normal))?;
                 json!({"groups": groups, "group": groups.first()})
             }
-            Command::Material { name, color } => {
+            Command::Material { name, color, roughness, metalness, glass, emission } => {
                 let mat = m.materials.entry(name.clone()).or_default();
-                mat.color = color;
+                if let Some(c) = color {
+                    mat.color = c;
+                }
+                let unit = |x: f32| if x.is_finite() { x.clamp(0.0, 1.0) } else { 0.5 };
+                if let Some(r) = roughness {
+                    mat.roughness = Some(unit(r));
+                }
+                if let Some(x) = metalness {
+                    mat.metalness = Some(unit(x));
+                }
+                if let Some(g) = glass {
+                    mat.glass = Some(g);
+                }
+                if let Some(e) = emission {
+                    mat.emission = Some(if e.is_finite() { e.clamp(0.0, 100.0) } else { 0.0 });
+                }
                 json!({"material": name})
             }
             Command::SaveImage { path, data } => {

@@ -2656,3 +2656,11 @@ details.panel-fold {
   background: var(--panel);
   color: var(--text);
 }
+
+/* Paint › Finish */
+.finishes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}

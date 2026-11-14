@@ -90,6 +90,10 @@ export interface MaterialInfo {
   texture: { data: string; width: number; height: number; project: Vec3 | null } | null;
   /** see-through in the view (reference images): 1 solid */
   opacity?: number;
+  roughness?: number | null;
+  metalness?: number | null;
+  glass?: boolean | null;
+  emission?: number | null;
 }
 
 export interface CloudInfo {
@@ -142,6 +146,8 @@ export interface Scene {
   colors: number[];
   /** per triangle: r, g, b */
   backColors: number[];
+  /** per triangle: roughness, metalness (the physically based style) */
+  pbr?: number[];
   /** owner of each triangle: a face id, or a component instance id */
   triFace: number[];
   faces: FaceInfo[];

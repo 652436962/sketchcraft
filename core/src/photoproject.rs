@@ -113,7 +113,7 @@ pub fn project(m: &mut Model, view: &str, faces: &[Id], size: u32) -> Result<Pro
         let cnt = (tw * th) as f64 * 255.0;
         m.materials.insert(
             name.clone(),
-            Material { color: [(avg[0] / cnt) as f32, (avg[1] / cnt) as f32, (avg[2] / cnt) as f32], texture: Some(Texture { data, width, height, project: Some((-n).to_array()), origin: Some(origin.to_array()) }), opacity: 1.0 },
+            Material { color: [(avg[0] / cnt) as f32, (avg[1] / cnt) as f32, (avg[2] / cnt) as f32], texture: Some(Texture { data, width, height, project: Some((-n).to_array()), origin: Some(origin.to_array()) }), opacity: 1.0, ..Default::default() },
         );
         m.faces.get_mut(&fid).unwrap().material = Some(name);
         out.faces.push(fid);

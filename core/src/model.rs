@@ -174,12 +174,35 @@ pub struct Material {
     /// see-through in the view (reference images); 1 = solid
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub opacity: f32,
+    /// physically based: 0 mirror-smooth .. 1 matte (none: by its name)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roughness: Option<f32>,
+    /// 0 paint, plastic, wood .. 1 metal
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metalness: Option<f32>,
+    /// clear glass (renders see through it)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glass: Option<bool>,
+    /// glows (a lamp, a screen): how bright, 0..
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emission: Option<f32>,
 }
 
 impl Default for Material {
     fn default() -> Self {
         // solid unless asked: a derived default would make new materials invisible
-        Material { color: [0.8, 0.8, 0.8], texture: None, opacity: 1.0 }
+        Material { color: [0.8, 0.8, 0.8], texture: None, opacity: 1.0, roughness: None, metalness: None, glass: None, emission: None }
+    }
+}
+
+impl Material {
+    /// Roughness and metalness as renders use them (asked for, else from the name).
+    pub fn pbr(&self, name: &str) -> (f32, f32) {
+        let n = name.to_ascii_lowercase();
+        let metal_name = ["metal", "steel", "chrome", "alumin", "iron", "copper", "brass"].iter().any(|w| n.contains(w));
+        let metal = self.metalness.unwrap_or(if metal_name { 1.0 } else { 0.0 }).clamp(0.0, 1.0);
+        let rough = self.roughness.unwrap_or(if metal >= 0.5 { 0.3 } else { 0.6 }).clamp(0.0, 1.0);
+        (rough, metal)
     }
 }
 
@@ -1020,7 +1043,7 @@ impl Model {
             (color[1].clamp(0.0, 1.0) * 255.0).round() as u8,
             (color[2].clamp(0.0, 1.0) * 255.0).round() as u8
         );
-        self.materials.entry(name.clone()).or_insert(Material { color, texture: None, opacity: 1.0 });
+        self.materials.entry(name.clone()).or_insert(Material { color, texture: None, opacity: 1.0, ..Default::default() });
         for f in self.faces_of(ids)? {
             self.faces.get_mut(&f).unwrap().material = Some(name.clone());
         }

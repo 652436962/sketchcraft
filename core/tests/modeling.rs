@@ -2229,3 +2229,37 @@ fn drawing_axes_set_and_reset() {
     run(&mut e, json!({"cmd":"set_axes","reset":true}));
     assert!(e.model.axes.is_none());
 }
+
+/// Finishes: physically based values on a copy of each face's material,
+/// used by renders, the scene and glTF.
+#[test]
+fn finishes_make_physically_based_materials() {
+    let mut e = Engine::new();
+    let f = run(&mut e, json!({"cmd":"rect","from":[0,0,0],"to":[1,1,0]}))["face"].as_u64().unwrap();
+    run(&mut e, json!({"cmd":"pushpull","face":f,"distance":1,"toward":[0,0,1]}));
+    let faces = run(&mut e, json!({"cmd":"connected","id":f,"all":true}))["faces"].clone();
+    run(&mut e, json!({"cmd":"paint","ids":faces,"color":[0.75,0.2,0.18]}));
+    let r = run(&mut e, json!({"cmd":"finish","ids":faces,"label":"Metal","roughness":0.25,"metalness":1}));
+    let name = r["materials"][0].as_str().unwrap().to_string();
+    assert!(name.ends_with(" (Metal)"), "{name}");
+    let mat = &e.model.materials[&name];
+    assert_eq!((mat.roughness, mat.metalness), (Some(0.25), Some(1.0)));
+    assert!((mat.color[0] - 0.75).abs() < 0.01, "keeps its color");
+    // again with another finish: from the same base, not stacked
+    let r = run(&mut e, json!({"cmd":"finish","ids":faces,"label":"Gloss","roughness":0.1,"metalness":0}));
+    assert!(!r["materials"][0].as_str().unwrap().contains("(Metal)"), "{r}");
+    // the scene carries it per triangle; the material command sets values directly
+    run(&mut e, json!({"cmd":"material","name":"Steel","metalness":1,"roughness":0.4}));
+    assert_eq!(e.model.materials["Steel"].pbr("Steel"), (0.4, 1.0));
+    let s = sketchcraft::scene::build(&e.model, None);
+    assert_eq!(s["pbr"].as_array().unwrap().len(), s["triFace"].as_array().unwrap().len() * 2);
+    // glTF writes the values
+    let dir = std::env::temp_dir().join(format!("sketchcraft-pbr-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("m.glb").to_string_lossy().to_string();
+    run(&mut e, json!({"cmd":"export_glb","path":path}));
+    let glb = std::fs::read(&path).unwrap();
+    let text = String::from_utf8_lossy(&glb);
+    assert!(text.contains("\"roughnessFactor\":0.1"), "the gloss in the glTF");
+    std::fs::remove_dir_all(dir).ok();
+}

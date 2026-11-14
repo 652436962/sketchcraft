@@ -8,6 +8,7 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { GTAOPass } from "three/examples/jsm/postprocessing/GTAOPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
@@ -49,7 +50,7 @@ export interface BuildSettings {
   contourSpacing: number;
 }
 
-export type FaceStyle = "textured" | "shaded" | "monochrome" | "hiddenline" | "wireframe";
+export type FaceStyle = "textured" | "shaded" | "monochrome" | "hiddenline" | "wireframe" | "physical";
 export type Backdrop = "default" | "paper" | "blueprint" | "night";
 
 /** A pleasant color for a tag that hasn't been given one (stable per name). */
@@ -474,6 +475,8 @@ export default function Viewport(props: Props) {
 
   /** camera tools: eye height, the drag in progress, keys held, view history */
   const camTool = useRef<{ eyeH: number; drag: { x: number; y: number; at: number } | null; keys: Set<string>; loop: number; history: Cam[]; at: number; box: HTMLDivElement | null }>({ eyeH: 1.68, drag: null, keys: new Set(), loop: 0, history: [], at: -1, box: null });
+  /** the studio reflection for the physically based style (made the first time) */
+  const envMap = useRef<THREE.Texture | null>(null);
   /** the red / green / blue lines at the drawing axes' origin */
   const axesGroup = useRef(new THREE.Group());
   /** the section plane last taken from the scene (id, place), so the cut follows it */
@@ -982,7 +985,31 @@ export default function Viewport(props: Props) {
     const faceStyle: FaceStyle = sty.face ?? "textured";
     const bg = BACKGROUNDS[sty.background ?? "default"];
     const common = { side: THREE.FrontSide as THREE.Side, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, transparent: xray, opacity: xray ? 0.42 : 1, depthWrite: !xray, clippingPlanes: clip };
+    // physically based: a soft studio around the model to reflect, made once
+    const physical = faceStyle === "physical";
+    if (physical && !envMap.current) envMap.current = new THREE.PMREMGenerator(T.renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+    T.world.environment = physical ? envMap.current : null;
+    placeSun();
+    if (physical) {
+      // roughness and metalness per triangle, to every corner
+      const pb = s.pbr && s.pbr.length * 3 === s.triFace.length * 6 ? s.pbr : null;
+      const out = new Float32Array((s.positions.length / 3) * 2);
+      for (let t = 0; t < s.triFace.length; t++) for (let k = 0; k < 3; k++) out.set(pb ? [pb[t * 2], pb[t * 2 + 1]] : [0.7, 0], (t * 3 + k) * 2);
+      geo.setAttribute("pbr", new THREE.BufferAttribute(out, 2));
+      bgeo.setAttribute("pbr", new THREE.BufferAttribute(out, 2));
+    }
     const mat = (side: THREE.Side): THREE.Material => {
+      if (physical) {
+        const m = new THREE.MeshStandardMaterial({ ...common, side, vertexColors: true, envMapIntensity: 1 });
+        m.onBeforeCompile = (sh) => {
+          sh.vertexShader = sh.vertexShader.replace("#include <common>", "#include <common>\nattribute vec2 pbr;\nvarying vec2 vPbr;").replace("#include <begin_vertex>", "#include <begin_vertex>\nvPbr = pbr;");
+          sh.fragmentShader = sh.fragmentShader
+            .replace("#include <common>", "#include <common>\nvarying vec2 vPbr;")
+            .replace("#include <roughnessmap_fragment>", "float roughnessFactor = max(vPbr.x, 0.04);")
+            .replace("#include <metalnessmap_fragment>", "float metalnessFactor = vPbr.y;");
+        };
+        return m;
+      }
       if (faceStyle === "hiddenline" || faceStyle === "wireframe") {
         // flat background-colored faces hide what's behind (wireframe: invisible, still clickable)
         const m = new THREE.MeshBasicMaterial({ ...common, side, color: bg.face });
@@ -1691,6 +1718,8 @@ export default function Viewport(props: Props) {
       T.sun.color.set(0xffffff);
       if (hemi) hemi.intensity = 2.7;
     }
+    // physically based: the studio reflection carries the ambient light, not the sky dome
+    if (hemi && live.current.styles.face === "physical") hemi.intensity *= 0.25;
     T.sun.position.copy(c.clone().add(dir.normalize().multiplyScalar(r * 2)));
   }
   function setSun(s: [number, number] | null) {

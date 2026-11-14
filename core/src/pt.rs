@@ -339,7 +339,16 @@ fn build_scene(m: &Model, o: &PtOpts) -> Scene {
         let n = f.normal.normalize_or_zero();
         let key = if along_face { format!("{name}|{color:?}|{:.3},{:.3},{:.3}", n.x, n.y, n.z) } else { format!("{name}|{color:?}") };
         let mat = *by_key.entry(key).or_insert_with(|| {
-            let kind = kind_of(&name);
+            // asked for on the material, else guessed from its name
+            let mm = m.find_material(&name);
+            let kind = match mm {
+                Some(x) if x.glass == Some(true) => Kind::Glass,
+                Some(x) if x.emission.is_some_and(|e| e > 0.0) => Kind::Light,
+                Some(x) if x.metalness.is_some() => {
+                    if x.metalness.unwrap_or(0.0) >= 0.5 { Kind::Metal } else { Kind::Paint }
+                }
+                _ => kind_of(&name),
+            };
             let lin = Vec3::new(srgb_to_linear(color[0]), srgb_to_linear(color[1]), srgb_to_linear(color[2]));
             // a texture, if the material has an image
             let tex = m.find_material(&name).and_then(|mm| mm.texture.as_ref()).and_then(|t| {
@@ -369,10 +378,10 @@ fn build_scene(m: &Model, o: &PtOpts) -> Scene {
                 };
                 Some((idx, tu.as_vec3(), tv.as_vec3(), origin.as_vec3(), t.width.max(1e-6) as f32, t.height.max(1e-6) as f32))
             });
-            let rough = match kind {
+            let rough = mm.and_then(|x| x.roughness).unwrap_or(match kind {
                 Kind::Metal => 0.3,
                 _ => 0.6,
-            };
+            });
             mats.push(Mat { kind, color: lin, rough, tex });
             (mats.len() - 1) as u32
         });

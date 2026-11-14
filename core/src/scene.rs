@@ -20,6 +20,8 @@ pub fn build(root: &Model, ctx: Option<u32>) -> Value {
     // image materials: texture coordinates per vertex, a texture index per triangle
     let mut uvs: Vec<f32> = Vec::new();
     let mut tri_tex: Vec<i32> = Vec::new();
+    // roughness and metalness per triangle, for the physically based style
+    let mut pbr: Vec<f32> = Vec::new();
     let mut textures: Vec<Value> = Vec::new();
     let mut tex_index: std::collections::HashMap<String, i32> = std::collections::HashMap::new();
     for f in root.world_faces() {
@@ -35,12 +37,14 @@ pub fn build(root: &Model, ctx: Option<u32>) -> Value {
         // tile axes: along the face, or along the projection direction
         let map = tex.as_ref().map(|(_, t)| crate::texmap::Mapping::of(t, f.normal));
         let color = f.color.unwrap_or(DEFAULT_COLOR);
+        let (rough, metal) = f.material.as_ref().and_then(|n| root.find_material(n).map(|m| m.pbr(n))).unwrap_or((0.7, 0.0));
         // painted faces show paint on both sides; bare backs are blue
         let back = f.color.map(|c| [c[0] * 0.85, c[1] * 0.85, c[2] * 0.85]).unwrap_or(BACK_COLOR);
         for t in geom::triangulate(&f.outer, &f.holes, f.normal) {
             // one color per triangle (the app spreads it to the corners)
             colors.extend(color);
             back_colors.extend(back);
+            pbr.extend([rough, metal]);
             for p in t {
                 positions.extend([p.x as f32, p.y as f32, p.z as f32]);
                 let uv = map.map(|mp| mp.uv(p)).unwrap_or([p.x, p.y]);
@@ -148,6 +152,7 @@ pub fn build(root: &Model, ctx: Option<u32>) -> Value {
         "positions": q(&positions, 1e-5),
         "colors": q(&colors, 1e-3),
         "backColors": q(&back_colors, 1e-3),
+        "pbr": q(&pbr, 1e-2),
         "uvs": if textured { q(&uvs, 1e-4) } else { Vec::new() },
         "triTex": tri_tex,
         "textures": textures,
@@ -156,6 +161,10 @@ pub fn build(root: &Model, ctx: Option<u32>) -> Value {
             "color": m.color,
             "texture": m.texture.as_ref().map(|t| json!({"data": t.data, "width": t.width, "height": t.height, "project": t.project})),
             "opacity": m.opacity,
+            "roughness": m.roughness,
+            "metalness": m.metalness,
+            "glass": m.glass,
+            "emission": m.emission,
         })).collect::<Vec<_>>(),
         "triFace": tri_face,
         "faces": faces,

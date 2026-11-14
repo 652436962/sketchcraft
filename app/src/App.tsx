@@ -1143,6 +1143,7 @@ export default function App() {
               <span>Faces</span>
               <select className="units-select" value={styles.face ?? "textured"} onChange={(e) => setStyles((s) => ({ ...s, face: e.target.value as FaceStyle }))}>
                 <option value="textured">Shaded with textures</option>
+                <option value="physical">Physically based (roughness, metal)</option>
                 <option value="shaded">Shaded</option>
                 <option value="monochrome">Monochrome</option>
                 <option value="hiddenline">Hidden line</option>

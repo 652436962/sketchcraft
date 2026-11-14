@@ -121,6 +121,8 @@ pub fn write_glb(m: &Model, path: &str) -> Result<usize> {
     struct Prim<'a> {
         color: [f32; 3],
         tex: Option<(&'a str, &'a crate::model::Texture)>,
+        /// roughness, metalness
+        pbr: (f32, f32),
         pos: Vec<[f32; 3]>,
         nor: Vec<[f32; 3]>,
         uv: Vec<[f32; 2]>,
@@ -130,11 +132,12 @@ pub fn write_glb(m: &Model, path: &str) -> Result<usize> {
     for f in m.world_faces() {
         let c = f.color.unwrap_or([0.95, 0.94, 0.91]);
         let tex = crate::texmap::of_face(m, &f);
+        let pbr = f.material.as_deref().and_then(|n| m.find_material(n).map(|mm| mm.pbr(n))).unwrap_or((0.85, 0.0));
         let key = match tex {
-            Some((name, _)) => format!("t:{name}"),
-            None => color_id(c),
+            Some((name, _)) => format!("t:{name}|{:.2},{:.2}", pbr.0, pbr.1),
+            None => format!("{}|{:.2},{:.2}", color_id(c), pbr.0, pbr.1),
         };
-        let e = by_key.entry(key).or_insert(Prim { color: c, tex, pos: vec![], nor: vec![], uv: vec![] });
+        let e = by_key.entry(key).or_insert(Prim { color: c, tex, pbr, pos: vec![], nor: vec![], uv: vec![] });
         let n = f.normal;
         let ny = [n.x as f32, n.z as f32, -n.y as f32];
         let map = tex.map(|(_, t)| crate::texmap::Mapping::of(t, n));
@@ -180,7 +183,7 @@ pub fn write_glb(m: &Model, path: &str) -> Result<usize> {
             accessors.push(acc);
         }
         let mut attrs = json!({"POSITION": accessors.len() - 2, "NORMAL": accessors.len() - 1});
-        let mut mat = json!({"pbrMetallicRoughness": {"baseColorFactor": [c[0], c[1], c[2], 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.85}, "doubleSided": false});
+        let mut mat = json!({"pbrMetallicRoughness": {"baseColorFactor": [c[0], c[1], c[2], 1.0], "metallicFactor": pr.pbr.1, "roughnessFactor": pr.pbr.0}, "doubleSided": false});
         if let (Some((name, t)), false) = (pr.tex, pr.uv.is_empty()) {
             let off = bin.len();
             for v in &pr.uv {
