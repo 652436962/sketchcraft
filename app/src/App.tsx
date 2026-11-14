@@ -343,8 +343,10 @@ export default function App() {
     setSel(EMPTY);
   }, [sel, run]);
 
-  // ⌘V: a copy of the clipboard, selected, with Move ready to place it
-  const paste = async () => {
+  // ⌘V: a copy of the clipboard, selected, with Move ready to place it.
+  // ⇧⌘V (Paste in Place): the copy stays exactly where the original was,
+  // inside whatever group is open now.
+  const paste = async (inPlace = false) => {
     const c = clip.current;
     if (!c) return say("Nothing to paste: select something and press ⌘C first.", true);
     const d = await run({ cmd: "duplicate", ids: c.ids, by: [0, 0, 0] });
@@ -355,10 +357,19 @@ export default function App() {
       await run({ cmd: "delete", ids: c.ids });
       clip.current = { ids, cut: false };
     }
-    const sc = await loadScene();
-    setScene(sc);
+    let sc = await loadScene();
     const has = (list: { id: number }[]) => ids.filter((i) => list.some((x) => x.id === i));
+    if (inPlace && sc.activeGroup != null) {
+      // into the open group (groups and components move in; loose faces stay where they were made)
+      const movable = [...has(sc.groups), ...has(sc.instances)].filter((i) => (sc.groups.find((g) => g.id === i)?.parent ?? sc.instances.find((x) => x.id === i)?.parent ?? null) !== sc.activeGroup);
+      if (movable.length) {
+        await run({ cmd: "set_parent", ids: movable, parent: sc.activeGroup });
+        sc = await loadScene();
+      }
+    }
+    setScene(sc);
     setSel({ faces: has(sc.faces), edges: [], groups: has(sc.groups), instances: has(sc.instances) });
+    if (inPlace) return say("Pasted in place.");
     chooseTool("move");
     say("Pasted in place. Click a point on it, then click where it goes.");
   };
@@ -410,7 +421,7 @@ export default function App() {
       }
       if (mod && ["c", "x", "v"].includes(k)) {
         e.preventDefault();
-        if (k === "v") return void paste();
+        if (k === "v") return void paste(e.shiftKey);
         if (isEmpty(sel)) return;
         clip.current = { ids: selIds(sel), cut: k === "x" };
         if (k === "x") {
@@ -695,6 +706,8 @@ export default function App() {
       ...(["iso", "top", "front", "right", "back", "left"] as const).map((v) => ({ label: `${v[0].toUpperCase()}${v.slice(1)} view`, hint: "Camera", run: () => api.current?.view(v) })),
       { label: "Undo", hint: "Edit", key: "⌘Z", run: () => void run({ cmd: "undo" }) },
       { label: "Redo", hint: "Edit", key: "⇧⌘Z", run: () => void run({ cmd: "redo" }) },
+      { label: "Paste", hint: "Edit · then click where it goes", key: "⌘V", run: () => void paste() },
+      { label: "Paste in place", hint: "Edit · exactly where it was, into the open group", key: "⇧⌘V", run: () => void paste(true) },
       { label: "Unhide all", hint: "Edit", run: () => void run({ cmd: "unhide" }) },
       {
         label: "Raise walls…",
@@ -717,6 +730,7 @@ export default function App() {
       toggle("edges", "Edges"),
       toggle("backEdges", "Back edges"),
       toggle("parallel", "Parallel projection"),
+      toggle("hideRest", "Hide rest of model (while editing)"),
       ...WORKSPACES.map((w) => ({ label: `${w.name} workspace`, hint: w.blurb, run: () => switchWs(w.id) })),
       ...(scene?.views ?? []).map((v) => ({ label: `Go to scene "${v.name}"`, hint: "Scenes", run: () => void showView(v) })),
     ];
@@ -951,6 +965,11 @@ export default function App() {
               {label}
             </button>
           ))}
+          {scene && (scene.activeGroup != null || scene.editing != null) && (
+            <button className={styles.hideRest ? "on" : ""} title="Hide Rest of Model: only what you're editing shows" onClick={() => setStyles((s) => ({ ...s, hideRest: !s.hideRest }))}>
+              Hide rest
+            </button>
+          )}
           {!section && (
             <button
               onClick={() => {

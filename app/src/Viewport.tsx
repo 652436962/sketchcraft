@@ -67,6 +67,8 @@ export function autoTagColor(tag: string): [number, number, number] {
 
 export interface Styles {
   xray: boolean;
+  /** while a group or component is open: everything else hidden */
+  hideRest?: boolean;
   /** faces in their tag's color */
   byTag?: boolean;
   /** dimensions, labels and door swings (on unless turned off) */
@@ -720,7 +722,7 @@ export default function Viewport(props: Props) {
     T.catcher.visible = styles.shadows;
     buildModel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [styles.xray, styles.shadows, styles.edges, styles.parallel, styles.backEdges, styles.face, styles.profiles, styles.sketchy, styles.extensions, styles.background, styles.byTag, styles.notes]);
+  }, [styles.xray, styles.shadows, styles.edges, styles.parallel, styles.backEdges, styles.face, styles.profiles, styles.sketchy, styles.extensions, styles.background, styles.byTag, styles.notes, styles.hideRest]);
 
   // ---------------------------------------------------------------- labels
   /** Keep one DOM label per spec; positions are updated every frame. */
@@ -912,6 +914,26 @@ export default function Viewport(props: Props) {
       positions = s.positions.slice();
       for (let t = 0; t < s.triFace.length; t++) if (hide.has(s.triFace[t])) for (let k = 3; k < 9; k++) positions[t * 9 + k] = positions[t * 9 + (k % 3)];
       edgeSegs = s.edgeList.filter((e) => !e.soft && e.group !== shaping).flatMap((e) => [...e.a, ...e.b]);
+    }
+    // Hide Rest of Model: while a group or component is open, only it shows
+    if (live.current.styles.hideRest && (s.activeGroup != null || s.editing != null)) {
+      const inside = new Set<number>();
+      if (s.activeGroup != null) {
+        inside.add(s.activeGroup);
+        for (let grew = true; grew; ) {
+          grew = false;
+          for (const g of s.groups) if (g.parent != null && inside.has(g.parent) && !inside.has(g.id)) (inside.add(g.id), (grew = true));
+        }
+      }
+      const faceIn = new Set(s.faces.filter((f) => f.group != null && inside.has(f.group)).map((f) => f.id));
+      const instIn = new Set(s.instances.filter((i) => i.id === s.editing || (i.parent != null && inside.has(i.parent))).map((i) => i.id));
+      positions = positions === s.positions ? s.positions.slice() : positions;
+      for (let t = 0; t < s.triFace.length; t++) {
+        const o = s.triFace[t];
+        if (!faceIn.has(o) && !instIn.has(o)) for (let k = 3; k < 9; k++) positions[t * 9 + k] = positions[t * 9 + (k % 3)];
+      }
+      edgeSegs = s.edgeList.filter((e) => !e.soft && e.group != null && inside.has(e.group)).flatMap((e) => [...e.a, ...e.b]);
+      if (s.editing != null) edgeSegs = s.edges; // a component's edges come with it
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
