@@ -522,6 +522,16 @@ export default function App() {
       }
       return r.ok;
     }
+    if (lower.endsWith(".ifc")) {
+      say("Reading the IFC (IfcOpenShell)…");
+      const r = await run({ cmd: "import_ifc", path });
+      if (r.ok) {
+        say(`Imported ${path.split("/").pop()} (${r.schema}): ${r.elements} elements on ${r.storeys} storey${r.storeys === 1 ? "" : "s"}, typed for the Classifier, tagged by storey`);
+        api.current?.fitSoon();
+        await refresh();
+      }
+      return r.ok;
+    }
     const r = lower.endsWith(".skp")
       ? await run({ cmd: "import_skp", path })
       : lower.endsWith(".fbx")

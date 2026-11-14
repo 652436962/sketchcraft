@@ -31,7 +31,7 @@ Checked items are in `main`.
 
 ## Files
 
-- [x] Import: SketchUp `.skp` (6–8 and 2013+), **DXF** (layers as tags, blocks, units, text as labels, dimensions, splines, ellipses, hatches), **DWG** (via LibreDWG / ODA converter; tested on AutoCAD 2004 and 2018 files), OBJ (+ .mtl), binary FBX
+- [x] Import: SketchUp `.skp` (6–8 and 2013+), **DXF** (layers as tags, blocks, units, text as labels, dimensions, splines, ellipses, hatches), **DWG** (via LibreDWG / ODA converter; tested on AutoCAD 2004 and 2018 files), OBJ (+ .mtl), binary FBX, **IFC** (Revit / ArchiCAD exports; through IfcOpenShell: elements typed for the Classifier, grouped and tagged by storey, openings cut)
 - [x] Export: glTF, OBJ, Collada (all with textures), STL, 3D DXF, **DWG** (via converter), PDF, section cuts (SVG / DXF), IFC4 (BIM)
 - [x] **Raise walls** from an imported floor plan (wall bands found across T-junctions, window lines and drafting slips; window openings with sill and head)
 - [x] **Point clouds** (Scan Essentials core): PLY, LAS, XYZ / PTS / TXT; colored, thinned to a budget, survey coordinates moved home; drawing tools snap to scan points
@@ -76,7 +76,6 @@ not against this list. Ranked by how often a SketchUp user would hit it.
 
 | Gap | Today |
 | --- | --- |
-| IFC import (the route for Revit) | export only |
 | A denoiser, then GPU tracing (V-Ray-class) | CPU path tracer |
 | LayOut depth: dimensions and text on sheets, scrapbooks, pattern fills | layout-lite PDF |
 | An extension API | MCP commands only |
@@ -84,7 +83,7 @@ not against this list. Ranked by how often a SketchUp user would hit it.
 ## Known gaps (next)
 
 - DWG needs a converter installed (LibreDWG or ODA); a native DWG reader is out of scope
-- Revit (.rvt) is a closed format with no public reader; the practical route is IFC import (Revit exports IFC), not built yet
+- Revit (.rvt) is a closed format with no public reader: open Revit's IFC export instead. IFC import needs IfcOpenShell installed (one-time steps in the app's message)
 - Rendering is a CPU path tracer: no denoiser or GPU tracing yet, so not V-Ray-class
 - Point clouds: LAZ (compressed) needs converting to LAS first; scans aren't drawn in headless renders
 - Raise walls works from wall layers (or the whole drawing); walls drawn only as single lines aren't thickened

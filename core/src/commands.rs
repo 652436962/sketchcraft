@@ -399,6 +399,9 @@ pub enum Command {
         #[serde(default)]
         delete: bool,
     },
+    /// IFC (and so Revit's exports) through IfcOpenShell, if installed: one
+    /// group per element, typed for the Classifier, grouped by storey.
+    ImportIfc { path: String },
     /// Component Options: the attributes a placement offers its user (those
     /// with an `_name_access` of textbox, list or view).
     Options { id: Id },
@@ -2004,6 +2007,10 @@ impl Engine {
                     }
                     json!({"cloud": id})
                 }
+            }
+            Command::ImportIfc { path } => {
+                let r = crate::ifcin::import(m, std::path::Path::new(&path))?;
+                json!({"group": r.group, "elements": r.elements, "faces": r.faces, "storeys": r.storeys, "schema": r.schema})
             }
             Command::Options { id } => {
                 let i = m.instances.get(&id).ok_or_else(|| anyhow::anyhow!("{id} is not a component placement"))?;

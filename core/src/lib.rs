@@ -25,6 +25,7 @@ pub mod geo;
 pub mod geom;
 pub mod http;
 pub mod ifc;
+pub mod ifcin;
 pub mod import;
 pub mod intersect;
 pub mod layout;

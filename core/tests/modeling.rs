@@ -2035,3 +2035,30 @@ fn point_cloud_import_scene_data_save_and_delete() {
     assert!(r["error"].as_str().unwrap().contains("convert"), "{r}");
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// IFC round trip through IfcOpenShell (skipped when it isn't installed; set
+/// SKETCHCRAFT_PYTHON to a Python that has it): our export comes back as
+/// typed groups with whole faces.
+#[test]
+fn ifc_round_trip_through_ifcopenshell() {
+    if sketchcraft::ifcin::python().is_none() {
+        eprintln!("no IfcOpenShell; skipped");
+        return;
+    }
+    let mut e = Engine::new();
+    let g = run(&mut e, json!({"cmd":"begin_group","name":"Floor slab"}))["group"].as_u64().unwrap();
+    let f = run(&mut e, json!({"cmd":"rect","from":[0,0,0],"to":[6,4,0]}))["face"].as_u64().unwrap();
+    run(&mut e, json!({"cmd":"pushpull","face":f,"distance":0.2,"toward":[0,0,1]}));
+    run(&mut e, json!({"cmd":"end_group"}));
+    run(&mut e, json!({"cmd":"classify","ids":[g],"class":"IfcSlab"}));
+    let dir = std::env::temp_dir().join(format!("sketchcraft-ifcrt-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("m.ifc").to_string_lossy().to_string();
+    run(&mut e, json!({"cmd":"export_ifc","path":path}));
+    let mut back = Engine::new();
+    let r = run(&mut back, json!({"cmd":"import_ifc","path":path}));
+    assert_eq!(r["elements"], 1, "{r}");
+    assert_eq!(r["faces"], 6, "the slab's 12 triangles merged into 6 faces: {r}");
+    assert!(back.model.classes.values().any(|c| c == "IfcSlab"));
+    std::fs::remove_dir_all(dir).ok();
+}

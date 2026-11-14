@@ -56,6 +56,7 @@ ORGANIZE
 - timeline_frames {fps?}: every frame's camera (and sun)
 - import_dxf {path|text, units?: in/ft/mm/cm/m, at?, name?}: a CAD drawing; layers become tagged groups, closed outlines and hatches faces, text labels, dimensions dimensions; returns focus [lo, hi] (where most of it is)
 - raise_walls {group, height?: 2.7, max_thickness?: 0.6, sill?: 0.9, head?: 2.1}: walls from an imported plan (window openings where the plan shows windows)
+- import_ifc {path}: IFC (Revit, ArchiCAD... exports) through IfcOpenShell if installed; one group per element, typed for the Classifier, grouped and tagged by storey
 - import_cloud {path .ply/.las/.xyz/.pts/.txt, units?, max_points?: 5e6}: a point cloud (scan); far-off survey coordinates are moved to the origin (shift returned). cloud {id, name?, hidden?, delete?}; cloud_data {id, max?}
 - import_dwg {path, units?} / export_dwg {path}: AutoCAD DWG through LibreDWG or the ODA File Converter if installed
 - project_photo {view, ids, size?=1024}: a matched photo onto faces (or groups' faces) as straightened textures

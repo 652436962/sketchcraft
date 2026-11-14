@@ -8,10 +8,11 @@ export async function pickOpen(): Promise<string | null> {
   const r = await open({
     multiple: false,
     filters: [
-      { name: "Models, drawings and scans", extensions: ["sketchcraft", "skp", "dwg", "dxf", "fbx", "obj", "ply", "las", "xyz", "pts"] },
+      { name: "Models, drawings and scans", extensions: ["sketchcraft", "skp", "dwg", "dxf", "ifc", "fbx", "obj", "ply", "las", "xyz", "pts"] },
       { name: "SketchCraft", extensions: ["sketchcraft"] },
       { name: "SketchUp", extensions: ["skp"] },
       { name: "AutoCAD (DWG, DXF)", extensions: ["dwg", "dxf"] },
+      { name: "IFC (Revit, ArchiCAD, BIM)", extensions: ["ifc"] },
       { name: "FBX (binary)", extensions: ["fbx"] },
       { name: "OBJ", extensions: ["obj"] },
       { name: "Point clouds (PLY, LAS, XYZ, PTS, TXT)", extensions: ["ply", "las", "laz", "xyz", "pts", "txt"] },

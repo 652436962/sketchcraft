@@ -33,7 +33,7 @@ pub struct Poly {
 }
 
 impl Poly {
-    fn new(pts: Vec<DVec3>, material: Option<String>) -> Option<Poly> {
+    pub fn new(pts: Vec<DVec3>, material: Option<String>) -> Option<Poly> {
         let n = geom::newell(&pts);
         if n == DVec3::ZERO {
             return None;
