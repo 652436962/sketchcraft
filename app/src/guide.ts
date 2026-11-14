@@ -42,6 +42,20 @@ export function guide(tool: Tool, c: GuideCtx): Guide {
       return busy ? g("Circle", "Click to set the radius.", [["Type", "a radius, or 24s for 24 sides"], ESC]) : g("Circle", "Click the center, on the ground or on a face.", []);
     case "polygon":
       return busy ? g("Polygon", "Click to set its size.", [["Type", "a radius, or 8s for 8 sides"], ESC]) : g("Polygon", "Click the center.", []);
+    case "arccenter":
+    case "pie": {
+      const name = tool === "pie" ? "Pie" : "Arc";
+      if (!busy) return g(name, "Click the center, on the ground or on a face.", []);
+      return c.stage === 1 ? g(name, "Click where it starts (that sets the radius).", [ESC]) : g(name, "Swing round and click where it ends.", [["Type", "the angle in degrees"], ESC]);
+    }
+    case "arc3":
+      if (!busy) return g("3-Point Arc", "Click where the arc starts.", []);
+      return c.stage === 1 ? g("3-Point Arc", "Click a point it passes through.", [LOCK, ESC]) : g("3-Point Arc", "Click where it ends.", [ESC]);
+    case "rrect":
+      if (!busy) return g("Rotated Rectangle", "Click the first corner.", []);
+      return c.stage === 1 ? g("Rotated Rectangle", "Click the end of the first side (any direction, even up a slope).", [LOCK, ESC]) : g("Rotated Rectangle", "Swing out the other side and click.", [["Type", "its length"], ESC]);
+    case "freehand":
+      return g("Freehand", "Drag to draw. End where you began to close it into a face.", []);
     case "arc":
       if (!busy) return g("Arc", "Click where the arc starts.", []);
       return c.stage === 1 ? g("Arc", "Click where it ends.", [TYPE, LOCK, ESC]) : g("Arc", "Pull out to bend it, then click.", [["Type", "how far it bows out"], ESC]);

@@ -21,7 +21,7 @@ import { combine, EMPTY, selIds, selMode, toggle, type Sel, type SelMode } from 
 import { formatLength, parseLengths } from "./units";
 
 export type Tool =
-  | "select" | "line" | "arc" | "rect" | "circle" | "polygon"
+  | "select" | "line" | "freehand" | "arc" | "arccenter" | "arc3" | "pie" | "rect" | "rrect" | "circle" | "polygon"
   | "push" | "offset" | "followme" | "move" | "rotate" | "scale"
   | "tape" | "dimension" | "text" | "paint" | "erase" | "orbit" | "pan" | "zoom" | "section" | "place"
   | "position" | "lookaround" | "walk" | "zoomwindow" | "protractor"
@@ -321,6 +321,27 @@ let units = "m";
 const fmt = (x: number) => formatLength(x, units);
 
 /** In-plane axes for a normal: u horizontal when possible, v = n x u. */
+/** The circle through three points: center, radius and plane normal (null when they're in a line). */
+function circleThrough(a: THREE.Vector3, m: THREE.Vector3, b: THREE.Vector3): { c: THREE.Vector3; r: number; n: THREE.Vector3 } | null {
+  const u = m.clone().sub(a);
+  const v = b.clone().sub(a);
+  const w = u.clone().cross(v);
+  const w2 = w.lengthSq();
+  if (w2 < 1e-12) return null;
+  const c = a.clone().add(v.clone().cross(w).multiplyScalar(u.lengthSq()).add(w.clone().cross(u).multiplyScalar(v.lengthSq())).divideScalar(2 * w2));
+  return { c, r: c.distanceTo(a), n: w.normalize() };
+}
+
+/** An arc from a to b through m, as the arc command wants it: the bulge (signed, how far it bows from the chord) about normal n. */
+function bulgeThrough(a: THREE.Vector3, m: THREE.Vector3, b: THREE.Vector3, n: THREE.Vector3): number | null {
+  const k = circleThrough(a, m, b);
+  if (!k) return null;
+  const side = n.clone().cross(b.clone().sub(a)).normalize();
+  const mid = a.clone().add(b).multiplyScalar(0.5);
+  const d = k.c.clone().sub(mid).dot(side);
+  return m.clone().sub(mid).dot(side) > 0 ? d + k.r : d - k.r;
+}
+
 function basis(n: THREE.Vector3): [THREE.Vector3, THREE.Vector3] {
   const u = Math.abs(n.z) > 0.9 ? new THREE.Vector3(1, 0, 0) : UP.clone().cross(n).normalize();
   return [u, n.clone().cross(u).normalize()];
@@ -374,6 +395,14 @@ type Op =
   | { t: "rect"; p0: THREE.Vector3; n: THREE.Vector3; u: THREE.Vector3; v: THREE.Vector3; a: number; b: number }
   | { t: "circle"; c: THREE.Vector3; n: THREE.Vector3; r: number; seg: number }
   | { t: "arc"; a: THREE.Vector3; b: THREE.Vector3 | null; n: THREE.Vector3; bulge: number; cur: THREE.Vector3 }
+  /** center Arc and Pie: center, then the start (radius), then swing round */
+  | { t: "carc"; c: THREE.Vector3; n: THREE.Vector3; a: THREE.Vector3 | null; ang: number; last: number; pie: boolean }
+  /** 3-Point Arc: start, a point on it, end */
+  | { t: "arc3"; a: THREE.Vector3; m: THREE.Vector3 | null; n: THREE.Vector3; cur: THREE.Vector3 }
+  /** Rotated Rectangle: one side (any direction), then how far the other goes */
+  | { t: "rrect"; a: THREE.Vector3; b: THREE.Vector3 | null; h: THREE.Vector3; cur: THREE.Vector3 }
+  /** Freehand: the points dragged through, on the plane it started on */
+  | { t: "free"; pts: THREE.Vector3[]; n: THREE.Vector3; o: THREE.Vector3 }
   | { t: "push"; face: FaceInfo; origin: THREE.Vector3; n: THREE.Vector3; d: number; dragged: boolean }
   | { t: "offset"; face: FaceInfo; start: THREE.Vector3; d: number }
   | { t: "move"; base: THREE.Vector3; ids: number[]; delta: THREE.Vector3; copy: boolean }
@@ -1404,7 +1433,7 @@ export default function Viewport(props: Props) {
   function updateCoach() {
     const L = live.current;
     const op = st.current.op;
-    const stage = op?.t === "arc" ? (op.b ? 2 : 1) : op?.t === "rotate" ? (op.ref ? 2 : 1) : op?.t === "dim" ? (op.b ? 2 : 1) : undefined;
+    const stage = op?.t === "arc" ? (op.b ? 2 : 1) : op?.t === "carc" ? (op.a ? 2 : 1) : op?.t === "arc3" ? (op.m ? 2 : 1) : op?.t === "rrect" ? (op.b ? 2 : 1) : op?.t === "rotate" ? (op.ref ? 2 : 1) : op?.t === "dim" ? (op.b ? 2 : 1) : undefined;
     const g = guide(L.tool, { op: op?.t ?? null, stage, selected: selIds(selNow()).length, placing: L.placeAsset });
     const key = `${g.title}|${g.step}|${g.keys.length}`;
     if (key !== coachKey.current) {
@@ -1849,6 +1878,15 @@ export default function Viewport(props: Props) {
         if (!lens.length) return;
         op.r = Math.abs(lens[0]);
         return void (await commitCircle());
+      case "carc":
+        if (!op.a || !lens.length) return;
+        // typed: the angle in degrees
+        op.ang = THREE.MathUtils.degToRad(lens[0]) * Math.sign(op.ang || 1);
+        return void (await commitCarc());
+      case "rrect":
+        if (!op.b || !lens.length) return;
+        op.h = (op.h.lengthSq() > 1e-12 ? op.h.clone().normalize() : basis(op.b.clone().sub(op.a).normalize())[0]).multiplyScalar(Math.abs(lens[0]));
+        return void (await commitRrect());
       case "arc":
         if (!op.b) return;
         if (!lens.length) return;
@@ -1976,6 +2014,59 @@ export default function Viewport(props: Props) {
     st.current.op = null;
     clearPreview();
     await run({ cmd: "circle", center: arr(op.c), radius: r4(op.r), normal: arr(op.n), segments: op.seg });
+  }
+
+  /** center Arc / Pie: the arc from the start, swung `ang` about the center */
+  async function commitCarc() {
+    const op = st.current.op;
+    if (op?.t !== "carc" || !op.a || Math.abs(op.ang) < 1e-4) return;
+    st.current.op = null;
+    clearPreview();
+    const r = op.a.distanceTo(op.c);
+    const u = op.a.clone().sub(op.c).normalize();
+    const v = op.n.clone().cross(u);
+    const b = op.c.clone().addScaledVector(u, Math.cos(op.ang) * r).addScaledVector(v, Math.sin(op.ang) * r);
+    const bulge = -Math.sign(op.ang) * r * (1 - Math.cos(op.ang / 2));
+    await run({ cmd: "arc", start: arr(op.a), end: arr(b), bulge: r4(bulge), normal: arr(op.n) });
+    // a pie closes back through the center into a face
+    if (op.pie) await run({ cmd: "line", points: [arr(b), arr(op.c), arr(op.a)] });
+  }
+
+  async function commitArc3(end: THREE.Vector3) {
+    const op = st.current.op;
+    if (op?.t !== "arc3" || !op.m) return;
+    const n = circleThrough(op.a, op.m, end)?.n;
+    if (!n) return;
+    if (n.dot(op.n) < 0) n.negate();
+    const bulge = bulgeThrough(op.a, op.m, end, n);
+    if (bulge == null) return;
+    st.current.op = null;
+    clearPreview();
+    await run({ cmd: "arc", start: arr(op.a), end: arr(end), bulge: r4(bulge), normal: arr(n) });
+  }
+
+  async function commitRrect() {
+    const op = st.current.op;
+    if (op?.t !== "rrect" || !op.b || op.h.length() < 1e-4) return;
+    st.current.op = null;
+    clearPreview();
+    await run({ cmd: "polygon", points: [op.a, op.b, op.b.clone().add(op.h), op.a.clone().add(op.h)].map(arr) });
+  }
+
+  async function commitFree() {
+    const op = st.current.op;
+    if (op?.t !== "free") return;
+    st.current.op = null;
+    clearPreview();
+    const pts = op.pts;
+    if (pts.length < 2) return;
+    // ending near the start closes it (and makes a face)
+    const s0 = toScreen2(pts[0]);
+    const s1 = toScreen2(pts[pts.length - 1]);
+    const closed = pts.length > 3 && Math.hypot(s0.x - s1.x, s0.y - s1.y) < 14;
+    // closed: one face straight away (the line tool's loop search stops at 14 edges)
+    if (closed) await run({ cmd: "polygon", points: pts.slice(0, -1).map(arr) });
+    else await run({ cmd: "line", points: pts.map(arr) });
   }
 
   async function commitArc() {
@@ -2202,6 +2293,90 @@ export default function Viewport(props: Props) {
           setHint(null);
           return;
         }
+        case "carc": {
+          if (!op.a) {
+            const sn = infer(E, e, { anchor: op.c, plane: { origin: op.c, normal: op.n } });
+            const r = sn.p.distanceTo(op.c);
+            const [u, v] = basis(op.n);
+            T.preview.add(polyline(Array.from({ length: 48 }, (_, i) => op.c.clone().addScaledVector(u, Math.cos((i / 48) * Math.PI * 2) * r).addScaledVector(v, Math.sin((i / 48) * Math.PI * 2) * r)), 0x8a8ea0, true));
+            T.preview.add(polyline([op.c, sn.p], axisColor(sn)));
+            showSnap(sn);
+            L.onMeasure("Radius", fmt(r));
+            return;
+          }
+          const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(op.n, op.c), new THREE.Vector3());
+          if (!q) return;
+          const r = op.a.distanceTo(op.c);
+          const u = op.a.clone().sub(op.c).normalize();
+          const v = op.n.clone().cross(u);
+          const d = q.clone().sub(op.c);
+          const phi = Math.atan2(d.dot(v), d.dot(u));
+          // follow the swing past half a turn
+          let step = phi - op.last;
+          if (step > Math.PI) step -= Math.PI * 2;
+          if (step < -Math.PI) step += Math.PI * 2;
+          op.ang = Math.max(-Math.PI * 2 + 1e-3, Math.min(Math.PI * 2 - 1e-3, op.ang + step));
+          op.last = phi;
+          const k = Math.max(4, Math.ceil((Math.abs(op.ang) / (Math.PI * 2)) * 48));
+          const pts = Array.from({ length: k + 1 }, (_, i) => op.c.clone().addScaledVector(u, Math.cos((op.ang * i) / k) * r).addScaledVector(v, Math.sin((op.ang * i) / k) * r));
+          T.preview.add(polyline(op.pie ? [op.c, ...pts, op.c] : pts, ACCENT));
+          if (!op.pie) T.preview.add(polyline([op.c, op.a], 0x8a8ea0));
+          L.onMeasure("Angle", `${Math.abs(THREE.MathUtils.radToDeg(op.ang)).toFixed(1)}°`);
+          return;
+        }
+        case "arc3": {
+          const sn = infer(E, e, { anchor: op.m ?? op.a, lock });
+          op.cur = sn.p;
+          showSnap(sn);
+          if (!op.m) {
+            T.preview.add(polyline([op.a, sn.p], axisColor(sn)));
+            L.onMeasure("Length", fmt(sn.p.distanceTo(op.a)));
+            return;
+          }
+          const k = circleThrough(op.a, op.m, sn.p);
+          if (!k) {
+            T.preview.add(polyline([op.a, op.m, sn.p], 0x8a8ea0));
+            return;
+          }
+          const n = k.n.dot(op.n) < 0 ? k.n.clone().negate() : k.n;
+          const b = bulgeThrough(op.a, op.m, sn.p, n) ?? 0;
+          T.preview.add(polyline(arcPoints(op.a, sn.p, b, n, 32), ACCENT));
+          L.onMeasure("Radius", fmt(k.r));
+          return;
+        }
+        case "rrect": {
+          if (!op.b) {
+            const sn = infer(E, e, { anchor: op.a, lock });
+            op.cur = sn.p;
+            T.preview.add(polyline([op.a, sn.p], axisColor(sn)));
+            showSnap(sn);
+            L.onMeasure("Length", fmt(sn.p.distanceTo(op.a)));
+            return;
+          }
+          const sn = infer(E, e, { anchor: op.b, lock });
+          const along = op.b.clone().sub(op.a).normalize();
+          const d = sn.p.clone().sub(op.b);
+          op.h = d.sub(along.clone().multiplyScalar(d.dot(along)));
+          const pts = [op.a, op.b, op.b.clone().add(op.h), op.a.clone().add(op.h)];
+          T.preview.add(polyline(pts, ACCENT, true));
+          showSnap(sn);
+          setLive([
+            { p: op.a.clone().add(op.b).multiplyScalar(0.5), text: fmt(op.a.distanceTo(op.b)) },
+            { p: op.b.clone().add(pts[2]).multiplyScalar(0.5), text: fmt(op.h.length()) },
+          ]);
+          L.onMeasure("Height", fmt(op.h.length()));
+          return;
+        }
+        case "free": {
+          const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(op.n, op.o), new THREE.Vector3());
+          if (!q) return;
+          const last = op.pts[op.pts.length - 1];
+          const a = toScreen2(last);
+          const b = toScreen2(q);
+          if (Math.hypot(a.x - b.x, a.y - b.y) >= 5) op.pts.push(q);
+          T.preview.add(polyline([...op.pts, q], ACCENT));
+          return;
+        }
         case "rect": {
           // no axis lock from the first corner: that would squash the rectangle flat
           const sn = infer(E, e, { plane: { origin: op.p0, normal: op.n } });
@@ -2340,7 +2515,7 @@ export default function Viewport(props: Props) {
       }
 
       // nothing in progress: show what a click would hit
-      if (["line", "arc", "rect", "circle", "polygon", "tape", "dimension", "text", "move", "rotate", "scale", "place", "wall", "stairs", "column", "protractor"].includes(L.tool)) showSnap(infer(E, e, {}));
+      if (["line", "freehand", "arc", "arccenter", "arc3", "pie", "rect", "rrect", "circle", "polygon", "tape", "dimension", "text", "move", "rotate", "scale", "place", "wall", "stairs", "column", "protractor"].includes(L.tool)) showSnap(infer(E, e, {}));
       else setHint(null);
       if (["select", "erase", "paint", "push", "offset", "followme", "section", "move", "rotate", "scale", "roof"].includes(L.tool)) {
         const he = ["select", "erase", "move"].includes(L.tool) ? pickEdge(e) : null;
@@ -2469,6 +2644,55 @@ export default function Viewport(props: Props) {
           const n = sn.face ? V(sn.face.normal) : UP.clone();
           const [u, v] = basis(n);
           st.current.op = { t: "rect", p0: sn.p, n, u, v, a: 0, b: 0 };
+          return;
+        }
+        case "arccenter":
+        case "pie": {
+          if (op?.t === "carc") {
+            if (!op.a) {
+              const sn = infer(E, e, { anchor: op.c, plane: { origin: op.c, normal: op.n } });
+              if (sn.p.distanceTo(op.c) > 1e-4) {
+                op.a = sn.p;
+                op.ang = 0;
+                op.last = 0;
+              }
+              return;
+            }
+            return void (await commitCarc());
+          }
+          const sn = infer(E, e, {});
+          st.current.op = { t: "carc", c: sn.p, n: sn.face ? V(sn.face.normal) : UP.clone(), a: null, ang: 0, last: 0, pie: L.tool === "pie" };
+          return;
+        }
+        case "arc3": {
+          if (op?.t === "arc3") {
+            const sn = infer(E, e, { anchor: op.m ?? op.a, lock: st.current.lock });
+            if (!op.m) {
+              if (sn.p.distanceTo(op.a) > 1e-4) op.m = sn.p;
+              return;
+            }
+            return void (await commitArc3(sn.p));
+          }
+          const sn = infer(E, e, {});
+          st.current.op = { t: "arc3", a: sn.p, m: null, n: sn.face ? V(sn.face.normal) : UP.clone(), cur: sn.p };
+          return;
+        }
+        case "rrect": {
+          if (op?.t === "rrect") {
+            if (!op.b) {
+              if (op.cur.distanceTo(op.a) > 1e-4) op.b = op.cur.clone();
+              return;
+            }
+            return void (await commitRrect());
+          }
+          const sn = infer(E, e, {});
+          st.current.op = { t: "rrect", a: sn.p, b: null, h: new THREE.Vector3(), cur: sn.p };
+          return;
+        }
+        case "freehand": {
+          const sn = infer(E, e, {});
+          st.current.op = { t: "free", pts: [sn.p], n: sn.face ? V(sn.face.normal) : UP.clone(), o: sn.p };
+          el.setPointerCapture(e.pointerId);
           return;
         }
         case "circle":
@@ -2791,6 +3015,10 @@ export default function Viewport(props: Props) {
       const op = st.current.op;
       const press = st.current.press;
       st.current.press = null;
+      if (op?.t === "free") {
+        if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+        return void (await commitFree());
+      }
       if (el.hasPointerCapture(e.pointerId) && op?.t !== "push" && op?.t !== "box") el.releasePointerCapture(e.pointerId);
       if (press?.fresh && op && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 6) {
         // a press-drag-release: finish where the mouse let go

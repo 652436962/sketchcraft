@@ -39,6 +39,37 @@ export const Icons = {
       <rect x="4" y="6" width="16" height="12" rx="1.5" />
     </Svg>
   ),
+  rrect: () => (
+    <Svg>
+      <path d="M6.5 15.5 13 4.5l6 3.5-6.5 11z" />
+      <circle cx="6.5" cy="15.5" r="1.3" />
+    </Svg>
+  ),
+  arccenter: () => (
+    <Svg>
+      <path d="M19 16a7 7 0 0 0-14 0" />
+      <path d="M12 16h7" strokeDasharray="1.5 2" />
+      <circle cx="12" cy="16" r="1.4" />
+    </Svg>
+  ),
+  arc3: () => (
+    <Svg>
+      <path d="M4 17c1-6 5-10 8-10s7 4 8 10" />
+      <circle cx="4" cy="17" r="1.3" />
+      <circle cx="12" cy="7" r="1.3" />
+      <circle cx="20" cy="17" r="1.3" />
+    </Svg>
+  ),
+  pie: () => (
+    <Svg>
+      <path d="M12 13 19 9a8 8 0 1 1-7-4z" />
+    </Svg>
+  ),
+  freehand: () => (
+    <Svg>
+      <path d="M4 16c2-5 4 1 6-3s3-6 5-4 1 6 5 3" />
+    </Svg>
+  ),
   circle: () => (
     <Svg>
       <circle cx="12" cy="12" r="7.5" />
