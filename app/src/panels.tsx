@@ -599,6 +599,20 @@ export function contextItems(scene: Scene, sel: Sel, run: Run, setSel: (s: Sel) 
     if (def != null && scene.instances.filter((i) => i.component === def).length > 1) items.push({ label: "Make unique", run: () => run({ cmd: "make_unique", id: ids[0] }) });
   }
   if (sel.faces.length === 1 && !sel.groups.length && !sel.instances.length) items.push({ label: "Orient faces (match this one)", run: () => run({ cmd: "orient_faces", face: sel.faces[0] }) });
+  // Select ›: what's connected, what shares the paint, what shares the tag
+  const pickInto = (r: Reply) => r.ok && setSel({ ...EMPTY, faces: (r.faces as number[]) ?? [], edges: (r.edges as number[]) ?? [], groups: (r.groups as number[]) ?? [], instances: (r.instances as number[]) ?? [] });
+  const seed = sel.faces[0] ?? sel.edges[0];
+  if (seed != null && !sel.groups.length && !sel.instances.length) {
+    items.push({ label: "Select all connected", run: () => exec({ cmd: "connected", id: seed, all: true }).then(pickInto) });
+    if (sel.faces.length) {
+      const mat = scene.faces.find((f) => f.id === sel.faces[0])?.material ?? null;
+      items.push({ label: mat ? `Select all painted ${mat.replace(/^[a-z]+:/, "")}` : "Select all unpainted faces", run: () => exec({ cmd: "same_as", by: "material", material: mat }).then(pickInto) });
+    }
+  }
+  if (one && (sel.groups.length || sel.instances.length)) {
+    const tag = sel.groups.length ? scene.groups.find((g) => g.id === ids[0])?.tag : scene.instances.find((i) => i.id === ids[0])?.tag;
+    if (tag) items.push({ label: `Select all on tag "${tag}"`, run: () => exec({ cmd: "same_as", by: "tag", tag }).then(pickInto) });
+  }
   // a matched photo onto these faces, as textures (SketchUp's Project Photo)
   if (sel.faces.length || sel.groups.length)
     for (const v of scene.views.filter((x) => x.photo).slice(0, 4))

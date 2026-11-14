@@ -402,6 +402,24 @@ pub enum Command {
     /// IFC (and so Revit's exports) through IfcOpenShell, if installed: one
     /// group per element, typed for the Classifier, grouped by storey.
     ImportIfc { path: String },
+    /// Selection helpers: a face (or edge) and what it touches. `all`: everything
+    /// connected to it (SketchUp's triple-click); else the face and its edges
+    /// (double-click; an edge gives the faces on it). Read-only.
+    Connected {
+        id: Id,
+        #[serde(default)]
+        all: bool,
+    },
+    /// Every face with this material (null: unpainted) / every group and
+    /// placement with this tag, in the open context. Read-only.
+    SameAs {
+        #[serde(default)]
+        material: Option<String>,
+        #[serde(default)]
+        tag: Option<String>,
+        #[serde(default)]
+        by: String,
+    },
     /// Component Options: the attributes a placement offers its user (those
     /// with an `_name_access` of textbox, list or view).
     Options { id: Id },
@@ -960,6 +978,8 @@ impl Command {
                 | Command::Report { .. }
                 | Command::Options { .. }
                 | Command::CloudData { .. }
+                | Command::Connected { .. }
+                | Command::SameAs { .. }
                 | Command::Section { .. }
                 | Command::Info
                 | Command::Components
@@ -2011,6 +2031,21 @@ impl Engine {
             Command::ImportIfc { path } => {
                 let r = crate::ifcin::import(m, std::path::Path::new(&path))?;
                 json!({"group": r.group, "elements": r.elements, "faces": r.faces, "storeys": r.storeys, "schema": r.schema})
+            }
+            Command::Connected { id, all } => {
+                let (faces, edges) = m.connected(id, all)?;
+                json!({"faces": faces, "edges": edges})
+            }
+            Command::SameAs { material, tag, by } => {
+                let ctx = m.active_group;
+                if by == "tag" {
+                    let groups: Vec<Id> = m.groups.iter().filter(|(_, g)| g.parent == ctx && g.tag == tag).map(|(k, _)| *k).collect();
+                    let instances: Vec<Id> = m.instances.iter().filter(|(_, i)| i.parent == ctx && i.tag == tag).map(|(k, _)| *k).collect();
+                    json!({"groups": groups, "instances": instances})
+                } else {
+                    let faces: Vec<Id> = m.faces.iter().filter(|(_, f)| f.group == ctx && f.material == material && !f.hidden).map(|(k, _)| *k).collect();
+                    json!({"faces": faces})
+                }
             }
             Command::Options { id } => {
                 let i = m.instances.get(&id).ok_or_else(|| anyhow::anyhow!("{id} is not a component placement"))?;

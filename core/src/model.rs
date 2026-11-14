@@ -372,6 +372,63 @@ impl Model {
             && !face.holes.iter().any(|h| geom::inside(q, &geom::to2d(&self.pts(h), u, v)))
     }
 
+    /// A face or edge and what it touches: with `all`, everything connected
+    /// (through shared points, in the same group); else a face's own edges, or
+    /// an edge's faces. Returns (faces, edges).
+    pub fn connected(&self, id: Id, all: bool) -> Result<(Vec<Id>, Vec<Id>)> {
+        let edge_ids = |vs: &BTreeSet<Id>, group: Option<Id>| -> Vec<Id> { self.edges.iter().filter(|(_, e)| e.group == group && vs.contains(&e.a) && vs.contains(&e.b)).map(|(k, _)| *k).collect() };
+        if !all {
+            if let Some(f) = self.faces.get(&id) {
+                let mut out = vec![];
+                for l in f.loops() {
+                    for (a, b) in pairs(l) {
+                        out.extend(self.edges.iter().filter(|(_, e)| (e.a == a && e.b == b) || (e.a == b && e.b == a)).map(|(k, _)| *k));
+                    }
+                }
+                return Ok((vec![id], out));
+            }
+            if let Some(e) = self.edges.get(&id) {
+                return Ok((self.faces_using_edge(e.a, e.b), vec![id]));
+            }
+            bail!("no face or edge {id}");
+        }
+        let (start, group): (Vec<Id>, Option<Id>) = if let Some(f) = self.faces.get(&id) {
+            (f.loops().flatten().copied().collect(), f.group)
+        } else if let Some(e) = self.edges.get(&id) {
+            (vec![e.a, e.b], e.group)
+        } else {
+            bail!("no face or edge {id}");
+        };
+        // points joined by edges, and by faces
+        let mut nb: HashMap<Id, Vec<Id>> = HashMap::new();
+        for e in self.edges.values().filter(|e| e.group == group) {
+            nb.entry(e.a).or_default().push(e.b);
+            nb.entry(e.b).or_default().push(e.a);
+        }
+        let face_list: Vec<(Id, Vec<Id>)> = self.faces.iter().filter(|(_, f)| f.group == group).map(|(k, f)| (*k, f.loops().flatten().copied().collect())).collect();
+        for (_, vs) in &face_list {
+            for w in vs.windows(2) {
+                nb.entry(w[0]).or_default().push(w[1]);
+                nb.entry(w[1]).or_default().push(w[0]);
+            }
+            if let (Some(a), Some(b)) = (vs.first(), vs.last()) {
+                nb.entry(*a).or_default().push(*b);
+                nb.entry(*b).or_default().push(*a);
+            }
+        }
+        let mut seen: BTreeSet<Id> = start.iter().copied().collect();
+        let mut todo = start;
+        while let Some(v) = todo.pop() {
+            for w in nb.get(&v).into_iter().flatten() {
+                if seen.insert(*w) {
+                    todo.push(*w);
+                }
+            }
+        }
+        let faces = face_list.iter().filter(|(_, vs)| vs.iter().any(|v| seen.contains(v))).map(|(k, _)| *k).collect();
+        Ok((faces, edge_ids(&seen, group)))
+    }
+
     pub fn faces_using_edge(&self, a: Id, b: Id) -> Vec<Id> {
         self.faces.iter().filter(|(_, f)| f.uses_edge(a, b)).map(|(&id, _)| id).collect()
     }

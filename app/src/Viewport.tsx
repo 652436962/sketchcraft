@@ -2429,6 +2429,17 @@ export default function Viewport(props: Props) {
                 L.onToast(`Editing ${ent.kind === "groups" ? "group" : "component"}. Esc or double-click outside to close.`);
                 return;
               }
+              // loose geometry: double-click takes the face and its edges,
+              // triple-click everything connected (SketchUp's select)
+              if (ent.kind === "faces") {
+                const r = await exec({ cmd: "connected", id: ent.id, all: e.detail >= 3 });
+                if (r.ok) L.setSel(combine(sel, { ...EMPTY, faces: r.faces as number[], edges: r.edges as number[] }, selMode(e)));
+                return;
+              }
+            } else if (he != null) {
+              const r = await exec({ cmd: "connected", id: he, all: e.detail >= 3 });
+              if (r.ok) L.setSel(combine(sel, { ...EMPTY, faces: r.faces as number[], edges: r.edges as number[] }, selMode(e)));
+              return;
             } else {
               await L.run({ cmd: "close" });
               return;

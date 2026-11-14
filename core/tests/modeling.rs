@@ -2062,3 +2062,27 @@ fn ifc_round_trip_through_ifcopenshell() {
     assert!(back.model.classes.values().any(|c| c == "IfcSlab"));
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// Select helpers: a face and its edges; everything connected (not the box
+/// next to it); every face with the same paint.
+#[test]
+fn select_connected_and_same_material() {
+    let mut e = Engine::new();
+    let a = run(&mut e, json!({"cmd":"rect","from":[0,0,0],"to":[1,1,0]}))["face"].as_u64().unwrap();
+    run(&mut e, json!({"cmd":"pushpull","face":a,"distance":1,"toward":[0,0,1]}));
+    let b = run(&mut e, json!({"cmd":"rect","from":[3,0,0],"to":[4,1,0]}))["face"].as_u64().unwrap();
+    run(&mut e, json!({"cmd":"pushpull","face":b,"distance":1,"toward":[0,0,1]}));
+    let r = run(&mut e, json!({"cmd":"connected","id":a}));
+    assert_eq!((r["faces"].as_array().unwrap().len(), r["edges"].as_array().unwrap().len()), (1, 4));
+    let r = run(&mut e, json!({"cmd":"connected","id":a,"all":true}));
+    assert_eq!((r["faces"].as_array().unwrap().len(), r["edges"].as_array().unwrap().len()), (6, 12), "one box, not both");
+    // an edge gives its two faces
+    let edge = r["edges"][0].as_u64().unwrap();
+    let r = run(&mut e, json!({"cmd":"connected","id":edge}));
+    assert_eq!(r["faces"].as_array().unwrap().len(), 2);
+    // paint two faces red; same_as finds both
+    run(&mut e, json!({"cmd":"paint","ids":[a, b],"color":[1,0,0]}));
+    let m = e.model.faces[&(a as u32)].material.clone();
+    let r = run(&mut e, json!({"cmd":"same_as","by":"material","material":m}));
+    assert_eq!(r["faces"].as_array().unwrap().len(), 2, "{r}");
+}
