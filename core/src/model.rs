@@ -260,6 +260,20 @@ pub struct Model {
     /// Point clouds (scans), by id
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub clouds: BTreeMap<Id, crate::cloud::Cloud>,
+    /// Section planes (SketchUp's), and the one cutting now
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<SectionPlane>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_section: Option<Id>,
+}
+
+/// A named section plane: cuts away the side its normal points from.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SectionPlane {
+    pub id: Id,
+    pub name: String,
+    pub origin: [f64; 3],
+    pub normal: [f64; 3],
 }
 
 /// Where the model's origin is on Earth (+Y is north).

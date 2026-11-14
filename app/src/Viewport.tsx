@@ -469,6 +469,8 @@ export default function Viewport(props: Props) {
 
   /** camera tools: eye height, the drag in progress, keys held, view history */
   const camTool = useRef<{ eyeH: number; drag: { x: number; y: number; at: number } | null; keys: Set<string>; loop: number; history: Cam[]; at: number; box: HTMLDivElement | null }>({ eyeH: 1.68, drag: null, keys: new Set(), loop: 0, history: [], at: -1, box: null });
+  /** the section plane last taken from the scene (id, place), so the cut follows it */
+  const secKey = useRef("");
   /** point clouds on show: their group, and each one's points by id (with the version they're from) */
   const cloudGroup = useRef(new THREE.Group());
   const cloudObjs = useRef(new Map<number, { version: number; points: THREE.Points }>());
@@ -894,6 +896,16 @@ export default function Viewport(props: Props) {
     const s = live.current.scene;
     if (!T || !s) return;
     syncClouds();
+    // the cut follows the scene's active section plane
+    {
+      const act = s.sections?.find((x) => x.id === s.activeSection);
+      const key = act ? `${act.id}:${act.origin}:${act.normal}` : "";
+      if (key !== secKey.current) {
+        secKey.current = key;
+        st.current.section = act ? new THREE.Plane().setFromNormalAndCoplanarPoint(V(act.normal).normalize(), V(act.origin)) : null;
+        live.current.onSection(!!act);
+      }
+    }
     T.model.children.forEach((c) => (c as THREE.Mesh).geometry?.dispose());
     T.model.clear();
     const xray = live.current.styles.xray;
@@ -1986,14 +1998,13 @@ export default function Viewport(props: Props) {
     view,
     camera,
     goTo,
-    clearSection: () => {
-      st.current.section = null;
-      buildModel();
-    },
+    clearSection: () => void live.current.run({ cmd: "section_off" }),
     setSection: (origin: Vec3, normal: Vec3) => {
-      st.current.section = new THREE.Plane().setFromNormalAndCoplanarPoint(V(normal).normalize(), V(origin));
-      buildModel();
-      live.current.onSection(true);
+      // a scene's cut: the same plane if there is one, else a new one
+      const s = live.current.scene;
+      const n = V(normal).normalize();
+      const same = s?.sections?.find((x) => V(x.normal).normalize().distanceTo(n) < 1e-6 && Math.abs(V(x.origin).sub(V(origin)).dot(n)) < 1e-6);
+      void live.current.run(same ? { cmd: "section_edit", id: same.id, active: true } : { cmd: "section_plane", origin, normal: [n.x, n.y, n.z] });
     },
     sectionPlane: () => {
       const p = st.current.section;
@@ -2010,10 +2021,10 @@ export default function Viewport(props: Props) {
     exitCage: () => exitCage(),
     inCage: () => cageEd.current != null,
     planCut: (height: number) => {
-      // keep what's below: normal points down, plane at z = height
-      st.current.section = new THREE.Plane(new THREE.Vector3(0, 0, -1), height);
-      buildModel();
-      live.current.onSection(true);
+      // keep what's below: normal points down, plane at z = height (one "Floor plan" plane, reused)
+      const plan = live.current.scene?.sections?.find((x) => x.name === "Floor plan");
+      const at = { origin: [0, 0, height], normal: [0, 0, -1] };
+      void live.current.run(plan ? { cmd: "section_edit", id: plan.id, ...at, active: true } : { cmd: "section_plane", name: "Floor plan", ...at });
     },
     moveSection: (by: number) => {
       const p = st.current.section;
@@ -2022,6 +2033,12 @@ export default function Viewport(props: Props) {
       p.constant -= by;
       buildModel();
       live.current.onSection(true);
+      const id = live.current.scene?.activeSection;
+      if (id != null) {
+        const o = p.coplanarPoint(new THREE.Vector3());
+        secKey.current = ""; // let the scene's answer settle it
+        void live.current.run({ cmd: "section_edit", id, origin: [o.x, o.y, o.z] });
+      }
     },
   };
 
@@ -2978,10 +2995,9 @@ export default function Viewport(props: Props) {
           const h = pick(e);
           if (!h?.face) return;
           const n = V(h.face.normal).negate();
-          // 1 cm into the solid behind the clicked face, keeping the far side
-          st.current.section = new THREE.Plane().setFromNormalAndCoplanarPoint(n, h.point.clone().addScaledVector(n, 0.01));
-          buildModel();
-          L.onSection(true);
+          // 1 cm into the solid behind the clicked face, keeping the far side; a named plane
+          const o = h.point.clone().addScaledVector(n, 0.01);
+          await L.run({ cmd: "section_plane", origin: arr(o), normal: arr(n) });
           L.setTool("select");
           return;
         }

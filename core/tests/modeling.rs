@@ -2146,3 +2146,33 @@ fn scenes_remember_tags_hidden_style_and_section() {
     assert!(e.model.groups[&(g as u32)].hidden);
     assert!(r["style"].is_null());
 }
+
+/// Named section planes: several, one active; switch, rename, move, delete;
+/// saved with the model.
+#[test]
+fn section_planes_named_switch_and_save() {
+    let mut e = Engine::new();
+    let a = run(&mut e, json!({"cmd":"section_plane","origin":[0,0,1.2],"normal":[0,0,-2]}))["section"].as_u64().unwrap();
+    let b = run(&mut e, json!({"cmd":"section_plane","name":"Long section","origin":[1,0,0],"normal":[1,0,0]}))["section"].as_u64().unwrap();
+    assert_eq!(e.model.active_section, Some(b as u32), "the newest cuts");
+    assert_eq!(e.model.sections[0].name, "Section 1");
+    assert_eq!(e.model.sections[0].normal, [0.0, 0.0, -1.0], "normalized");
+    run(&mut e, json!({"cmd":"section_edit","id":a,"active":true,"name":"Plan cut","origin":[0,0,2.4]}));
+    assert_eq!(e.model.active_section, Some(a as u32));
+    assert_eq!((e.model.sections[0].name.as_str(), e.model.sections[0].origin[2]), ("Plan cut", 2.4));
+    run(&mut e, json!({"cmd":"section_off"}));
+    assert_eq!(e.model.active_section, None);
+    let s = sketchcraft::scene::build(&e.model, None);
+    assert_eq!(s["sections"].as_array().unwrap().len(), 2);
+    run(&mut e, json!({"cmd":"section_edit","id":b,"active":true}));
+    let dir = std::env::temp_dir().join(format!("sketchcraft-sec-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("m.sketchcraft").to_string_lossy().to_string();
+    run(&mut e, json!({"cmd":"save","path":path}));
+    let mut e2 = Engine::new();
+    run(&mut e2, json!({"cmd":"open","path":path}));
+    assert_eq!((e2.model.sections.len(), e2.model.active_section), (2, Some(b as u32)));
+    run(&mut e2, json!({"cmd":"section_edit","id":b,"delete":true}));
+    assert_eq!((e2.model.sections.len(), e2.model.active_section), (1, None));
+    std::fs::remove_dir_all(dir).ok();
+}

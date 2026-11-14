@@ -398,6 +398,45 @@ function TemplateTiles({ onTemplate }: { onTemplate: (lines: string[]) => void }
   );
 }
 
+/** Section planes: click one to cut with it (again to stop), double-click to rename. */
+function SectionList({ scene, run }: { scene: Scene; run: Run }) {
+  const list = scene.sections ?? [];
+  if (!list.length) return null;
+  const rename = async (id: number, name: string) => {
+    const n = await ask("Rename the section plane", name);
+    if (n?.trim()) await run({ cmd: "section_edit", id, name: n.trim() });
+  };
+  return (
+    <>
+      <div className="section-title sub" style={{ marginTop: 12 }}>
+        Section planes
+      </div>
+      <ul className="layers views-list">
+        {list.map((p) => {
+          const on = scene.activeSection === p.id;
+          return (
+            <li key={p.id} className={on ? "on" : ""} onClick={() => run(on ? { cmd: "section_off" } : { cmd: "section_edit", id: p.id, active: true })} onDoubleClick={() => rename(p.id, p.name)} title={on ? "Cutting now: click to stop" : "Click to cut with this plane; double-click to rename"}>
+              <Icons.section />
+              <span className="name">{p.name}</span>
+              {on && <span className="muted small">cutting</span>}
+              <button
+                className="eye"
+                title="Delete section plane"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  run({ cmd: "section_edit", id: p.id, delete: true });
+                }}
+              >
+                <Icons.trash />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </>
+  );
+}
+
 export function Views({ scene, run, camera, goTo, onMatchPhoto, onPhotoModel, onRefImage }: { scene: Scene; run: Run; camera: () => Cam; goTo: (c: Cam & { photo?: string }) => void; onMatchPhoto: (f: File) => void; onPhotoModel: () => void; onRefImage: () => void }) {
   const [name, setName] = useState("");
   const photoInput = useRef<HTMLInputElement>(null);
@@ -449,6 +488,7 @@ export function Views({ scene, run, camera, goTo, onMatchPhoto, onPhotoModel, on
         ))}
         {!scene.views.length && <li className="empty">Save camera angles here and click to fly back. Renders can use them by name.</li>}
       </ul>
+      <SectionList scene={scene} run={run} />
     </>
   );
 }

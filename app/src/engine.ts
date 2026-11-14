@@ -102,7 +102,17 @@ export interface CloudInfo {
   hi: Vec3;
 }
 
+export interface SectionInfo {
+  id: number;
+  name: string;
+  origin: Vec3;
+  normal: Vec3;
+}
+
 export interface Scene {
+  /** section planes, and the one cutting now */
+  sections?: SectionInfo[];
+  activeSection?: number | null;
   /** point clouds (scans); their points come by cloud_data */
   clouds?: CloudInfo[];
   /** Classifier: IFC type by group / placement id */

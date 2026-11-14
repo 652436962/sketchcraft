@@ -141,6 +141,8 @@ pub fn build(root: &Model, ctx: Option<u32>) -> Value {
         })
         .collect();
     json!({
+        "sections": root.sections,
+        "activeSection": root.active_section,
         "clouds": clouds,
         "positions": q(&positions, 1e-5),
         "colors": q(&colors, 1e-3),
