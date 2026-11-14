@@ -5,7 +5,11 @@ Checked items are in `main`.
 
 ## Modeling
 
-- [x] Line, arc, rectangle, circle, polygon, push/pull, offset, follow me
+- [x] Line, **Freehand**, arcs (**Arc** from its center, **2-Point**, **3-Point**, **Pie**), rectangle, **Rotated Rectangle**, circle, polygon, push/pull, offset, follow me
+- [x] Select like SketchUp: double-click a face for it and its edges, triple-click for everything connected; select all with the same paint or tag
+- [x] **Axes tool** (turned drawing axes for buildings set at an angle); Tape Measure **rescales the model**
+- [x] Doors and windows **cut openings** (through thick walls, with reveals); any component can be set to
+- [x] **Hide Rest of Model** while editing; **Paste in Place**; **command search** (Shift+S) and outliner search
 - [x] Move / rotate / scale, copies and arrays (`x5`), Flip Along, typed exact values in any units
 - [x] Inference: endpoints, midpoints, on edge/face, axes, From Point; arrow-key and Shift locks
 - [x] Lines closing a loop on a face cut a new face (windows on walls)
@@ -24,7 +28,7 @@ Checked items are in `main`.
 - [x] Materials and image textures (tile size, projected)
 - [x] **Styles**: shaded / textured / monochrome / hidden line / wireframe, profiles,
       sketchy edges, extensions, ambient occlusion, paper / blueprint / night; presets
-- [x] Scenes (saved views), section cuts with **section fills**, X-ray, back edges, shadows, parallel projection
+- [x] Scenes (saved views) that remember style, tags, hidden things and the section cut; **named section planes** with **section fills**, X-ray, back edges, shadows, parallel projection
 - [x] **Match Photo**: camera from a photo's vanishing lines; the scene keeps the photo; **Project Photo** onto faces as straightened textures
 - [x] **Timeline** for video: turntables, recorded walkthroughs, glides through scenes, and sun studies (built-in solar position, clock on the frame); previewed live, exported as MP4 at 720p / 1080p / square / vertical with viewport shadows
 - [x] **LayOut-lite drawing sheets**: viewports at true scale, scale bars, title blocks, multi-page PDF
@@ -48,18 +52,7 @@ Checked items are in `main`.
 SketchUp's menus and toolbars (free, Pro, Studio) checked against the code,
 not against this list. Ranked by how often a SketchUp user would hit it.
 
-**P1: everyday modeling (free SketchUp has these)**
-
-| Gap | Today |
-| --- | --- |
-| Arc variants: center **Arc**, **3-Point Arc**, **Pie**; **Rotated Rectangle**; **Freehand** | only the 2-point arc |
-| **Select connected** (triple-click), select all with the same material / tag | double-click only; Shift-paint replaces a material |
-| Components that **glue to faces and cut openings** (windows and doors in walls) | components sit on top |
-| **Scenes remember** style, hidden things, tag visibility, section, shadows | camera only |
-| **Axes tool** (draw on a tilted plane), **Hide Rest of Model** while editing, **Paste in Place** | missing |
-| Tape Measure **rescales the model** (measure, type the real length) | missing |
-| **Outliner search**, **command search** (Shift+S) | missing |
-| Several **named section planes** to switch between | one active cut |
+**P1: everyday modeling**: all done (2026-11-14), now in the lists above.
 
 **P2: looks and files**
 
