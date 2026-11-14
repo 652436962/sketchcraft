@@ -53,7 +53,19 @@ export function Outliner({ scene, sel, setSel, run, byTag, setByTag }: { scene: 
   const [closed, setClosed] = useState<Set<number>>(new Set());
   const [dragging, setDragging] = useState<number[] | null>(null);
   const [over, setOver] = useState<number | "top" | null>(null);
-  const tree = useMemo(() => buildTree(scene), [scene]);
+  const [query, setQuery] = useState("");
+  const full = useMemo(() => buildTree(scene), [scene]);
+  // searching: rows whose name or tag matches, with the groups they sit in
+  const tree = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return full;
+    const keep = (n: Node): Node | null => {
+      const kids = n.children.map(keep).filter((c): c is Node => c != null);
+      const hit = n.name.toLowerCase().includes(q) || (n.tag ?? "").toLowerCase().includes(q);
+      return hit || kids.length ? { ...n, children: kids } : null;
+    };
+    return full.map(keep).filter((c): c is Node => c != null);
+  }, [full, query]);
   // pointer dragging (HTML5 drag-and-drop is taken over by the desktop
   // webview for file drops, so rows move with plain pointer events)
   const press = useRef<{ x: number; y: number; ids: number[] } | null>(null);
@@ -125,7 +137,7 @@ export function Outliner({ scene, sel, setSel, run, byTag, setByTag }: { scene: 
     // hidden itself, or inside something hidden: the whole chain is off
     const off = n.hidden || parentHidden;
     const kids = n.children.length > 0;
-    const open = !closed.has(n.id);
+    const open = query.trim() !== "" || !closed.has(n.id);
     return (
       <li key={n.id} role="treeitem" aria-expanded={kids ? open : undefined} aria-selected={selected(n)}>
         <div
@@ -222,7 +234,11 @@ export function Outliner({ scene, sel, setSel, run, byTag, setByTag }: { scene: 
           + New group
         </button>
       </div>
+      {(scene.groups.length + scene.instances.length > 6 || query) && (
+        <input className="otree-search" type="search" placeholder="Search names and tags" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setQuery("")} aria-label="Search the outliner" />
+      )}
       <ul className="otree" role="tree" aria-label="Model hierarchy">
+        {query.trim() && !tree.length && <li className="empty">Nothing named "{query.trim()}"</li>}
         {tree.map((n) => row(n, 0))}
         {scene.loose > 0 && (
           <li className="muted-row">

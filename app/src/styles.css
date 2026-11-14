@@ -2593,3 +2593,66 @@ details.panel-fold {
 .coach-hide { pointer-events: auto; margin-left: auto; width: 22px; height: 22px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer; }
 .coach-hide:hover { background: rgba(20, 22, 40, 0.08); color: var(--text); }
 .coach-hide:focus-visible { outline: 2px solid var(--accent); }
+
+/* Command search (Shift+S) */
+.sheet.palette {
+  width: min(560px, calc(100vw - 32px));
+  padding: 10px;
+  align-self: flex-start;
+  margin-top: 12vh;
+}
+.palette input {
+  width: 100%;
+  font-size: 15px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+}
+.palette ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 50vh;
+  overflow: auto;
+}
+.palette li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+}
+.palette li > span:first-child {
+  font-weight: 500;
+}
+.palette li .muted {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette li.on {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.palette kbd {
+  font: 500 11px/1 "IBM Plex Mono", ui-monospace, monospace;
+  padding: 3px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+/* Outliner search */
+.otree-search {
+  width: 100%;
+  margin: 6px 0 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+}

@@ -10,6 +10,7 @@ import Viewport, { type Backdrop, type BuildSettings, type FaceStyle, type Style
 import { MatchPhoto, type PhotoMatch } from "./matchphoto";
 import { prepareImage } from "./textures";
 import { applySkin, readSkin, SKINS, store, type Skin } from "./skins";
+import { CommandPalette, type Command } from "./palette";
 import { TOOL_INFO, WORKSPACES, withEdits, type WorkspaceEdits, type WorkspaceId } from "./workspace";
 import { AppearanceDialog, WorkspaceDialog } from "./appearance";
 import { WorkspaceStrip } from "./wsstrip";
@@ -264,6 +265,7 @@ export default function App() {
   /** ⌘C / ⌘X: what to paste, and whether it was cut */
   const clip = useRef<{ ids: number[]; cut: boolean } | null>(null);
   const [showKeys, setShowKeys] = useState(false);
+  const [showPalette, setShowPalette] = useState(false);
   const [showSheets, setShowSheets] = useState(false);
   const [showLocation, setShowLocation] = useState(false);
   const [showRender, setShowRender] = useState(false);
@@ -441,6 +443,11 @@ export default function App() {
       if (e.key === "?" || (e.shiftKey && e.key === "/")) {
         e.preventDefault();
         return setShowKeys((v) => !v);
+      }
+      // Shift+S: search commands (before plain S picks Scale)
+      if (e.shiftKey && k === "s") {
+        e.preventDefault();
+        return setShowPalette(true);
       }
       if (e.key === "Delete" || e.key === "Backspace") return void deleteSelection();
       if (e.shiftKey && k === "z") return api.current?.fit();
@@ -664,6 +671,58 @@ export default function App() {
       if (r.ok) say(`Rendered ${path.split("/").pop()}`);
     },
   };
+  /** everything Shift+S can find: tools, then actions from the menus and view bar */
+  const commands = (): Command[] => {
+    const tools: Command[] = (Object.entries(TOOL_INFO) as [Tool, { name: string; key: string }][]).map(([id, t]) => ({ label: t.name.split(":")[0].split(" (")[0], hint: `Tool${t.name.includes(":") ? ` · ${t.name.split(":")[1].trim()}` : ""}`, key: t.key || undefined, run: () => chooseTool(id) }));
+    const toggle = (k: keyof Styles, label: string) => ({ label, hint: "View", run: () => setStyles((s) => ({ ...s, [k]: !s[k] })) });
+    const act: Command[] = [
+      { label: "New model", hint: "File", key: "⌘N", run: file.new },
+      { label: "Open…", hint: "File", key: "⌘O", run: file.open },
+      { label: "Save", hint: "File", key: "⌘S", run: () => file.save(false) },
+      { label: "Save As…", hint: "File", run: () => file.save(true) },
+      { label: "Import…", hint: "File · SketchUp, DWG/DXF, IFC, FBX, OBJ, point clouds", key: "⌘I", run: file.import },
+      ...(["glb", "obj", "stl", "dae", "dxf", "dwg", "pdf", "ifc"] as const).map((k) => ({ label: `Export ${k.toUpperCase()}…`, hint: "File", run: () => file.export(k) })),
+      { label: "Render…", hint: "Photoreal render", run: () => setShowRender(true) },
+      { label: "Timeline (video)…", hint: "Turntables, walkthroughs, sun studies", run: () => setShowTimeline(true) },
+      { label: "Drawing sheets (PDF)…", hint: "File", run: () => setShowSheets(true) },
+      { label: "Make blueprint (PDF)…", hint: "File", run: file.blueprint },
+      { label: "Add location…", hint: "Terrain and map imagery", run: () => setShowLocation(true) },
+      { label: "3D Text…", hint: "File", run: () => setShowText3d(true) },
+      { label: "Generate report (CSV)…", hint: "File", run: file.report },
+      { label: "Skins…", hint: "How SketchCraft looks", run: () => setShowSkins(true) },
+      { label: "Keyboard shortcuts", hint: "Help", key: "?", run: () => setShowKeys(true) },
+      { label: "Zoom extents", hint: "Camera", key: "⇧Z", run: () => api.current?.fit() },
+      ...(["iso", "top", "front", "right", "back", "left"] as const).map((v) => ({ label: `${v[0].toUpperCase()}${v.slice(1)} view`, hint: "Camera", run: () => api.current?.view(v) })),
+      { label: "Undo", hint: "Edit", key: "⌘Z", run: () => void run({ cmd: "undo" }) },
+      { label: "Redo", hint: "Edit", key: "⇧⌘Z", run: () => void run({ cmd: "redo" }) },
+      { label: "Unhide all", hint: "Edit", run: () => void run({ cmd: "unhide" }) },
+      {
+        label: "Raise walls…",
+        hint: "Walls from an imported floor plan (select it first)",
+        run: async () => {
+          const g = sel.groups[0];
+          if (g == null) return say("Select the imported plan first (click it once), then Raise walls.", true);
+          const units = scene?.units || "m";
+          const raw = await ask("Wall height", formatLength(2.7, units), "The thin bands between wall lines go up this high.");
+          if (raw == null) return;
+          const height = parseLength(raw, units);
+          if (!(height > 0)) return say("That isn't a height", true);
+          const r = await run({ cmd: "raise_walls", group: g, height });
+          if (r.ok) say(`Raised ${r.walls} walls${r.windows ? ` with ${r.windows} window openings` : ""}`);
+        },
+      },
+      { label: "Clear guides", hint: "Edit", run: () => void run({ cmd: "clear_guides" }) },
+      toggle("xray", "X-Ray"),
+      toggle("shadows", "Shadows"),
+      toggle("edges", "Edges"),
+      toggle("backEdges", "Back edges"),
+      toggle("parallel", "Parallel projection"),
+      ...WORKSPACES.map((w) => ({ label: `${w.name} workspace`, hint: w.blurb, run: () => switchWs(w.id) })),
+      ...(scene?.views ?? []).map((v) => ({ label: `Go to scene "${v.name}"`, hint: "Scenes", run: () => void showView(v) })),
+    ];
+    return [...tools, ...act];
+  };
+
   const fileRef2 = useRef(file);
   fileRef2.current = file;
 
@@ -987,6 +1046,7 @@ export default function App() {
           />
         )}
         {showKeys && <ShortcutSheet onClose={() => setShowKeys(false)} />}
+        {showPalette && <CommandPalette commands={commands()} onClose={() => setShowPalette(false)} />}
         {showLocation && (
           <LocationDialog
             current={scene?.location}
