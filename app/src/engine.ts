@@ -114,6 +114,8 @@ export interface SectionInfo {
 export interface Scene {
   /** section planes, and the one cutting now */
   sections?: SectionInfo[];
+  /** drawing axes moved with the Axes tool: origin, red, green */
+  axes?: [Vec3, Vec3, Vec3] | null;
   activeSection?: number | null;
   /** point clouds (scans); their points come by cloud_data */
   clouds?: CloudInfo[];

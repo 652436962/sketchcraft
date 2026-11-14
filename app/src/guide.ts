@@ -54,6 +54,9 @@ export function guide(tool: Tool, c: GuideCtx): Guide {
     case "rrect":
       if (!busy) return g("Rotated Rectangle", "Click the first corner.", []);
       return c.stage === 1 ? g("Rotated Rectangle", "Click the end of the first side (any direction, even up a slope).", [LOCK, ESC]) : g("Rotated Rectangle", "Swing out the other side and click.", [["Type", "its length"], ESC]);
+    case "axes":
+      if (!busy) return g("Axes", "Click the new origin (a corner of a building set at an angle, say).", []);
+      return c.stage === 1 ? g("Axes", "Click along the new red direction.", [LOCK, ESC]) : g("Axes", "Click toward the new green side.", [ESC]);
     case "freehand":
       return g("Freehand", "Drag to draw. End where you began to close it into a face.", []);
     case "arc":

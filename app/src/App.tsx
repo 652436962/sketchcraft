@@ -709,6 +709,7 @@ export default function App() {
       { label: "Paste", hint: "Edit · then click where it goes", key: "⌘V", run: () => void paste() },
       { label: "Paste in place", hint: "Edit · exactly where it was, into the open group", key: "⇧⌘V", run: () => void paste(true) },
       { label: "Unhide all", hint: "Edit", run: () => void run({ cmd: "unhide" }) },
+      { label: "Reset axes", hint: "Drawing axes back to the model's own", run: () => void run({ cmd: "set_axes", reset: true }) },
       {
         label: "Raise walls…",
         hint: "Walls from an imported floor plan (select it first)",

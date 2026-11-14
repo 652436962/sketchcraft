@@ -34,7 +34,15 @@ export function forgetRecent() {
 
 export const AXIS_COLORS = [0xe5484d, 0x30a46c, 0x3e63dd];
 const AXIS_NAMES = ["Red", "Green", "Blue"];
-const AXES = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)];
+/** the drawing axes (red, green, blue); the Axes tool turns them */
+export const AXES = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)];
+
+/** Point the drawing axes along red x and green y (blue follows). */
+export function setDrawingAxes(x: THREE.Vector3, y: THREE.Vector3) {
+  AXES[0].copy(x).normalize();
+  AXES[1].copy(y).normalize();
+  AXES[2].copy(AXES[0]).cross(AXES[1]).normalize();
+}
 
 export interface Pick {
   face: FaceInfo | null;

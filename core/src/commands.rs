@@ -472,6 +472,18 @@ pub enum Command {
     },
     /// No section cut (the planes stay, ready to switch back on).
     SectionOff,
+    /// Move the drawing axes (the Axes tool): origin, red direction, green
+    /// direction (made square to red). `reset`: back to the model's own.
+    SetAxes {
+        #[serde(default)]
+        origin: Option<[f64; 3]>,
+        #[serde(default)]
+        x: Option<[f64; 3]>,
+        #[serde(default)]
+        y: Option<[f64; 3]>,
+        #[serde(default)]
+        reset: bool,
+    },
     /// Component Options: the attributes a placement offers its user (those
     /// with an `_name_access` of textbox, list or view).
     Options { id: Id },
@@ -2178,6 +2190,21 @@ impl Engine {
                     _ => {}
                 }
                 json!({"section": id})
+            }
+            Command::SetAxes { origin, x, y, reset } => {
+                if reset {
+                    m.axes = None;
+                    return Ok(json!({"axes": null}));
+                }
+                let (Some(o), Some(x), Some(y)) = (origin, x, y) else { bail!("set_axes needs origin, x and y (or reset)") };
+                let x = DVec3::from(x).normalize_or_zero();
+                let y = DVec3::from(y);
+                let y = (y - x * y.dot(x)).normalize_or_zero();
+                if x == DVec3::ZERO || y == DVec3::ZERO || !o.iter().all(|v| v.is_finite()) {
+                    bail!("the red and green directions need to be different");
+                }
+                m.axes = Some([o, x.to_array(), y.to_array()]);
+                json!({"axes": m.axes})
             }
             Command::SectionOff => {
                 m.active_section = None;

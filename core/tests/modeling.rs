@@ -2213,3 +2213,19 @@ fn doors_and_windows_cut_openings_through_walls() {
     let r = run(&mut e, json!({"cmd":"insert","asset":"window","at":[20,5,0]}));
     assert!(r["opening"].is_null());
 }
+
+/// The Axes tool's axes: green made square to red, saved, reset.
+#[test]
+fn drawing_axes_set_and_reset() {
+    let mut e = Engine::new();
+    let r = run(&mut e, json!({"cmd":"set_axes","origin":[2,1,0],"x":[2,2,0],"y":[0,3,0]}));
+    let a = &r["axes"];
+    let h = 0.5f64.sqrt();
+    assert!((a[1][0].as_f64().unwrap() - h).abs() < 1e-12 && (a[1][1].as_f64().unwrap() - h).abs() < 1e-12);
+    // green squared to red: (0,3,0) minus its red part, normalized = (-h, h, 0)
+    assert!((a[2][0].as_f64().unwrap() + h).abs() < 1e-12 && (a[2][1].as_f64().unwrap() - h).abs() < 1e-12);
+    assert!(sketchcraft::scene::build(&e.model, None)["axes"].is_array());
+    assert!(e.exec_json(&json!({"cmd":"set_axes","origin":[0,0,0],"x":[1,0,0],"y":[2,0,0]}).to_string())["ok"] == false, "parallel");
+    run(&mut e, json!({"cmd":"set_axes","reset":true}));
+    assert!(e.model.axes.is_none());
+}

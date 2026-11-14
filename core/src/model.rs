@@ -268,6 +268,10 @@ pub struct Model {
     pub sections: Vec<SectionPlane>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_section: Option<Id>,
+    /// Drawing axes moved with the Axes tool: origin, red and green directions
+    /// (blue is red × green). None: the model's own axes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axes: Option<[[f64; 3]; 3]>,
 }
 
 /// A named section plane: cuts away the side its normal points from.

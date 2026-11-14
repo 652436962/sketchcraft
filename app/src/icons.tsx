@@ -65,6 +65,13 @@ export const Icons = {
       <path d="M12 13 19 9a8 8 0 1 1-7-4z" />
     </Svg>
   ),
+  axes: () => (
+    <Svg>
+      <path d="M6 18 19 14" stroke="#e5484d" />
+      <path d="M6 18 15 8" stroke="#30a46c" />
+      <path d="M6 18V4" stroke="#3e63dd" />
+    </Svg>
+  ),
   freehand: () => (
     <Svg>
       <path d="M4 16c2-5 4 1 6-3s3-6 5-4 1 6 5 3" />

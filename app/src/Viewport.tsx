@@ -16,12 +16,12 @@ import { CageEditor, type CageData, type CageUi } from "./cage";
 import { CageBar } from "./cagebar";
 import { guide, type Guide } from "./guide";
 import { Icons } from "./icons";
-import { AXIS_COLORS, closestOnLine, infer, rayFrom, V, type Axis, type InferEnv, type Pick, type Snap } from "./inference";
+import { AXES, AXIS_COLORS, closestOnLine, infer, rayFrom, setDrawingAxes, V, type Axis, type InferEnv, type Pick, type Snap } from "./inference";
 import { combine, EMPTY, selIds, selMode, toggle, type Sel, type SelMode } from "./selection";
 import { formatLength, parseLengths } from "./units";
 
 export type Tool =
-  | "select" | "line" | "freehand" | "arc" | "arccenter" | "arc3" | "pie" | "rect" | "rrect" | "circle" | "polygon"
+  | "select" | "axes" | "line" | "freehand" | "arc" | "arccenter" | "arc3" | "pie" | "rect" | "rrect" | "circle" | "polygon"
   | "push" | "offset" | "followme" | "move" | "rotate" | "scale"
   | "tape" | "dimension" | "text" | "paint" | "erase" | "orbit" | "pan" | "zoom" | "section" | "place"
   | "position" | "lookaround" | "walk" | "zoomwindow" | "protractor"
@@ -346,8 +346,11 @@ function bulgeThrough(a: THREE.Vector3, m: THREE.Vector3, b: THREE.Vector3, n: T
   return m.clone().sub(mid).dot(side) > 0 ? d + k.r : d - k.r;
 }
 
+/** Two directions across a plane, lined up with the drawing axes where they lie in it. */
 function basis(n: THREE.Vector3): [THREE.Vector3, THREE.Vector3] {
-  const u = Math.abs(n.z) > 0.9 ? new THREE.Vector3(1, 0, 0) : UP.clone().cross(n).normalize();
+  const along = (a: THREE.Vector3) => a.clone().sub(n.clone().multiplyScalar(a.dot(n)));
+  const x = along(AXES[0]);
+  const u = x.length() > 0.1 ? x.normalize() : Math.abs(n.dot(AXES[2])) > 0.9 ? along(AXES[1]).normalize() : AXES[2].clone().cross(n).normalize();
   return [u, n.clone().cross(u).normalize()];
 }
 
@@ -407,6 +410,8 @@ type Op =
   | { t: "rrect"; a: THREE.Vector3; b: THREE.Vector3 | null; h: THREE.Vector3; cur: THREE.Vector3 }
   /** Freehand: the points dragged through, on the plane it started on */
   | { t: "free"; pts: THREE.Vector3[]; n: THREE.Vector3; o: THREE.Vector3 }
+  /** Axes: the new origin, then the red direction, then green */
+  | { t: "axes"; o: THREE.Vector3; x: THREE.Vector3 | null; cur: THREE.Vector3 }
   | { t: "push"; face: FaceInfo; origin: THREE.Vector3; n: THREE.Vector3; d: number; dragged: boolean }
   | { t: "offset"; face: FaceInfo; start: THREE.Vector3; d: number }
   | { t: "move"; base: THREE.Vector3; ids: number[]; delta: THREE.Vector3; copy: boolean }
@@ -469,6 +474,8 @@ export default function Viewport(props: Props) {
 
   /** camera tools: eye height, the drag in progress, keys held, view history */
   const camTool = useRef<{ eyeH: number; drag: { x: number; y: number; at: number } | null; keys: Set<string>; loop: number; history: Cam[]; at: number; box: HTMLDivElement | null }>({ eyeH: 1.68, drag: null, keys: new Set(), loop: 0, history: [], at: -1, box: null });
+  /** the red / green / blue lines at the drawing axes' origin */
+  const axesGroup = useRef(new THREE.Group());
   /** the section plane last taken from the scene (id, place), so the cut follows it */
   const secKey = useRef("");
   /** point clouds on show: their group, and each one's points by id (with the version they're from) */
@@ -615,10 +622,13 @@ export default function Viewport(props: Props) {
     grid.rotation.x = Math.PI / 2;
     (grid.material as THREE.Material).depthWrite = false;
     ground.add(grid);
+    // the drawing axes (moved and turned by the Axes tool)
+    axesGroup.current.matrixAutoUpdate = false;
     for (const [to, c] of [[[300, 0, 0], AXIS_COLORS[0]], [[0, 300, 0], AXIS_COLORS[1]], [[0, 0, 300], AXIS_COLORS[2]]] as [Vec3, number][]) {
       const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), V(to)]);
-      ground.add(new THREE.Line(g, new THREE.LineBasicMaterial({ color: c, transparent: true, opacity: 0.55 })));
+      axesGroup.current.add(new THREE.Line(g, new THREE.LineBasicMaterial({ color: c, transparent: true, opacity: 0.55 })));
     }
+    world.add(axesGroup.current);
     const catcher = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000), new THREE.ShadowMaterial({ opacity: 0.22 }));
     catcher.receiveShadow = true;
     catcher.visible = false;
@@ -896,6 +906,15 @@ export default function Viewport(props: Props) {
     const s = live.current.scene;
     if (!T || !s) return;
     syncClouds();
+    // the drawing axes follow the model's
+    {
+      const a = s.axes;
+      const x = a ? V(a[1]) : new THREE.Vector3(1, 0, 0);
+      const y = a ? V(a[2]) : new THREE.Vector3(0, 1, 0);
+      setDrawingAxes(x, y);
+      const o = a ? V(a[0]) : new THREE.Vector3();
+      axesGroup.current.matrix.makeBasis(AXES[0], AXES[1], AXES[2]).setPosition(o);
+    }
     // the cut follows the scene's active section plane
     {
       const act = s.sections?.find((x) => x.id === s.activeSection);
@@ -1471,7 +1490,7 @@ export default function Viewport(props: Props) {
   function updateCoach() {
     const L = live.current;
     const op = st.current.op;
-    const stage = op?.t === "arc" ? (op.b ? 2 : 1) : op?.t === "carc" ? (op.a ? 2 : 1) : op?.t === "arc3" ? (op.m ? 2 : 1) : op?.t === "rrect" ? (op.b ? 2 : 1) : op?.t === "rotate" ? (op.ref ? 2 : 1) : op?.t === "dim" ? (op.b ? 2 : 1) : undefined;
+    const stage = op?.t === "axes" ? (op.x ? 2 : 1) : op?.t === "arc" ? (op.b ? 2 : 1) : op?.t === "carc" ? (op.a ? 2 : 1) : op?.t === "arc3" ? (op.m ? 2 : 1) : op?.t === "rrect" ? (op.b ? 2 : 1) : op?.t === "rotate" ? (op.ref ? 2 : 1) : op?.t === "dim" ? (op.b ? 2 : 1) : undefined;
     const g = guide(L.tool, { op: op?.t ?? null, stage, selected: selIds(selNow()).length, placing: L.placeAsset });
     const key = `${g.title}|${g.step}|${g.keys.length}`;
     if (key !== coachKey.current) {
@@ -2427,6 +2446,23 @@ export default function Viewport(props: Props) {
           L.onMeasure("Height", fmt(op.h.length()));
           return;
         }
+        case "axes": {
+          const sn = infer(E, e, { anchor: op.x ?? op.o, lock });
+          op.cur = sn.p;
+          showSnap(sn);
+          if (!op.x) {
+            T.preview.add(polyline([op.o, sn.p], AXIS_COLORS[0]));
+            L.onMeasure("Red axis", "click its direction");
+            return;
+          }
+          const x = op.x.clone().sub(op.o).normalize();
+          const d = sn.p.clone().sub(op.o);
+          const y = d.sub(x.clone().multiplyScalar(d.dot(x)));
+          const len = Math.max(1, op.x.distanceTo(op.o));
+          T.preview.add(polyline([op.o, op.o.clone().addScaledVector(x, len)], AXIS_COLORS[0]));
+          if (y.length() > 1e-6) T.preview.add(polyline([op.o, op.o.clone().addScaledVector(y.normalize(), len)], AXIS_COLORS[1]));
+          return;
+        }
         case "free": {
           const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(op.n, op.o), new THREE.Vector3());
           if (!q) return;
@@ -2575,7 +2611,7 @@ export default function Viewport(props: Props) {
       }
 
       // nothing in progress: show what a click would hit
-      if (["line", "freehand", "arc", "arccenter", "arc3", "pie", "rect", "rrect", "circle", "polygon", "tape", "dimension", "text", "move", "rotate", "scale", "place", "wall", "stairs", "column", "protractor"].includes(L.tool)) showSnap(infer(E, e, {}));
+      if (["axes", "line", "freehand", "arc", "arccenter", "arc3", "pie", "rect", "rrect", "circle", "polygon", "tape", "dimension", "text", "move", "rotate", "scale", "place", "wall", "stairs", "column", "protractor"].includes(L.tool)) showSnap(infer(E, e, {}));
       else setHint(null);
       if (["select", "erase", "paint", "push", "offset", "followme", "section", "move", "rotate", "scale", "roof"].includes(L.tool)) {
         const he = ["select", "erase", "move"].includes(L.tool) ? pickEdge(e) : null;
@@ -2747,6 +2783,26 @@ export default function Viewport(props: Props) {
           }
           const sn = infer(E, e, {});
           st.current.op = { t: "rrect", a: sn.p, b: null, h: new THREE.Vector3(), cur: sn.p };
+          return;
+        }
+        case "axes": {
+          const sn = infer(E, e, op?.t === "axes" ? { anchor: op.x ?? op.o, lock: st.current.lock } : {});
+          if (op?.t !== "axes") {
+            st.current.op = { t: "axes", o: sn.p, x: null, cur: sn.p };
+            return;
+          }
+          if (!op.x) {
+            if (sn.p.distanceTo(op.o) > 1e-4) op.x = sn.p;
+            return;
+          }
+          const x = op.x.clone().sub(op.o).normalize();
+          const y = sn.p.clone().sub(op.o);
+          if (y.clone().sub(x.clone().multiplyScalar(y.dot(x))).length() < 1e-4) return;
+          st.current.op = null;
+          clearPreview();
+          await run({ cmd: "set_axes", origin: arr(op.o), x: arr(x), y: arr(y) });
+          L.onToast("Axes moved: drawing lines up with them now. Shift+S › Reset axes puts them back.");
+          L.setTool("select");
           return;
         }
         case "freehand": {
