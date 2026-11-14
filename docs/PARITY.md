@@ -25,7 +25,7 @@ Checked items are in `main`.
 
 ## Looks and presentation
 
-- [x] Materials and image textures (tile size, projected)
+- [x] Materials and image textures (tile size, projected); **physically based finishes** (Matte, Satin, Gloss, Metal, Brushed metal, Glass, Glow) in renders, glTF and a physically based view style
 - [x] **Styles**: shaded / textured / monochrome / hidden line / wireframe, profiles,
       sketchy edges, extensions, ambient occlusion, paper / blueprint / night; presets
 - [x] Scenes (saved views) that remember style, tags, hidden things and the section cut; **named section planes** with **section fills**, X-ray, back edges, shadows, parallel projection
@@ -58,7 +58,7 @@ not against this list. Ranked by how often a SketchUp user would hit it.
 
 | Gap | Today |
 | --- | --- |
-| Physically based materials (roughness, metal, normal maps) in the view and renders | color, texture, opacity |
+| Roughness / normal **maps** (images), and HDRI lighting | per-material roughness, metalness, glass, glow (done) |
 | **Fog**, **watermarks** | missing |
 | **Tag folders**, dashed tag lines, Tag tool | flat tags |
 | Components that **face the camera** (2D people and trees) | missing |
@@ -69,7 +69,7 @@ not against this list. Ranked by how often a SketchUp user would hit it.
 
 | Gap | Today |
 | --- | --- |
-| A denoiser, then GPU tracing (V-Ray-class) | CPU path tracer |
+| A learned denoiser (Intel OIDN) and GPU tracing (V-Ray-class) | CPU path tracer with an edge-aware (albedo / normal guided) denoiser |
 | LayOut depth: dimensions and text on sheets, scrapbooks, pattern fills | layout-lite PDF |
 | An extension API | MCP commands only |
 
@@ -77,6 +77,6 @@ not against this list. Ranked by how often a SketchUp user would hit it.
 
 - DWG needs a converter installed (LibreDWG or ODA); a native DWG reader is out of scope
 - Revit (.rvt) is a closed format with no public reader: open Revit's IFC export instead. IFC import needs IfcOpenShell installed (one-time steps in the app's message)
-- Rendering is a CPU path tracer: no denoiser or GPU tracing yet, so not V-Ray-class
+- Rendering is a CPU path tracer with a built-in edge-aware denoiser; no learned denoiser (OIDN) or GPU tracing yet, so not V-Ray-class
 - Point clouds: LAZ (compressed) needs converting to LAS first; scans aren't drawn in headless renders
 - Raise walls works from wall layers (or the whole drawing); walls drawn only as single lines aren't thickened
