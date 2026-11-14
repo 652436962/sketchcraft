@@ -420,6 +420,9 @@ pub enum Command {
         #[serde(default)]
         by: String,
     },
+    /// Resize the model (or the open group) by `factor` (Tape Measure: measure
+    /// something, type its real length).
+    Resize { factor: f64 },
     /// Component Options: the attributes a placement offers its user (those
     /// with an `_name_access` of textbox, list or view).
     Options { id: Id },
@@ -2046,6 +2049,10 @@ impl Engine {
                     let faces: Vec<Id> = m.faces.iter().filter(|(_, f)| f.group == ctx && f.material == material && !f.hidden).map(|(k, _)| *k).collect();
                     json!({"faces": faces})
                 }
+            }
+            Command::Resize { factor } => {
+                m.resize(factor)?;
+                json!({"factor": factor})
             }
             Command::Options { id } => {
                 let i = m.instances.get(&id).ok_or_else(|| anyhow::anyhow!("{id} is not a component placement"))?;

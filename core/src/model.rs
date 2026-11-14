@@ -372,6 +372,75 @@ impl Model {
             && !face.holes.iter().any(|h| geom::inside(q, &geom::to2d(&self.pts(h), u, v)))
     }
 
+    /// Resize everything by `k` about the origin (Tape Measure's "resize the
+    /// model"): geometry, component placements (where they sit, and how big),
+    /// guides, notes, saved cameras and point clouds. With a group open, just
+    /// that group's contents, about its lowest corner. Components keep their
+    /// own geometry and are scaled where placed.
+    pub fn resize(&mut self, k: f64) -> Result<()> {
+        if !(k.is_finite() && k > 1e-6 && k < 1e6) {
+            bail!("the new length needs to be more than zero");
+        }
+        if let Some(g) = self.active_group {
+            let mut inside = vec![g];
+            let mut i = 0;
+            while i < inside.len() {
+                let p = inside[i];
+                inside.extend(self.groups.iter().filter(|(_, x)| x.parent == Some(p)).map(|(k, _)| *k));
+                i += 1;
+            }
+            let vs: Vec<Id> = self.vertices.iter().filter(|(_, v)| v.group.is_some_and(|x| inside.contains(&x))).map(|(k, _)| *k).collect();
+            let o = vs.iter().map(|v| self.p(*v)).fold(DVec3::splat(f64::MAX), |a, p| a.min(p));
+            for v in vs {
+                let p = self.vertices[&v].p;
+                self.vertices.get_mut(&v).unwrap().p = o + (p - o) * k;
+            }
+            for i in self.instances.values_mut().filter(|i| i.parent.is_some_and(|x| inside.contains(&x))) {
+                let (s, r, t) = i.transform.to_scale_rotation_translation();
+                i.transform = glam::DMat4::from_scale_rotation_translation(s * k, r, o + (t - o) * k);
+            }
+            return Ok(());
+        }
+        for v in self.vertices.values_mut() {
+            v.p *= k;
+        }
+        for i in self.instances.values_mut() {
+            i.transform = glam::DMat4::from_scale(DVec3::splat(k)) * i.transform;
+        }
+        for g in &mut self.guides {
+            g.p *= k;
+        }
+        for a in &mut self.annotations {
+            match a {
+                Annotation::Dimension { a, b, offset, .. } => {
+                    *a *= k;
+                    *b *= k;
+                    *offset *= k;
+                }
+                Annotation::Text { at, leader, .. } => {
+                    *at *= k;
+                    if let Some(l) = leader {
+                        *l *= k;
+                    }
+                }
+                Annotation::Swing { hinge, from, to, .. } => {
+                    *hinge *= k;
+                    *from *= k;
+                    *to *= k;
+                }
+            }
+        }
+        for v in &mut self.views {
+            v.eye = (DVec3::from(v.eye) * k).to_array();
+            v.target = (DVec3::from(v.target) * k).to_array();
+        }
+        for c in self.clouds.values_mut() {
+            c.points = std::sync::Arc::new(c.points.iter().map(|x| (*x as f64 * k) as f32).collect());
+            c.version += 1;
+        }
+        Ok(())
+    }
+
     /// A face or edge and what it touches: with `all`, everything connected
     /// (through shared points, in the same group); else a face's own edges, or
     /// an edge's faces. Returns (faces, edges).

@@ -1,7 +1,7 @@
 // The 3D view. Draws the engine's scene with three.js and turns mouse and
 // keyboard input into engine commands. Z is up, units are meters.
 import { useEffect, useRef, useState } from "react";
-import { ask } from "./ask";
+import { ask, confirm } from "./ask";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
@@ -429,6 +429,8 @@ type Last =
   | { t: "move"; ids: number[]; by: THREE.Vector3; copy: boolean }
   | { t: "rotate"; ids: number[]; center: THREE.Vector3; n: THREE.Vector3; angle: number }
   | { t: "scale"; ids: number[]; center: THREE.Vector3; factor: number }
+  /** a Tape Measure reading (typing its real length then resizes the model) */
+  | { t: "tape"; d: number }
   | null;
 
 export default function Viewport(props: Props) {
@@ -1854,6 +1856,17 @@ export default function Viewport(props: Props) {
       }
       return;
     }
+    // Tape Measure, just measured: typing the real length resizes the model
+    if (!op && L.tool === "tape" && last?.t === "tape" && lens.length && lens[0] > 0) {
+      const k = lens[0] / last.d;
+      const scene = sceneNow();
+      const what = scene.editing != null ? "this component" : scene.activeGroup != null ? "this group" : "the model";
+      if (!(await confirm(`Resize ${what}?`, `It measured ${fmt(last.d)}; making that ${fmt(lens[0])} scales ${what} ×${k.toFixed(4)}.`, "Resize"))) return;
+      await run({ cmd: "resize", factor: k });
+      st.current.last = { t: "tape", d: lens[0] };
+      L.onToast(`Resized ${what} ×${k.toFixed(4)}`);
+      return;
+    }
     // plain numbers (angles, factors) or lengths with units (12', 8'6", 250cm)
     if (!nums.length && !lens.length) return;
 
@@ -2159,6 +2172,7 @@ export default function Viewport(props: Props) {
     if (op.along) await run({ cmd: "guide", point: arr(p), direction: arr(op.along) });
     else if (p.distanceTo(op.p0) > 1e-4) await run({ cmd: "guide", point: arr(p) });
     live.current.onMeasure("Length", fmt(p.distanceTo(op.p0)));
+    if (p.distanceTo(op.p0) > 1e-4) st.current.last = { t: "tape", d: p.distanceTo(op.p0) };
   }
 
   /** A see-through copy of the selection under a transform (move/rotate/scale preview). */

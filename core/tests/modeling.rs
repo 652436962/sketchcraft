@@ -2086,3 +2086,29 @@ fn select_connected_and_same_material() {
     let r = run(&mut e, json!({"cmd":"same_as","by":"material","material":m}));
     assert_eq!(r["faces"].as_array().unwrap().len(), 2, "{r}");
 }
+
+/// Tape Measure's resize: everything scales about the origin; with a group
+/// open, only that group, about its own corner.
+#[test]
+fn resize_model_and_open_group() {
+    let mut e = Engine::new();
+    let f = run(&mut e, json!({"cmd":"rect","from":[1,1,0],"to":[3,3,0]}))["face"].as_u64().unwrap();
+    run(&mut e, json!({"cmd":"pushpull","face":f,"distance":2,"toward":[0,0,1]}));
+    run(&mut e, json!({"cmd":"guide","point":[3,3,0]}));
+    run(&mut e, json!({"cmd":"dimension","from":[1,1,0],"to":[3,1,0],"offset":[0,-0.5,0]}));
+    run(&mut e, json!({"cmd":"resize","factor":1.5}));
+    let hi = e.model.vertices.values().map(|v| v.p).fold(DVec3::splat(-1e9), |a, p| a.max(p));
+    assert!((hi - DVec3::new(4.5, 4.5, 3.0)).length() < 1e-9, "{hi}");
+    assert!((e.model.guides[0].p - DVec3::new(4.5, 4.5, 0.0)).length() < 1e-9);
+    // a group, opened: only it grows, from its own corner
+    let g = run(&mut e, json!({"cmd":"begin_group","name":"Shed"}))["group"].as_u64().unwrap();
+    run(&mut e, json!({"cmd":"rect","from":[10,0,0],"to":[11,1,0]}));
+    run(&mut e, json!({"cmd":"resize","factor":2}));
+    run(&mut e, json!({"cmd":"end_group"}));
+    let shed: Vec<DVec3> = e.model.vertices.values().filter(|v| v.group == Some(g as u32)).map(|v| v.p).collect();
+    let (lo, hi) = shed.iter().fold((DVec3::splat(1e9), DVec3::splat(-1e9)), |(a, b), p| (a.min(*p), b.max(*p)));
+    assert!((lo - DVec3::new(10.0, 0.0, 0.0)).length() < 1e-9 && (hi - DVec3::new(12.0, 2.0, 0.0)).length() < 1e-9, "{lo} {hi}");
+    let big = e.model.vertices.values().filter(|v| v.group.is_none()).map(|v| v.p).fold(DVec3::splat(-1e9), |a, p| a.max(p));
+    assert!((big - DVec3::new(4.5, 4.5, 3.0)).length() < 1e-9, "the rest stays put");
+    assert!(e.exec_json(&json!({"cmd":"resize","factor":0}).to_string())["ok"] == false);
+}

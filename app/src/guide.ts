@@ -74,7 +74,7 @@ export function guide(tool: Tool, c: GuideCtx): Guide {
     case "scale":
       return busy ? g("Scale", "Move to resize, then click.", [["Type", "a factor (2 doubles it)"], ESC]) : g("Scale", c.selected ? "Click to start resizing the selection." : "Click something to resize it.", []);
     case "tape":
-      return busy ? g("Tape Measure", "Click to drop a guide here (or read the distance).", [TYPE, LOCK, ESC]) : g("Tape Measure", "Click a point or an edge to measure from.", []);
+      return busy ? g("Tape Measure", "Click to drop a guide here (or read the distance).", [TYPE, LOCK, ESC]) : g("Tape Measure", "Click a point or an edge to measure from.", [["After measuring", "type the real length to resize the model"]]);
     case "dimension":
       if (!busy) return g("Dimension", "Click the first point to measure from.", []);
       return c.stage === 1 ? g("Dimension", "Click the second point.", [LOCK, ESC]) : g("Dimension", "Pull the dimension out and click to place it.", [ESC]);

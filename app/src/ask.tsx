@@ -7,6 +7,8 @@ interface Ask {
   title: string;
   value: string;
   hint?: string;
+  /** a yes / no question: no text box, this on the OK button */
+  confirm?: string;
   done: (v: string | null) => void;
 }
 
@@ -17,6 +19,14 @@ export function ask(title: string, value = "", hint?: string): Promise<string | 
   return new Promise((done) => {
     if (show) show({ title, value, hint, done });
     else done(null);
+  });
+}
+
+/** Ask a yes / no question (`ok` labels the yes); true if confirmed. */
+export function confirm(title: string, hint: string, ok = "OK"): Promise<boolean> {
+  return new Promise((done) => {
+    if (show) show({ title, value: "", hint, confirm: ok, done: (v) => done(v != null) });
+    else done(false);
   });
 }
 
@@ -34,7 +44,14 @@ export function AskHost() {
     };
   }, []);
   useEffect(() => {
-    if (a) setTimeout(() => input.current?.select(), 0);
+    if (a && !a.confirm) setTimeout(() => input.current?.select(), 0);
+    if (!a?.confirm) return;
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Enter") (e.preventDefault(), a.done(""), setA(null));
+      if (e.key === "Escape") (a.done(null), setA(null));
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
   }, [a]);
   if (!a) return null;
   const finish = (v: string | null) => {
@@ -46,7 +63,7 @@ export function AskHost() {
       <div className="sheet ask" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={a.title}>
         <b>{a.title}</b>
         {a.hint && <p className="muted small">{a.hint}</p>}
-        <input
+        {!a.confirm && <input
           ref={input}
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -54,10 +71,10 @@ export function AskHost() {
             if (e.key === "Enter") finish(text);
             if (e.key === "Escape") finish(null);
           }}
-        />
+        />}
         <div className="row gap">
           <button className="btn small" onClick={() => finish(text)}>
-            OK
+            {a.confirm ?? "OK"}
           </button>
           <button className="btn small ghost" onClick={() => finish(null)}>
             Cancel
