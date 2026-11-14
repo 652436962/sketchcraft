@@ -192,7 +192,27 @@ pub enum Command {
     Text { at: [f64; 3], text: String, #[serde(default)] leader: Option<[f64; 3]> },
     /// Save a camera as a named view.
     /// `photo`: a picture seen from this camera (data:image URL), as Match Photo makes
-    SaveView { name: String, eye: [f64; 3], target: [f64; 3], #[serde(default = "fov")] fov: f64, #[serde(default)] photo: Option<String> },
+    /// Tag visibility and what's hidden are remembered with it; `style` (the
+    /// app's view style) and `section` ([origin, normal], or none) when given.
+    SaveView {
+        name: String,
+        eye: [f64; 3],
+        target: [f64; 3],
+        #[serde(default = "fov")]
+        fov: f64,
+        #[serde(default)]
+        photo: Option<String>,
+        #[serde(default)]
+        style: Option<serde_json::Value>,
+        #[serde(default)]
+        section: Option<[f64; 6]>,
+        /// true: the camera only (SketchUp's scene with its other properties unticked)
+        #[serde(default)]
+        camera_only: bool,
+    },
+    /// Go to a saved view's state: tags shown / hidden and what's hidden as
+    /// they were. Returns the view (camera, style, section) for the app.
+    ShowView { name: String },
     DeleteView { name: String },
     Undo,
     Redo,
@@ -1537,14 +1557,42 @@ impl Engine {
                 m.guides.clear();
                 json!({})
             }
-            Command::SaveView { name, eye, target, fov, photo } => {
+            Command::ShowView { name } => {
+                let v = m.views.iter().find(|v| v.name == name).cloned().ok_or_else(|| anyhow::anyhow!("no view {name}"))?;
+                if let Some(tags) = &v.tags {
+                    for (t, on) in tags {
+                        m.tags.insert(t.clone(), *on);
+                    }
+                }
+                if let Some(hidden) = &v.hidden {
+                    let h: std::collections::BTreeSet<Id> = hidden.iter().copied().collect();
+                    for (id, g) in m.groups.iter_mut() {
+                        g.hidden = h.contains(id);
+                    }
+                    for (id, i) in m.instances.iter_mut() {
+                        i.hidden = h.contains(id);
+                    }
+                    for (id, f) in m.faces.iter_mut() {
+                        f.hidden = h.contains(id);
+                    }
+                }
+                serde_json::to_value(&v)?
+            }
+            Command::SaveView { name, eye, target, fov, photo, style, section, camera_only } => {
                 if photo.as_deref().is_some_and(|p| !p.starts_with("data:image/")) {
                     bail!("photo must be a data:image/... URL");
                 }
                 // re-saving a matched photo's scene keeps its photo
                 let photo = photo.or_else(|| m.views.iter().find(|v| v.name == name).and_then(|v| v.photo.clone()));
                 m.views.retain(|v| v.name != name);
-                m.views.push(crate::model::View { name, eye, target, fov, photo });
+                let (tags, hidden) = if camera_only {
+                    (None, None)
+                } else {
+                    let hidden: Vec<Id> = m.groups.iter().filter(|(_, g)| g.hidden).map(|(k, _)| *k).chain(m.instances.iter().filter(|(_, i)| i.hidden).map(|(k, _)| *k)).chain(m.faces.iter().filter(|(_, f)| f.hidden).map(|(k, _)| *k)).collect();
+                    (Some(m.tags.clone()), Some(hidden))
+                };
+                let (style, section) = if camera_only { (None, None) } else { (style, section) };
+                m.views.push(crate::model::View { name, eye, target, fov, photo, style, tags, hidden, section });
                 json!({})
             }
             Command::MatchPhoto { name, width, height, red, green, origin, distance, photo } => {
@@ -1555,7 +1603,7 @@ impl Engine {
                     }
                 }
                 m.views.retain(|v| v.name != name);
-                m.views.push(crate::model::View { name: name.clone(), eye: cam.eye.to_array(), target: cam.target.to_array(), fov: cam.fov, photo });
+                m.views.push(crate::model::View { name: name.clone(), eye: cam.eye.to_array(), target: cam.target.to_array(), fov: cam.fov, photo, style: None, tags: None, hidden: None, section: None });
                 json!({"view": name, "eye": cam.eye.to_array(), "target": cam.target.to_array(), "fov": cam.fov})
             }
             Command::DeleteView { name } => {

@@ -149,6 +149,17 @@ pub struct View {
     /// Match Photo: the photo seen from this camera (data URL)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub photo: Option<String>,
+    /// What else the scene remembers (SketchUp's scene properties): the view
+    /// style (as the app keeps it), tag visibility, what was hidden, and the
+    /// section cut ([origin, normal]). None: not remembered, left as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<BTreeMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<Vec<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<[f64; 6]>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

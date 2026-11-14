@@ -107,6 +107,8 @@ export interface ViewportApi {
   camera: () => Cam;
   goTo: (c: Cam & { photo?: string }) => void;
   clearSection: () => void;
+  /** a section cut through `origin`, keeping the side `normal` points to */
+  setSection: (origin: Vec3, normal: Vec3) => void;
   /** the active section plane (a point on it and its normal), if any */
   sectionPlane: () => { origin: Vec3; normal: Vec3 } | null;
   previousView: () => void;
@@ -1965,6 +1967,11 @@ export default function Viewport(props: Props) {
     clearSection: () => {
       st.current.section = null;
       buildModel();
+    },
+    setSection: (origin: Vec3, normal: Vec3) => {
+      st.current.section = new THREE.Plane().setFromNormalAndCoplanarPoint(V(normal).normalize(), V(origin));
+      buildModel();
+      live.current.onSection(true);
     },
     sectionPlane: () => {
       const p = st.current.section;

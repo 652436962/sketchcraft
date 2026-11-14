@@ -7,7 +7,7 @@ import { ask } from "./ask";
 import { exec, type Reply, type Scene } from "./engine";
 import { contextItems, ENVIRONMENTS } from "./panels";
 import type { Sel } from "./selection";
-import type { Cam, ViewportApi } from "./Viewport";
+import type { ViewportApi } from "./Viewport";
 import type { WorkspaceId } from "./workspace";
 
 interface Props {
@@ -19,7 +19,17 @@ interface Props {
   api: React.MutableRefObject<ViewportApi | null>;
   section: boolean;
   setSection: (on: boolean) => void;
-  actions: { blueprint: () => void; sheets: () => void; location: () => void; render: () => void; animation: () => void };
+  actions: {
+    blueprint: () => void;
+    sheets: () => void;
+    location: () => void;
+    render: () => void;
+    animation: () => void;
+    /** go to a scene with everything it remembers */
+    showView: (v: { name: string; eye: [number, number, number]; target: [number, number, number]; fov: number; photo?: string | null }) => void;
+    /** the style and section to remember in a new scene */
+    sceneProps: () => Record<string, unknown>;
+  };
 }
 
 export function WorkspaceStrip(p: Props) {
@@ -140,7 +150,7 @@ function PrevizStrip({ scene, run, api, actions }: Props) {
           key={v.name}
           className={on === v.name ? "on" : ""}
           onClick={() => {
-            api.current?.goTo(v as Cam);
+            actions.showView(v);
             setOn(v.name);
           }}
         >
@@ -152,7 +162,7 @@ function PrevizStrip({ scene, run, api, actions }: Props) {
         onClick={async () => {
           const name = await ask("Name this scene", `Scene ${scene.views.length + 1}`);
           if (name && api.current) {
-            const r = await run({ cmd: "save_view", name, ...api.current.camera() });
+            const r = await run({ cmd: "save_view", name, ...api.current.camera(), ...actions.sceneProps() });
             if (r.ok) setOn(name);
           }
         }}

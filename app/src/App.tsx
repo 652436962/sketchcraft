@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ask, AskHost } from "./ask";
-import { exec, loadScene, sync, type Reply, type Scene } from "./engine";
+import { exec, loadScene, sync, type Reply, type Scene, type Vec3 } from "./engine";
 import { Icons, Logo } from "./icons";
 import { BuildTools, ContextMenu, contextItems, EntityInfo, Environments, Library, LocationDialog, Outliner, RenderDialog, Sandbox, SheetsDialog, ShortcutSheet, Templates, Textures, Views } from "./panels";
 import { EMPTY, isEmpty, selIds, type Sel } from "./selection";
@@ -186,6 +186,24 @@ export default function App() {
     }
   }, [styles.help]);
   const [section, setSection] = useState(false);
+  /** what a scene remembers besides the camera: the style and the section cut */
+  const sceneProps = () => {
+    const sp = api.current?.sectionPlane();
+    return { style: styles, section: sp ? [...sp.origin, ...sp.normal] : null };
+  };
+  /** go to a scene: its tags, hidden things, style and section cut, then its camera */
+  const showView = async (v: { name: string; eye: Vec3; target: Vec3; fov: number; photo?: string | null }) => {
+    const r = await run({ cmd: "show_view", name: v.name });
+    api.current?.goTo({ eye: v.eye, target: v.target, fov: v.fov, photo: v.photo ?? undefined });
+    if (!r.ok || r.style == null) return; // a camera-only scene
+    setStyles((s) => ({ ...s, ...(r.style as Partial<Styles>) }));
+    const sec = r.section as number[] | null | undefined;
+    if (sec && sec.length === 6) api.current?.setSection([sec[0], sec[1], sec[2]], [sec[3], sec[4], sec[5]]);
+    else {
+      api.current?.clearSection();
+      setSection(false);
+    }
+  };
   // skin and workspace, remembered between launches
   const [skin, setSkinState] = useState<Skin>(rememberedSkin);
   useEffect(() => applySkin(skin), [skin]);
@@ -786,7 +804,7 @@ export default function App() {
               </details>
             </>
           )}
-          {scene && tab === "views" && <Views scene={scene} run={run} camera={() => api.current!.camera()} goTo={(c) => api.current?.goTo(c)} onMatchPhoto={startMatch} onPhotoModel={() => setShowPhotoModel(true)} onRefImage={() => setShowRef(true)} />}
+          {scene && tab === "views" && <Views scene={scene} run={run} camera={() => ({ ...api.current!.camera(), ...sceneProps() })} goTo={(c) => showView(c as Parameters<typeof showView>[0])} onMatchPhoto={startMatch} onPhotoModel={() => setShowPhotoModel(true)} onRefImage={() => setShowRef(true)} />}
         </div>
       </aside>
 
@@ -934,7 +952,7 @@ export default function App() {
               setSection(on);
               setSectionTick((t) => t + 1);
             }}
-            actions={{ blueprint: file.blueprint, sheets: () => setShowSheets(true), location: () => setShowLocation(true), render: () => setShowRender(true), animation: () => setShowTimeline((v) => !v) }}
+            actions={{ blueprint: file.blueprint, sheets: () => setShowSheets(true), location: () => setShowLocation(true), render: () => setShowRender(true), animation: () => setShowTimeline((v) => !v), showView: (v) => showView(v), sceneProps }}
           />
         )}
         {scene && showTimeline && <TimelinePanel scene={scene} run={run} api={api} setTool={chooseTool} onToast={say} onClose={() => setShowTimeline(false)} />}

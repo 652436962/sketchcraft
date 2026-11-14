@@ -1280,7 +1280,7 @@ fn photos_solve_corners_and_camera_distances_together() {
     let truth = [("North-east", DVec3::new(14.0, 12.0, 4.0)), ("South", DVec3::new(3.0, -15.0, 2.0)), ("West", DVec3::new(-12.0, 6.0, 6.0))];
     let mut e = Engine::new();
     let target = DVec3::new(3.0, 2.0, 1.5);
-    let views: Vec<View> = truth.iter().map(|(n, eye)| View { name: n.to_string(), eye: eye.to_array(), target: target.to_array(), fov: 45.0, photo: Some("data:image/png;base64,AA==".into()) }).collect();
+    let views: Vec<View> = truth.iter().map(|(n, eye)| View { name: n.to_string(), eye: eye.to_array(), target: target.to_array(), fov: 45.0, photo: Some("data:image/png;base64,AA==".into()), style: None, tags: None, hidden: None, section: None }).collect();
     // marks where the true corners appear in each photo
     let points: Vec<PhotoPoint> = corners
         .iter()
@@ -2111,4 +2111,38 @@ fn resize_model_and_open_group() {
     let big = e.model.vertices.values().filter(|v| v.group.is_none()).map(|v| v.p).fold(DVec3::splat(-1e9), |a, p| a.max(p));
     assert!((big - DVec3::new(4.5, 4.5, 3.0)).length() < 1e-9, "the rest stays put");
     assert!(e.exec_json(&json!({"cmd":"resize","factor":0}).to_string())["ok"] == false);
+}
+
+/// Scenes remember tag visibility, hidden things, the style and the section
+/// cut; a camera-only scene leaves them alone.
+#[test]
+fn scenes_remember_tags_hidden_style_and_section() {
+    let mut e = Engine::new();
+    let g = run(&mut e, json!({"cmd":"begin_group","name":"Roof"}))["group"].as_u64().unwrap();
+    run(&mut e, json!({"cmd":"rect","from":[0,0,3],"to":[1,1,3]}));
+    run(&mut e, json!({"cmd":"end_group"}));
+    run(&mut e, json!({"cmd":"tag","ids":[g],"tag":"Roofs"}));
+    let cam = json!({"eye":[5,-5,5],"target":[0,0,0],"fov":40});
+    let mut v = cam.clone();
+    v["cmd"] = json!("save_view");
+    v["name"] = json!("Plan");
+    v["style"] = json!({"xray": true, "face": "hiddenline"});
+    v["section"] = json!([0, 0, 1.2, 0, 0, -1]);
+    run(&mut e, v.clone());
+    v["name"] = json!("Just a camera");
+    v["camera_only"] = json!(true);
+    run(&mut e, v);
+    // change things, then go back to the scene
+    run(&mut e, json!({"cmd":"tag_visible","tag":"Roofs","visible":false}));
+    run(&mut e, json!({"cmd":"hide","ids":[g]}));
+    let r = run(&mut e, json!({"cmd":"show_view","name":"Plan"}));
+    assert_eq!(e.model.tags["Roofs"], true);
+    assert!(!e.model.groups[&(g as u32)].hidden);
+    assert_eq!(r["style"]["face"], "hiddenline");
+    assert_eq!(r["section"], json!([0.0, 0.0, 1.2, 0.0, 0.0, -1.0]));
+    // a camera-only scene changes nothing else
+    run(&mut e, json!({"cmd":"hide","ids":[g]}));
+    let r = run(&mut e, json!({"cmd":"show_view","name":"Just a camera"}));
+    assert!(e.model.groups[&(g as u32)].hidden);
+    assert!(r["style"].is_null());
 }
