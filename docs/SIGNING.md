@@ -50,8 +50,9 @@ gh secret set TAURI_SIGNING_PRIVATE_KEY -R jasonsutter87/sketchcraft < ~/.tauri/
 copies can't verify anything newer, and everyone has to download one new
 version by hand. Never commit it.
 
-Copies that can't replace themselves (Linux `.deb` and `.rpm`, or a failed
-download) show a card with the download page instead.
+Every installer type updates itself (macOS app, Windows `.msi` and setup
+`.exe`, Linux `.AppImage`, `.deb` and `.rpm`; Linux packages ask for an admin
+password). If an install fails, the card offers the download page instead.
 
 ## Windows
 
