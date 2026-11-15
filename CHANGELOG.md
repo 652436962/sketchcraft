@@ -6,6 +6,8 @@ What changed in each SketchCraft release, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-15
+
 ### Added
 - **Center and Origin snapping.** Drawing, Move and Tape Measure now snap to the
   center of any arc or circle (a green ring, "Center") and to the model's origin
@@ -95,7 +97,8 @@ The first build with installers (never published as a release).
   import and export, and PNG renders with dimensions and labels.
 - Installers for macOS, Windows and Linux, and the CLI for each.
 
-[Unreleased]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jasonsutter87/sketchcraft/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jasonsutter87/sketchcraft/releases/tag/v0.2.0
