@@ -134,7 +134,7 @@ This repo's `.mcp.json` sets it up for Claude Code.
 
 ## Status
 
-Young and moving fast. Next up: photo match (line a photo up with the model),
+Young and moving fast. What changed in each release is in [CHANGELOG.md](CHANGELOG.md). Next up: photo match (line a photo up with the model),
 textures in exports, solid tools
 (union/subtract), intersect faces, and parallel / perpendicular inference.
 

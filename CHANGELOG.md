@@ -1,0 +1,95 @@
+# Changelog
+
+What changed in each SketchCraft release, newest first. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
+[Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+### Added
+- **Center and Origin snapping.** Drawing, Move and Tape Measure now snap to the
+  center of any arc or circle (a green ring, "Center") and to the model's origin
+  (a yellow square, "Origin"), so you can move an object from a circle's center
+  or put it back at the origin. Thanks to Common User on the ArtCraft Discord
+  for the report.
+
+### Fixed
+- **Windows: DWG and IFC helpers are found.** SketchCraft now finds
+  `dwg2dxf.exe` and the ODA File Converter in its versioned
+  `Program Files\ODA` folder, and finds Python for IFC as `python.exe`, `py` or
+  `%LOCALAPPDATA%\SketchCraft\ifc`. Opening an IFC file without IfcOpenShell
+  shows Windows setup steps.
+- The README banner and brand images are in the repository (an ignore rule had
+  kept them out).
+
+## [0.3.1] - 2026-11-15
+
+### Fixed
+- **macOS:** the whole app is signed (ad hoc, with the hardened runtime), so a
+  downloaded copy no longer looks "damaged". macOS still asks the first time,
+  since it isn't notarized yet: **System Settings › Privacy & Security › Open
+  Anyway**.
+- The release workflow signs and notarizes with a Developer ID once the Apple
+  secrets are set (see [docs/SIGNING.md](docs/SIGNING.md)).
+
+## [0.3.0] - 2026-11-15
+
+Open the files architects send you, and draw like SketchUp.
+
+### Added
+- **Files**
+  - AutoCAD DWG, open and save (with LibreDWG or the free ODA File Converter
+    installed). DXF brings in text, dimensions, splines, ellipses and hatches.
+  - IFC, so Revit and ArchiCAD models open (with IfcOpenShell installed). Each
+    element becomes a group, typed and tagged by storey.
+  - Point clouds: PLY, LAS, XYZ and PTS scans, in color. Drawing tools snap to
+    scan points.
+- **Floor plans to 3D:** right-click an imported floor plan and choose
+  **Raise walls** to pull its walls up, with window openings (sill and head).
+  Imports land on the drawing, not the sheet border around it.
+- **Drawing and selecting**
+  - Arc from its center, 3-Point Arc, Pie, Rotated Rectangle and Freehand.
+  - Double-click a face for it and its edges; triple-click for everything
+    connected.
+  - Doors and windows cut their opening in the wall they're placed on, through
+    thick walls.
+  - The Axes tool. Tape Measure rescales the model.
+  - Shift+S searches every command. The outliner has search. Hide Rest of
+    Model, Paste in Place.
+- **Scenes and looks**
+  - Scenes remember their style, tags, hidden things and section cut. Named
+    section planes.
+  - Physically based finishes (Matte, Satin, Gloss, Metal, Glass, Glow) in
+    renders, glTF and a new view style.
+  - Dynamic Components: position, rotation and Component Options.
+  - Bundled Bricolage Grotesque and IBM Plex Mono.
+
+### Changed
+- IFC export validated with IfcOpenShell.
+
+### Security
+- The dev bridge refuses other websites and DNS rebinding; a strict content
+  security policy; importers fuzzed (no crashes in 20,000-file runs);
+  dependencies updated (`cargo audit`: no vulnerabilities). See
+  [docs/SECURITY.md](docs/SECURITY.md).
+
+## [0.2.0] - 2026-11-13
+
+The first build with installers (never published as a release).
+
+### Added
+- The engine: welded vertices, edges and faces with holes, push/pull, face
+  splitting, groups, components, tags, guides, soft edges and saved views, all
+  driven by JSON commands with undo and redo.
+- The desktop app (Tauri and React): SketchUp-style tools and shortcuts, an
+  outliner, entity info, a measurement box, dimensions and text, and templates.
+- An MCP server (`sketchcraft mcp`) and CLI that edit the same live model as
+  the app.
+- An asset library (doors, windows, trees, cars, streetlights and more), OBJ
+  import and export, and PNG renders with dimensions and labels.
+- Installers for macOS, Windows and Linux, and the CLI for each.
+
+[Unreleased]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/jasonsutter87/sketchcraft/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/jasonsutter87/sketchcraft/releases/tag/v0.2.0
