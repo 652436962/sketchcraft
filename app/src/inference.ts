@@ -1,5 +1,5 @@
 // Inference ("snapping") engine: figures out what the cursor means in 3D.
-// Priority: endpoint > midpoint > guide point > axis from the last point >
+// Priority: endpoint > center / origin > midpoint > guide point > axis from the last point >
 // on an edge / guide > on a face > on the ground (or the drawing plane).
 import * as THREE from "three";
 import type { FaceInfo, Scene } from "./engine";
@@ -10,7 +10,7 @@ export interface Snap {
   p: THREE.Vector3;
   /** a hovered point this one lines up with (draw a dotted line from it) */
   from?: THREE.Vector3;
-  kind: "endpoint" | "midpoint" | "guide-point" | "scan-point" | "axis" | "on-edge" | "on-guide" | "face" | "ground" | "plane";
+  kind: "endpoint" | "center" | "origin" | "midpoint" | "guide-point" | "scan-point" | "axis" | "on-edge" | "on-guide" | "face" | "ground" | "plane";
   label: string;
   axis?: Axis;
   /** direction of the edge or guide we're on */
@@ -42,6 +42,45 @@ export function setDrawingAxes(x: THREE.Vector3, y: THREE.Vector3) {
   AXES[0].copy(x).normalize();
   AXES[1].copy(y).normalize();
   AXES[2].copy(AXES[0]).cross(AXES[1]).normalize();
+}
+
+/** Centers of the model's arcs and circles: the edges of one curve share an id, and
+ * a curve whose points all sit at one distance from a center is round. Cached per scene. */
+const centersOf = new WeakMap<Scene, THREE.Vector3[]>();
+export function curveCenters(s: Scene): THREE.Vector3[] {
+  const hit = centersOf.get(s);
+  if (hit) return hit;
+  const byCurve = new Map<number, THREE.Vector3[]>();
+  for (const e of s.edgeList ?? []) {
+    if (e.curve == null) continue;
+    const pts = byCurve.get(e.curve) ?? [];
+    for (const q of [e.a, e.b]) {
+      const v = V(q);
+      if (!pts.some((p) => p.distanceToSquared(v) < 1e-12)) pts.push(v);
+    }
+    byCurve.set(e.curve, pts);
+  }
+  const out: THREE.Vector3[] = [];
+  for (const pts of byCurve.values()) {
+    if (pts.length < 3) continue;
+    const c = circumcenter(pts[0], pts[Math.floor(pts.length / 3)], pts[Math.floor((2 * pts.length) / 3)]);
+    if (!c) continue;
+    const r = c.distanceTo(pts[0]);
+    if (r < 1e-6 || pts.some((p) => Math.abs(p.distanceTo(c) - r) > r * 0.01 + 1e-6)) continue;
+    if (!out.some((o) => o.distanceToSquared(c) < 1e-12)) out.push(c);
+  }
+  centersOf.set(s, out);
+  return out;
+}
+
+/** The center of the circle through three points (null if they're in a line). */
+export function circumcenter(a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3): THREE.Vector3 | null {
+  const ab = b.clone().sub(a), ac = c.clone().sub(a);
+  const n = ab.clone().cross(ac);
+  const nn = n.lengthSq();
+  if (nn < 1e-18) return null;
+  const t = n.clone().cross(ab).multiplyScalar(ac.lengthSq()).add(ac.clone().cross(n).multiplyScalar(ab.lengthSq())).divideScalar(2 * nn);
+  return a.clone().add(t);
 }
 
 export interface Pick {
@@ -126,6 +165,9 @@ export function infer(env: InferEnv, e: { clientX: number; clientY: number }, op
     consider(a, "endpoint", "Endpoint", 12);
     consider(b, "endpoint", "Endpoint", 12);
   }
+  // the centers of arcs and circles, and the model's origin
+  if (!best) for (const c of curveCenters(s)) consider(c, "center", "Center", 12);
+  if (!best) consider(s.axes ? V(s.axes[0]) : new THREE.Vector3(), "origin", "Origin", 12);
   if (!best) {
     for (let i = 0; i < segs.length; i += 6) {
       const a = new THREE.Vector3(segs[i], segs[i + 1], segs[i + 2]);
@@ -144,7 +186,7 @@ export function infer(env: InferEnv, e: { clientX: number; clientY: number }, op
   if (!best) for (const g of s.guides) if (!g.dir) consider(V(g.p), "guide-point", "Guide Point", 10);
   if (best) {
     const b = best as { p: THREE.Vector3; kind: Snap["kind"]; label: string };
-    if (b.kind === "endpoint" || b.kind === "midpoint") remember(b.p);
+    if (b.kind === "endpoint" || b.kind === "midpoint" || b.kind === "center" || b.kind === "origin") remember(b.p);
     return { p: b.p.clone(), kind: b.kind, label: b.label, normal: planeN.clone(), face: hit?.face ?? undefined };
   }
 

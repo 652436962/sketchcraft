@@ -528,7 +528,7 @@ export default function Viewport(props: Props) {
   }>({ press: null, labels: [], liveLabels: [], labelEls: new Map(), op: null, last: null, lock: null, hover: null, hoverEdge: null, snap: null, shiftLock: false, zoomY: null, space: false, spaceUsed: false, fitted: false, fitNext: false, section: null, segs: { circle: 24, polygon: 6 }, rightDown: null, selOverride: null });
 
   // dev builds: inspect the tool state from the console (window.__sketchcraft)
-  if (import.meta.env.DEV) (window as unknown as { __sketchcraft: unknown }).__sketchcraft = st;
+  if (import.meta.env.DEV) Object.assign(window as unknown as Record<string, unknown>, { __sketchcraft: st, __sketchcraftView: t });
 
   // ---------------------------------------------------------------- setup
   useEffect(() => {

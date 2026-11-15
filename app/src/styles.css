@@ -812,6 +812,23 @@ button.tile:hover .tile-art {
   border-color: #3e63dd;
 }
 
+/* the center of an arc or circle: a ring with a dot */
+.snap-dot.center {
+  background: #30a46c;
+  border: 2.5px solid #fff;
+  box-shadow: 0 0 0 1.5px #30a46c;
+  width: 11px;
+  height: 11px;
+}
+
+/* the model's origin: a yellow square, where the three axes meet */
+.snap-dot.origin {
+  background: #f5c400;
+  border-color: #1d1e24;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1.5px #fff;
+}
+
 .select-box {
   position: absolute;
   pointer-events: none;
