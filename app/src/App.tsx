@@ -706,6 +706,7 @@ export default function App() {
       { label: "Skins…", hint: "How SketchCraft looks", run: () => setShowSkins(true) },
       { label: "Keyboard shortcuts", hint: "Help", key: "?", run: () => setShowKeys(true) },
       ...(inTauri ? [{ label: "Check for updates…", hint: "Help", run: checkForUpdatesNow }] : []),
+      { label: "About SketchCraft", hint: `Version ${__APP_VERSION__}`, run: () => say(`SketchCraft ${__APP_VERSION__}`) },
       { label: "Zoom extents", hint: "Camera", key: "⇧Z", run: () => api.current?.fit() },
       ...(["iso", "top", "front", "right", "back", "left"] as const).map((v) => ({ label: `${v[0].toUpperCase()}${v.slice(1)} view`, hint: "Camera", run: () => api.current?.view(v) })),
       { label: "Undo", hint: "Edit", key: "⌘Z", run: () => void run({ cmd: "undo" }) },
@@ -814,6 +815,9 @@ export default function App() {
                     Keyboard shortcuts <kbd>?</kbd>
                   </button>
                   {inTauri && <button onClick={checkForUpdatesNow}>Check for updates…</button>}
+                  <div className="menu-version" title="The version of SketchCraft you're running">
+                    SketchCraft {__APP_VERSION__}
+                  </div>
                 </div>
               </>
             )}

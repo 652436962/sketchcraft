@@ -12,6 +12,10 @@ What changed in each SketchCraft release, newest first. The format follows
   right-click menu opens upward or leftward near an edge instead of running
   off the screen.
 
+### Added
+- **See your version.** The bottom of the File menu shows which SketchCraft
+  you're running, and **About SketchCraft** in Shift+S says it too.
+
 ## [0.3.3] - 2026-11-15
 
 ### Added

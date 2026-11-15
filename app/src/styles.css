@@ -2897,3 +2897,10 @@ details.panel-fold {
 .file-menu .submenu button {
   padding: 6px 10px;
 }
+
+.menu-version {
+  padding: 6px 10px 3px;
+  color: var(--faint);
+  font-size: 11.5px;
+  user-select: text;
+}
