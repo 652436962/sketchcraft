@@ -2,6 +2,7 @@
 // keyboard input into engine commands. Z is up, units are meters.
 import { useEffect, useRef, useState } from "react";
 import { ask, confirm } from "./ask";
+import { AxisGizmo } from "./gizmo";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
@@ -501,6 +502,8 @@ export default function Viewport(props: Props) {
   /** the tool's icon riding along with the cursor */
   const badge = useRef<HTMLDivElement>(null);
   const backdropOn = useRef(false);
+  // the axis gizmo reads the live camera every frame (a stable function)
+  const gizmoCamera = useRef(() => t.current?.camera ?? null).current;
   const st = useRef<{
     op: Op | null;
     last: Last;
@@ -1662,6 +1665,36 @@ export default function Viewport(props: Props) {
     T.persp.position.copy(T.controls.target.clone().addScaledVector(d, dist));
     T.persp.lookAt(T.controls.target);
     fit();
+  }
+
+  /** Orbit around the target by a drag of (dx, dy) pixels (the axis gizmo). */
+  function orbitBy(dx: number, dy: number) {
+    const T = t.current;
+    if (!T) return;
+    const target = T.controls.target;
+    const off = T.camera.position.clone().sub(target);
+    const r = off.length();
+    if (r < 1e-9) return;
+    let theta = Math.atan2(off.y, off.x) - dx * 0.009;
+    let phi = Math.acos(THREE.MathUtils.clamp(off.z / r, -1, 1)) - dy * 0.009;
+    phi = THREE.MathUtils.clamp(phi, 0.001, Math.PI - 0.001);
+    off.set(r * Math.sin(phi) * Math.cos(theta), r * Math.sin(phi) * Math.sin(theta), r * Math.cos(phi));
+    T.camera.position.copy(target).add(off);
+    if (T.camera === T.ortho) T.persp.position.copy(T.camera.position);
+    T.camera.lookAt(target);
+    T.controls.update();
+  }
+
+  /** Look at the model along an axis: from +z is the top view, -y the front. */
+  function lookAlong(dir: [number, number, number]) {
+    const T = t.current;
+    if (!T) return;
+    if (backdropOn.current) showBackdrop(null);
+    rememberView();
+    // straight up or down: a hair off, so "up" on screen stays well defined
+    const d = Math.abs(dir[2]) > 0.99 ? new THREE.Vector3(0, -0.001, dir[2]).normalize() : V(dir);
+    const dist = T.camera.position.distanceTo(T.controls.target);
+    goTo({ eye: arr(T.controls.target.clone().addScaledVector(d, dist)), target: arr(T.controls.target), fov: T.persp.fov });
   }
 
   function camera(): Cam {
@@ -3349,6 +3382,15 @@ export default function Viewport(props: Props) {
   return (
     <div className="viewport" ref={host} style={{ cursor }}>
       {backdrop && <img className="backdrop" src={backdrop} alt="" />}
+      <AxisGizmo
+        camera={gizmoCamera}
+        onOrbit={orbitBy}
+        onLook={lookAlong}
+        onDrag={(on) => {
+          if (on && backdropOn.current) showBackdrop(null);
+          rememberView();
+        }}
+      />
       {coach && coach.step && !cageUi && props.styles.help !== false && (
         <div className="coach" aria-live="polite">
           <div className="coach-head">

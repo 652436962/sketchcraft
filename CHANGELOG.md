@@ -15,6 +15,10 @@ What changed in each SketchCraft release, newest first. The format follows
   and Background) stay inside it and line up, instead of running off the edge.
 
 ### Added
+- **Axis gizmo.** The red, green and blue axes sit in the model's top-right
+  corner and turn with the view. Drag it to orbit; click an axis to look along
+  it (Z for the top view, the hollow −Y for the front), and click the axis
+  facing you again to look from the other side.
 - **See your version.** The bottom of the File menu shows which SketchCraft
   you're running, and **About SketchCraft** in Shift+S says it too.
 
