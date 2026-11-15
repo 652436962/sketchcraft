@@ -19,10 +19,16 @@ const SCRIPT: &str = include_str!("ifc_mesh.py");
 
 /// Where SketchCraft keeps its own Python for IFC (made by the setup steps).
 fn own_python() -> Option<PathBuf> {
+    if cfg!(windows) {
+        return std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("SketchCraft\\ifc\\Scripts\\python.exe"));
+    }
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/SketchCraft/ifc/bin/python3"))
 }
 
+#[cfg(not(windows))]
 pub const HELP: &str = "Opening IFC needs IfcOpenShell (free, open source). Once, in Terminal:\n  python3 -m venv ~/Library/Application\\ Support/SketchCraft/ifc\n  ~/Library/Application\\ Support/SketchCraft/ifc/bin/pip install ifcopenshell\nthen try again. (Or set SKETCHCRAFT_PYTHON to a Python that has it.)";
+#[cfg(windows)]
+pub const HELP: &str = "Opening IFC needs IfcOpenShell (free, open source). Once, in a Command Prompt (with Python from python.org):\n  py -m venv %LOCALAPPDATA%\\SketchCraft\\ifc\n  %LOCALAPPDATA%\\SketchCraft\\ifc\\Scripts\\pip install ifcopenshell\nthen try again. (Or set SKETCHCRAFT_PYTHON to a python.exe that has it.)";
 
 /// A Python that can `import ifcopenshell`, if there is one.
 pub fn python() -> Option<PathBuf> {
@@ -32,7 +38,8 @@ pub fn python() -> Option<PathBuf> {
     }
     cands.extend(own_python());
     let path = std::env::var("PATH").unwrap_or_default();
-    cands.extend(std::env::split_paths(&path).map(|d| d.join("python3")));
+    let names: &[&str] = if cfg!(windows) { &["python.exe", "python3.exe", "py.exe"] } else { &["python3"] };
+    cands.extend(std::env::split_paths(&path).flat_map(|d| names.iter().map(move |n| d.join(n)).collect::<Vec<_>>()));
     cands.extend(["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"].map(PathBuf::from));
     cands.into_iter().filter(|p| p.is_file()).find(|p| {
         Command::new(p).args(["-I", "-c", "import ifcopenshell.geom"]).output().map(|o| o.status.success()).unwrap_or(false)

@@ -12,11 +12,35 @@ const HELP: &str = "Opening and saving DWG needs a converter: install LibreDWG (
 
 fn find(name: &str) -> Option<PathBuf> {
     let dirs = std::env::var("PATH").unwrap_or_default();
-    std::env::split_paths(&dirs).chain(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].map(PathBuf::from)).map(|d| d.join(name)).find(|p| p.is_file())
+    // on Windows programs end in .exe
+    let names: Vec<String> = if cfg!(windows) { vec![format!("{name}.exe"), name.to_string()] } else { vec![name.to_string()] };
+    std::env::split_paths(&dirs)
+        .chain(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].map(PathBuf::from))
+        .flat_map(|d| names.iter().map(move |n| d.join(n)).collect::<Vec<_>>())
+        .find(|p| p.is_file())
 }
 
 fn oda() -> Option<PathBuf> {
-    ["/Applications/ODAFileConverter.app/Contents/MacOS/ODAFileConverter", "/usr/bin/ODAFileConverter", "/usr/local/bin/ODAFileConverter"].iter().map(PathBuf::from).find(|p| p.is_file()).or_else(|| find("ODAFileConverter"))
+    let fixed = ["/Applications/ODAFileConverter.app/Contents/MacOS/ODAFileConverter", "/usr/bin/ODAFileConverter", "/usr/local/bin/ODAFileConverter"].iter().map(PathBuf::from).find(|p| p.is_file());
+    fixed.or_else(|| find("ODAFileConverter")).or_else(oda_windows)
+}
+
+/// The ODA File Converter on Windows installs to a versioned folder:
+/// C:\Program Files\ODA\ODAFileConverter 25.12.0\ODAFileConverter.exe
+fn oda_windows() -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let roots = ["ProgramFiles", "ProgramFiles(x86)"].iter().filter_map(|v| std::env::var_os(v)).map(|p| PathBuf::from(p).join("ODA"));
+    let mut found: Vec<PathBuf> = roots
+        .filter_map(|r| std::fs::read_dir(r).ok())
+        .flatten()
+        .flatten()
+        .map(|e| e.path().join("ODAFileConverter.exe"))
+        .filter(|p| p.is_file())
+        .collect();
+    found.sort(); // the newest version sorts last
+    found.pop()
 }
 
 /// Which converter is available (for the app to say so).
