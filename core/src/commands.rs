@@ -647,6 +647,21 @@ pub enum Command {
         denoise: bool,
         #[serde(default = "pt_exposure")]
         exposure: f32,
+        /// how bright the sky's light is (1 = normal, 0 = sun only)
+        #[serde(default = "pt_exposure")]
+        sky_strength: f32,
+        /// a plain backdrop instead of the sky, as "#rrggbb" (the sky still lights the model)
+        #[serde(default)]
+        background: Option<String>,
+        /// the ground plane under the model (false: the model floats)
+        #[serde(default = "yes")]
+        ground: bool,
+        /// the ground's color, "#rrggbb"
+        #[serde(default)]
+        ground_color: Option<String>,
+        /// the sun's color: -1 cool .. 0 daylight .. 1 warm (golden hour)
+        #[serde(default)]
+        warmth: f32,
         #[serde(flatten)]
         opts: RenderOpts,
     },
@@ -1036,6 +1051,16 @@ fn one() -> f64 {
 
 fn y_up() -> String {
     "y".into()
+}
+
+/// "#rrggbb" (or "rrggbb") to sRGB 0..1.
+fn hex_rgb(s: &str) -> Result<[f32; 3]> {
+    let h = s.trim().trim_start_matches('#');
+    if h.len() != 6 || !h.chars().all(|c| c.is_ascii_hexdigit()) {
+        bail!("a color is written #rrggbb, like #ffffff (got {s:?})");
+    }
+    let v = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).map(|x| x as f32 / 255.0);
+    Ok([v(0)?, v(2)?, v(4)?])
 }
 
 fn yes() -> bool {
@@ -1716,7 +1741,7 @@ impl Engine {
                 self.undo.push(std::mem::replace(&mut self.model, next));
                 json!({})
             }
-            Command::Photoreal { out, samples, bounces, mut sun_azimuth, mut sun_altitude, sun_strength, denoise, exposure, date, time, utc_offset, progressive, opts } => {
+            Command::Photoreal { out, samples, bounces, mut sun_azimuth, mut sun_altitude, sun_strength, denoise, exposure, sky_strength, background, ground, ground_color, warmth, date, time, utc_offset, progressive, opts } => {
                 let model = &self.model;
                 let mut sun_note = None;
                 if date.is_some() || time.is_some() {
@@ -1747,13 +1772,18 @@ impl Engine {
                     ),
                     sun_strength,
                     denoise,
-                    exposure,
+                    exposure: exposure.clamp(0.01, 64.0),
+                    sky_strength: sky_strength.clamp(0.0, 10.0),
+                    background: background.as_deref().map(hex_rgb).transpose()?,
+                    ground,
+                    ground_color: ground_color.as_deref().map(hex_rgb).transpose()?,
+                    warmth: warmth.clamp(-1.0, 1.0),
                 };
                 let t0 = std::time::Instant::now();
                 let mut spp = po.samples;
                 let img = if progressive {
                     // same picture as last time? keep adding to it
-                    let key = format!("{}|{:?}|{:?}|{}|{}|{}|{}|{}", self.revision, po.camera.eye, po.camera.target, po.camera.fov, po.width, po.height, po.sun, po.bounces) + &format!("|{}|{}", po.sun_strength, po.exposure);
+                    let key = format!("{}|{:?}|{:?}|{}|{}|{}|{}|{}", self.revision, po.camera.eye, po.camera.target, po.camera.fov, po.width, po.height, po.sun, po.bounces) + &format!("|{}|{}|{}|{:?}|{}|{:?}|{}", po.sun_strength, po.exposure, po.sky_strength, po.background, po.ground, po.ground_color, po.warmth);
                     let (p, img) = crate::pt::progressive(self.pt.take(), key, model, &po);
                     spp = p.spp;
                     self.pt = Some(p);

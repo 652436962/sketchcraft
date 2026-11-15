@@ -306,6 +306,42 @@ pub struct PtOpts {
     pub sun_strength: f32,
     pub denoise: bool,
     pub exposure: f32,
+    /// how bright the sky's light is (1 = normal)
+    pub sky_strength: f32,
+    /// a plain backdrop color (sRGB 0..1) where the camera sees sky; the sky
+    /// still lights the model
+    pub background: Option<[f32; 3]>,
+    /// the ground plane under the model (off: the model floats)
+    pub ground: bool,
+    /// the ground's color (sRGB 0..1)
+    pub ground_color: Option<[f32; 3]>,
+    /// the sun's color: -1 cool (overcast blue) .. 0 daylight .. 1 warm (golden hour)
+    pub warmth: f32,
+}
+
+impl Default for PtOpts {
+    fn default() -> Self {
+        PtOpts {
+            width: 960,
+            height: 600,
+            samples: 32,
+            bounces: 6,
+            camera: CameraSpec { eye: [10.0, -10.0, 8.0], target: [0.0, 0.0, 0.0], fov: 40.0 },
+            sun: DVec3::new(0.4, -0.6, 0.7),
+            sun_strength: 2.4,
+            denoise: true,
+            exposure: 1.0,
+            sky_strength: 1.0,
+            background: None,
+            ground: true,
+            ground_color: None,
+            warmth: 0.0,
+        }
+    }
+}
+
+fn linear(c: [f32; 3]) -> Vec3 {
+    Vec3::new(c[0].clamp(0.0, 1.0).powf(2.2), c[1].clamp(0.0, 1.0).powf(2.2), c[2].clamp(0.0, 1.0).powf(2.2))
 }
 
 struct Scene {
@@ -317,6 +353,10 @@ struct Scene {
     ground_z: f32,
     sun: Vec3,
     sun_strength: f32,
+    sun_color: Vec3,
+    sky_strength: f32,
+    ground: bool,
+    ground_color: Vec3,
 }
 
 const DEFAULT: [f32; 3] = [0.95, 0.94, 0.91];
@@ -403,6 +443,13 @@ fn build_scene(m: &Model, o: &PtOpts) -> Scene {
         ground_z: if zmin.is_finite() { zmin } else { 0.0 },
         sun: o.sun.as_vec3().normalize(),
         sun_strength: o.sun_strength,
+        sun_color: {
+            let w = o.warmth.clamp(-1.0, 1.0);
+            if w >= 0.0 { SUN_COLOR.lerp(Vec3::new(1.0, 0.72, 0.45), w) } else { SUN_COLOR.lerp(Vec3::new(0.80, 0.88, 1.0), -w) }
+        },
+        sky_strength: o.sky_strength.max(0.0),
+        ground: o.ground,
+        ground_color: o.ground_color.map(linear).unwrap_or(Vec3::new(0.30, 0.30, 0.27)),
     }
 }
 
@@ -497,18 +544,20 @@ impl Scene {
         through
     }
 
-    /// One path: returns radiance, plus the first hit's albedo and normal.
-    fn trace(&self, mut o: Vec3, mut d: Vec3, bounces: u32, r: &mut Rng) -> (Vec3, Vec3, Vec3) {
+    /// One path: returns radiance, the first hit's albedo and normal, and
+    /// whether the camera ray saw the sky (missed everything).
+    fn trace(&self, mut o: Vec3, mut d: Vec3, bounces: u32, r: &mut Rng) -> (Vec3, Vec3, Vec3, bool) {
         let mut l = Vec3::ZERO;
         let mut beta = Vec3::ONE;
         let (mut first_albedo, mut first_n) = (Vec3::ZERO, Vec3::ZERO);
         let mut specular = true; // camera and mirror-like bounces see the sun disk
         let sun = self.sun;
-        let sun_e = SUN_COLOR * self.sun_strength;
+        let sun_e = self.sun_color * self.sun_strength;
+        let mut missed = false;
         for depth in 0..bounces.max(1) {
             // the model, or the ground plane under it
             let hit = self.bvh.hit(o, d, 1e30);
-            let tg = if d.z < -1e-6 && !self.studio { (self.ground_z - o.z) / d.z } else { f32::MAX };
+            let tg = if d.z < -1e-6 && !self.studio && self.ground { (self.ground_z - o.z) / d.z } else { f32::MAX };
             let (t, n, kind, albedo, rough) = match hit {
                 Some((t, ti)) if t < tg => {
                     let tr = &self.bvh.tris[ti];
@@ -520,14 +569,16 @@ impl Scene {
                     }
                     (t, n, k, c, rr)
                 }
-                _ if tg > 1e-4 && tg < f32::MAX => (tg, Vec3::Z, Kind::Paint, Vec3::new(0.30, 0.30, 0.27), 0.9),
+                _ if tg > 1e-4 && tg < f32::MAX => (tg, Vec3::Z, Kind::Paint, self.ground_color, 0.9),
                 _ if self.studio => {
                     // a dim, neutral room around the set
                     l += beta * Vec3::splat(0.035);
+                    missed = depth == 0;
                     break;
                 }
                 _ => {
-                    let mut s = sky(d, sun);
+                    missed = depth == 0;
+                    let mut s = sky(d, sun) * self.sky_strength;
                     if specular && d.dot(sun) > SUN_COS {
                         s += sun_e * 2000.0;
                     }
@@ -626,7 +677,7 @@ impl Scene {
             o = p + n * 1e-3;
             d = wi;
         }
-        (l, first_albedo, first_n)
+        (l, first_albedo, first_n, missed)
     }
 }
 
@@ -703,8 +754,8 @@ fn denoise(color: &[Vec3], albedo: &[Vec3], normal: &[Vec3], w: usize, h: usize)
 pub fn render(m: &Model, o: &PtOpts) -> RgbImage {
     let scene = build_scene(m, o);
     let (w, h) = (o.width.max(16) as usize, o.height.max(16) as usize);
-    let (c, a, n) = pass(&scene, o, w, h, 0, o.samples.max(1));
-    finish(&c, &a, &n, o.samples.max(1), w, h, o)
+    let (c, a, n, sky) = pass(&scene, o, w, h, 0, o.samples.max(1));
+    finish(&c, &a, &n, &sky, o.samples.max(1), w, h, o)
 }
 
 /// A render in progress: the scene, and every sample so far summed per
@@ -718,6 +769,8 @@ pub struct Progress {
     color: Vec<Vec3>,
     albedo: Vec<Vec3>,
     normal: Vec<Vec3>,
+    /// samples that saw the sky, per pixel (for a plain background)
+    sky: Vec<f32>,
     /// samples per pixel so far
     pub spp: u32,
     passes: u32,
@@ -730,24 +783,25 @@ pub fn progressive(prev: Option<Progress>, key: String, m: &Model, o: &PtOpts) -
     let (w, h) = (o.width.max(16) as usize, o.height.max(16) as usize);
     let mut p = match prev {
         Some(p) if p.key == key && p.w == w && p.h == h => p,
-        _ => Progress { key, scene: build_scene(m, o), w, h, color: vec![Vec3::ZERO; w * h], albedo: vec![Vec3::ZERO; w * h], normal: vec![Vec3::ZERO; w * h], spp: 0, passes: 0 },
+        _ => Progress { key, scene: build_scene(m, o), w, h, color: vec![Vec3::ZERO; w * h], albedo: vec![Vec3::ZERO; w * h], normal: vec![Vec3::ZERO; w * h], sky: vec![0.0; w * h], spp: 0, passes: 0 },
     };
     let add = o.samples.max(1);
-    let (c, a, n) = pass(&p.scene, o, w, h, p.passes + 1, add);
+    let (c, a, n, sk) = pass(&p.scene, o, w, h, p.passes + 1, add);
     for i in 0..w * h {
         p.color[i] += c[i];
         p.albedo[i] += a[i];
         p.normal[i] += n[i];
+        p.sky[i] += sk[i];
     }
     p.spp += add;
     p.passes += 1;
-    let img = finish(&p.color, &p.albedo, &p.normal, p.spp, w, h, o);
+    let img = finish(&p.color, &p.albedo, &p.normal, &p.sky, p.spp, w, h, o);
     (p, img)
 }
 
 /// Sums of `spp` samples per pixel (color, albedo, normal), on all cores.
 /// `seed` makes each pass's samples different from the last.
-fn pass(scene: &Scene, o: &PtOpts, w: usize, h: usize, seed: u32, spp: u32) -> (Vec<Vec3>, Vec<Vec3>, Vec<Vec3>) {
+fn pass(scene: &Scene, o: &PtOpts, w: usize, h: usize, seed: u32, spp: u32) -> (Vec<Vec3>, Vec<Vec3>, Vec<Vec3>, Vec<f32>) {
     let eye = DVec3::from(o.camera.eye).as_vec3();
     let target = DVec3::from(o.camera.target).as_vec3();
     let fwd = (target - eye).normalize();
@@ -760,41 +814,47 @@ fn pass(scene: &Scene, o: &PtOpts, w: usize, h: usize, seed: u32, spp: u32) -> (
     let mut color = vec![Vec3::ZERO; w * h];
     let mut albedo = vec![Vec3::ZERO; w * h];
     let mut normal = vec![Vec3::ZERO; w * h];
+    let mut skyc = vec![0.0f32; w * h];
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(16);
     let rows: Vec<usize> = (0..h).collect();
     let chunk = h.div_ceil(threads * 4);
     std::thread::scope(|s| {
-        let mut parts: Vec<(&mut [Vec3], &mut [Vec3], &mut [Vec3], &[usize])> = Vec::new();
-        let (mut c, mut a, mut n, mut rr) = (&mut color[..], &mut albedo[..], &mut normal[..], &rows[..]);
+        let mut parts: Vec<(&mut [Vec3], &mut [Vec3], &mut [Vec3], &mut [f32], &[usize])> = Vec::new();
+        let (mut c, mut a, mut n, mut sk, mut rr) = (&mut color[..], &mut albedo[..], &mut normal[..], &mut skyc[..], &rows[..]);
         while !rr.is_empty() {
             let k = chunk.min(rr.len());
             let (c1, c2) = c.split_at_mut(k * w);
             let (a1, a2) = a.split_at_mut(k * w);
             let (n1, n2) = n.split_at_mut(k * w);
+            let (s1, s2) = sk.split_at_mut(k * w);
             let (r1, r2) = rr.split_at(k);
-            parts.push((c1, a1, n1, r1));
+            parts.push((c1, a1, n1, s1, r1));
             c = c2;
             a = a2;
             n = n2;
+            sk = s2;
             rr = r2;
         }
         // hand chunks out round-robin to the threads
-        let mut buckets: Vec<Vec<(&mut [Vec3], &mut [Vec3], &mut [Vec3], &[usize])>> = (0..threads).map(|_| Vec::new()).collect();
+        let mut buckets: Vec<Vec<(&mut [Vec3], &mut [Vec3], &mut [Vec3], &mut [f32], &[usize])>> = (0..threads).map(|_| Vec::new()).collect();
         for (i, p) in parts.into_iter().enumerate() {
             buckets[i % threads].push(p);
         }
         for bucket in buckets {
             s.spawn(move || {
-                for (cs, als, ns, ys) in bucket {
+                for (cs, als, ns, sks, ys) in bucket {
                     for (row, &y) in ys.iter().enumerate() {
                         for x in 0..w {
                             let mut r = Rng::new(((y * w + x) as u64) << 8 | 1 ^ (seed as u64).wrapping_mul(0x2545_F491_4F6C_DD1D));
-                            let (mut acc, mut aa, mut an) = (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO);
+                            let (mut acc, mut aa, mut an, mut miss) = (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 0.0f32);
                             for _ in 0..spp {
                                 let px = (x as f32 + r.f()) / w as f32 * 2.0 - 1.0;
                                 let py = 1.0 - (y as f32 + r.f()) / h as f32 * 2.0;
                                 let d = (fwd + right * (px * tan * aspect) + up * (py * tan)).normalize();
-                                let (l, alb, nn) = scene.trace(eye, d, o.bounces, &mut r);
+                                let (l, alb, nn, m) = scene.trace(eye, d, o.bounces, &mut r);
+                                if m {
+                                    miss += 1.0;
+                                }
                                 // keep fireflies in check
                                 let lum = l.max_element();
                                 acc += if lum > 40.0 { l * (40.0 / lum) } else { l };
@@ -805,17 +865,18 @@ fn pass(scene: &Scene, o: &PtOpts, w: usize, h: usize, seed: u32, spp: u32) -> (
                             cs[i] = acc;
                             als[i] = aa;
                             ns[i] = an;
+                            sks[i] = miss;
                         }
                     }
                 }
             });
         }
     });
-    (color, albedo, normal)
+    (color, albedo, normal, skyc)
 }
 
 /// Averages, denoise, tone map.
-fn finish(color: &[Vec3], albedo: &[Vec3], normal: &[Vec3], spp: u32, w: usize, h: usize, o: &PtOpts) -> RgbImage {
+fn finish(color: &[Vec3], albedo: &[Vec3], normal: &[Vec3], sky: &[f32], spp: u32, w: usize, h: usize, o: &PtOpts) -> RgbImage {
     let k = 1.0 / spp.max(1) as f32;
     let color: Vec<Vec3> = color.iter().map(|c| *c * k).collect();
     let albedo: Vec<Vec3> = albedo.iter().map(|c| *c * k).collect();
@@ -824,7 +885,15 @@ fn finish(color: &[Vec3], albedo: &[Vec3], normal: &[Vec3], spp: u32, w: usize, 
     let mut img = RgbImage::new(w as u32, h as u32);
     for (i, p) in img.pixels_mut().enumerate() {
         let c = aces(final_color[i] * o.exposure);
-        *p = Rgb([to_srgb(c.x), to_srgb(c.y), to_srgb(c.z)]);
+        let mut px = [to_srgb(c.x), to_srgb(c.y), to_srgb(c.z)];
+        // a plain backdrop where the camera saw sky (soft at the model's edges)
+        if let Some(bg) = o.background {
+            let t = (sky[i] * k).clamp(0.0, 1.0);
+            for j in 0..3 {
+                px[j] = (px[j] as f32 * (1.0 - t) + bg[j].clamp(0.0, 1.0) * 255.0 * t).round() as u8;
+            }
+        }
+        *p = Rgb(px);
     }
     img
 }

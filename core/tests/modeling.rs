@@ -1182,6 +1182,58 @@ fn photoreal_sharpens_progressively() {
 }
 
 #[test]
+fn photoreal_settings_backdrop_ground_sky_warmth() {
+    use base64::Engine as _;
+    let mut e = Engine::new();
+    box_group(&mut e, [0.0, 0.0, 0.0], [2.0, 2.0, 2.0], "Block");
+    let cam = json!({"eye":[8,-8,5],"target":[1,1,1],"fov":45});
+    let shot = |e: &mut Engine, extra: Value| {
+        let mut c = json!({"cmd":"photoreal","width":80,"height":56,"samples":6,"camera":cam,"sun_azimuth":250,"sun_altitude":35});
+        for (k, v) in extra.as_object().unwrap() {
+            c[k] = v.clone();
+        }
+        let r = run(e, c);
+        let b64 = r["data"].as_str().unwrap().strip_prefix("data:image/png;base64,").unwrap().to_string();
+        image::load_from_memory(&base64::engine::general_purpose::STANDARD.decode(b64).unwrap()).unwrap().to_rgb8()
+    };
+    let mean = |img: &image::RgbImage| {
+        let mut s = [0f64; 3];
+        for p in img.pixels() {
+            for j in 0..3 {
+                s[j] += p[j] as f64;
+            }
+        }
+        let n = (img.width() * img.height()) as f64;
+        [s[0] / n, s[1] / n, s[2] / n]
+    };
+    // a plain white backdrop: the sky pixels at the top are exactly white
+    let white = shot(&mut e, json!({"background":"#ffffff"}));
+    assert_eq!(white.get_pixel(40, 1).0, [255, 255, 255]);
+    // no ground and a colored backdrop: the bottom corner shows the backdrop
+    let floating = shot(&mut e, json!({"background":"#204060","ground":false}));
+    assert_eq!(floating.get_pixel(1, 54).0, [0x20, 0x40, 0x60]);
+    // with the ground, that corner is ground, not the backdrop
+    let grounded = shot(&mut e, json!({"background":"#204060"}));
+    assert_ne!(grounded.get_pixel(1, 54).0, [0x20, 0x40, 0x60]);
+    // a red ground reads red
+    let red = shot(&mut e, json!({"ground_color":"#c03020"}));
+    let p = red.get_pixel(1, 54);
+    assert!(p[0] > p[2] + 30, "red ground: {p:?}");
+    // more sky light and exposure: brighter; less: darker
+    let base = mean(&shot(&mut e, json!({})));
+    let bright = mean(&shot(&mut e, json!({"exposure":2.0,"sky_strength":2.0})));
+    let dim = mean(&shot(&mut e, json!({"exposure":0.4,"sky_strength":0.2})));
+    assert!(bright[1] > base[1] + 10.0 && dim[1] < base[1] - 10.0, "{dim:?} < {base:?} < {bright:?}");
+    // a warm sun shifts the picture toward red
+    let warm = mean(&shot(&mut e, json!({"warmth":1.0,"background":"#808080"})));
+    let cool = mean(&shot(&mut e, json!({"warmth":-1.0,"background":"#808080"})));
+    assert!(warm[0] - warm[2] > cool[0] - cool[2] + 5.0, "warm {warm:?} cool {cool:?}");
+    // a bad color is an error, not a crash
+    let bad = e.exec_json(&json!({"cmd":"photoreal","width":32,"height":32,"samples":1,"background":"blue"}).to_string());
+    assert!(bad.to_string().contains("#rrggbb"), "{bad}");
+}
+
+#[test]
 fn groups_nest_move_copy_delete_and_lock_together() {
     let mut e = Engine::new();
     let wall = box_group(&mut e, [0.0, 0.0, 0.0], [4.0, 0.2, 3.0], "Wall") as u32;
