@@ -2,6 +2,7 @@ target/
 out/
 *.png
 !docs/*.png
+!brand/*.png
 node_modules/
 dist/
 app/src-tauri/gen/
