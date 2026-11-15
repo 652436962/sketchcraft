@@ -11,6 +11,10 @@ What changed in each SketchCraft release, newest first. The format follows
   one **Export ▸** entry. All menus scroll when the window is short, and the
   right-click menu opens upward or leftward near an edge instead of running
   off the screen.
+- **Fields on brand.** Every dropdown, text box and number box shares one look
+  from the skin: its border and corners, a brand chevron instead of the
+  browser's arrow, a violet focus ring, and violet checkboxes, sliders and
+  color wells. Dark skins follow along.
 - **The side panel fits.** Dropdowns in the right panel (Style's Preset, Faces
   and Background) stay inside it and line up, instead of running off the edge.
 
