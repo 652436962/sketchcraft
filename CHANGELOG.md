@@ -13,6 +13,12 @@ What changed in each SketchCraft release, newest first. The format follows
   Check for updates…** (in the File menu and Shift+S) checks right away. Where a
   copy can't update itself, it links to the download page.
 
+### Changed
+- **The tool bar fits the window.** Tools that don't fit go behind a
+  **+N more** button instead of running off the edges. Its list is searchable:
+  type a tool's name (or shortcut) and press Enter. **+ Add or remove tools…**
+  at the bottom customizes the bar.
+
 ## [0.3.2] - 2026-11-15
 
 ### Added

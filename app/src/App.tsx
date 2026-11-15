@@ -15,6 +15,7 @@ import { CommandPalette, type Command } from "./palette";
 import { TOOL_INFO, WORKSPACES, withEdits, type WorkspaceEdits, type WorkspaceId } from "./workspace";
 import { AppearanceDialog, WorkspaceDialog } from "./appearance";
 import { WorkspaceStrip } from "./wsstrip";
+import { Toolbar } from "./toolbar";
 import { PhotoModeler } from "./photomodel";
 import { RefImageDialog } from "./refimage";
 import { Text3dDialog } from "./text3d";
@@ -915,23 +916,11 @@ export default function App() {
         />
         {matching && <MatchPhoto src={matching.src} width={matching.width} height={matching.height} defaultName={`Photo ${(scene?.views.filter((v) => v.photo).length ?? 0) + 1}`} onDone={finishMatch} onCancel={() => setMatching(null)} />}
 
-        <nav className="toolbar">
-          {ws.tools.map((g, i) => (
-            <div key={i} className="tool-group">
-              {g.map((id) => {
-                const t = TOOL_INFO[id as keyof typeof TOOL_INFO];
-                return (
-                  <button key={id} className={`tool ${tool === id ? "on" : ""}`} onClick={() => chooseTool(id)} title={t.key ? `${t.name} (${t.key})` : t.name}>
-                    {Icons[id as keyof typeof Icons]()}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
+        <Toolbar groups={ws.tools} tool={tool} choose={(id) => chooseTool(id as Tool)} vertical={ws.dock === "left"} onCustomize={() => setShowWs(true)}>
           <label className="chip" style={{ background: hex(color) }} title="Paint color">
             <input type="color" value={hex(color)} onChange={(e) => (setColor(unhex(e.target.value)), chooseTool("paint"))} />
           </label>
-        </nav>
+        </Toolbar>
 
         <div className="views">
           {(["iso", "top", "front", "right"] as const).map((v) => (
