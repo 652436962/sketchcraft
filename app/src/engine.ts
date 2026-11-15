@@ -184,7 +184,7 @@ export interface Reply {
   [k: string]: unknown;
 }
 
-const inTauri = "__TAURI_INTERNALS__" in window;
+export const inTauri = "__TAURI_INTERNALS__" in window;
 const BRIDGE = "http://127.0.0.1:5175";
 
 async function http<T>(path: string, body?: unknown): Promise<T> {

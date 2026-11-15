@@ -52,11 +52,28 @@ fn sync(state: tauri::State<App>) -> bool {
     guarded(|| live.sync(), |_| false)
 }
 
+/// Open the download page in the browser (for installs the updater can't
+/// replace, like a .deb or .rpm). The address is fixed, never from the page.
+#[tauri::command]
+fn open_releases() -> bool {
+    const URL: &str = "https://github.com/jasonsutter87/sketchcraft/releases/latest";
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg(URL).spawn();
+    #[cfg(target_os = "windows")]
+    let r = std::process::Command::new("explorer").arg(URL).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let r = std::process::Command::new("xdg-open").arg(URL).spawn();
+    r.is_ok()
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        // signed self-updates from GitHub Releases (see app/src/updater.tsx)
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(App(Mutex::new(Live::open(default_doc()))))
-        .invoke_handler(tauri::generate_handler![exec, scene, sync])
+        .invoke_handler(tauri::generate_handler![exec, scene, sync, open_releases])
         .run(tauri::generate_context!())
         .expect("error while running SketchCraft");
 }

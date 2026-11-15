@@ -31,6 +31,28 @@ Without them it builds exactly as today.
 4. Push a new tag. The DMG and app are then signed with your Developer ID
    and notarized, and open with no warning.
 
+## App updates
+
+The desktop app updates itself from GitHub Releases: it reads `latest.json`
+from the newest release, downloads the update for its platform, and installs
+it only if it was signed with SketchCraft's update key. The public half is in
+`app/src-tauri/tauri.conf.json`; the private half is
+`~/.tauri/sketchcraft-updater.key` on the maintainer's Mac (no password).
+
+The release workflow needs that private key as a repository secret, or the
+build fails:
+
+```sh
+gh secret set TAURI_SIGNING_PRIVATE_KEY -R jasonsutter87/sketchcraft < ~/.tauri/sketchcraft-updater.key
+```
+
+**Back the key up** (a password manager is fine). If it's lost, installed
+copies can't verify anything newer, and everyone has to download one new
+version by hand. Never commit it.
+
+Copies that can't replace themselves (Linux `.deb` and `.rpm`, or a failed
+download) show a card with the download page instead.
+
 ## Windows
 
 Options, cheapest first:

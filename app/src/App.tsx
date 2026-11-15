@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { UpdateCard, checkForUpdatesNow } from "./updater";
 import { ask, AskHost } from "./ask";
-import { exec, loadScene, sync, type Reply, type Scene, type Vec3 } from "./engine";
+import { exec, inTauri, loadScene, sync, type Reply, type Scene, type Vec3 } from "./engine";
 import { Icons, Logo } from "./icons";
 import { BuildTools, ContextMenu, contextItems, EntityInfo, Environments, Library, LocationDialog, Outliner, RenderDialog, Sandbox, SheetsDialog, ShortcutSheet, Templates, Textures, Views } from "./panels";
 import { EMPTY, isEmpty, selIds, type Sel } from "./selection";
@@ -702,6 +703,7 @@ export default function App() {
       { label: "Generate report (CSV)…", hint: "File", run: file.report },
       { label: "Skins…", hint: "How SketchCraft looks", run: () => setShowSkins(true) },
       { label: "Keyboard shortcuts", hint: "Help", key: "?", run: () => setShowKeys(true) },
+      ...(inTauri ? [{ label: "Check for updates…", hint: "Help", run: checkForUpdatesNow }] : []),
       { label: "Zoom extents", hint: "Camera", key: "⇧Z", run: () => api.current?.fit() },
       ...(["iso", "top", "front", "right", "back", "left"] as const).map((v) => ({ label: `${v[0].toUpperCase()}${v.slice(1)} view`, hint: "Camera", run: () => api.current?.view(v) })),
       { label: "Undo", hint: "Edit", key: "⌘Z", run: () => void run({ cmd: "undo" }) },
@@ -794,6 +796,7 @@ export default function App() {
                   <button onClick={() => setShowKeys(true)}>
                     Keyboard shortcuts <kbd>?</kbd>
                   </button>
+                  {inTauri && <button onClick={checkForUpdatesNow}>Check for updates…</button>}
                 </div>
               </>
             )}
@@ -1034,6 +1037,7 @@ export default function App() {
             actions={{ blueprint: file.blueprint, sheets: () => setShowSheets(true), location: () => setShowLocation(true), render: () => setShowRender(true), animation: () => setShowTimeline((v) => !v), showView: (v) => showView(v), sceneProps }}
           />
         )}
+        <UpdateCard />
         {scene && showTimeline && <TimelinePanel scene={scene} run={run} api={api} setTool={chooseTool} onToast={say} onClose={() => setShowTimeline(false)} />}
         {showLearn && (
           <LearnCenter

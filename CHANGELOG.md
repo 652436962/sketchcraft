@@ -6,6 +6,13 @@ What changed in each SketchCraft release, newest first. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Automatic updates.** The desktop app checks for a new version a few
+  seconds after it opens (and every six hours), and offers **Update and
+  restart**. Updates are signed and verified before they install. **Help ›
+  Check for updates…** (in the File menu and Shift+S) checks right away. Where a
+  copy can't update itself, it links to the download page.
+
 ## [0.3.2] - 2026-11-15
 
 ### Added
