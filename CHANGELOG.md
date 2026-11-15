@@ -6,6 +6,8 @@ What changed in each SketchCraft release, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-15
+
 ### Added
 - **Automatic updates.** The desktop app checks for a new version a few
   seconds after it opens (and every six hours), and offers **Update and
@@ -110,7 +112,8 @@ The first build with installers (never published as a release).
   import and export, and PNG renders with dimensions and labels.
 - Installers for macOS, Windows and Linux, and the CLI for each.
 
-[Unreleased]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jasonsutter87/sketchcraft/compare/v0.2.0...v0.3.0
