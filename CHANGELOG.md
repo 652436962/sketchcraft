@@ -12,6 +12,12 @@ What changed in each SketchCraft release, newest first. The format follows
   (a yellow square, "Origin"), so you can move an object from a circle's center
   or put it back at the origin. Thanks to Common User on the ArtCraft Discord
   for the report.
+- **Render settings.** The Render dialog's new **More settings** holds the
+  output size (HD, 4K, square, portrait or custom), exposure, sunlight, sky
+  light, sun color (cool to golden hour), light bounces, a plain background
+  color instead of the sky, the ground on or off and its color, and denoise.
+  They're remembered between renders. The `photoreal` command takes the same
+  options (`sky_strength`, `background`, `ground`, `ground_color`, `warmth`).
 
 ### Fixed
 - **Windows: DWG and IFC helpers are found.** SketchCraft now finds

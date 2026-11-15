@@ -1273,6 +1273,33 @@ export function LocationDialog({ onAdd, onClose, current }: { onAdd: (p: { lat: 
 }
 
 
+/** Render settings past quality and sun (the dialog's "More settings"). */
+interface RenderSettings {
+  size: string;
+  width: number;
+  height: number;
+  ev: number;
+  sun: number;
+  sky: number;
+  warmth: number;
+  bounces: number;
+  backdrop: "sky" | "color";
+  backdropColor: string;
+  ground: boolean;
+  groundColor: string;
+  denoise: boolean;
+}
+const RENDER_DEFAULTS: RenderSettings = { size: "quality", width: 1920, height: 1080, ev: 0, sun: 2.4, sky: 1, warmth: 0, bounces: 6, backdrop: "sky", backdropColor: "#ffffff", ground: true, groundColor: "#94948c", denoise: true };
+const RENDER_SIZES: { id: string; label: string; w?: number; h?: number }[] = [
+  { id: "quality", label: "This view's shape, by quality" },
+  { id: "hd", label: "HD 1920 × 1080", w: 1920, h: 1080 },
+  { id: "4k", label: "4K 3840 × 2160", w: 3840, h: 2160 },
+  { id: "square", label: "Square 2048 × 2048", w: 2048, h: 2048 },
+  { id: "portrait", label: "Portrait 1080 × 1350", w: 1080, h: 1350 },
+  { id: "custom", label: "Custom…" },
+];
+const clampSize = (n: number) => Math.max(16, Math.min(4096, Math.round(Number.isFinite(n) ? n : 1024)));
+
 /** Photoreal render of the current view: quality, sun, then save. */
 export function RenderDialog({ camera, aspect, name, onClose, onToast }: { camera: () => Cam; aspect: number; name: string; onClose: () => void; onToast: (t: string, bad?: boolean) => void }) {
   const QUALITY = [
@@ -1281,6 +1308,23 @@ export function RenderDialog({ camera, aspect, name, onClose, onToast }: { camer
     { id: "final", label: "Final", samples: 256, long: 2400, about: "a few minutes" },
   ];
   const [q, setQ] = useState("preview");
+  // more settings: remembered between renders on this computer
+  const [adv, setAdvRaw] = useState<RenderSettings>(() => {
+    try {
+      return { ...RENDER_DEFAULTS, ...JSON.parse(localStorage.getItem("sketchcraft.render") ?? "{}") };
+    } catch {
+      return RENDER_DEFAULTS;
+    }
+  });
+  const setAdv = (patch: Partial<RenderSettings>) =>
+    setAdvRaw((a) => {
+      const n = { ...a, ...patch };
+      try {
+        localStorage.setItem("sketchcraft.render", JSON.stringify(n));
+      } catch {}
+      return n;
+    });
+  const [more, setMore] = useState(false);
   // the sun: placed for this view, set by hand, or the real sun at a date and time
   const [sunMode, setSunMode] = useState<"view" | "manual" | "real">("view");
   const [az, setAz] = useState(200);
@@ -1318,8 +1362,26 @@ export function RenderDialog({ camera, aspect, name, onClose, onToast }: { camer
   const [progress, setProgress] = useState<{ done: number; goal: number } | null>(null);
   const go = async (more = false) => {
     const preset = QUALITY.find((x) => x.id === q)!;
-    const w = aspect >= 1 ? preset.long : Math.round(preset.long * aspect);
-    const h = aspect >= 1 ? Math.round(preset.long / aspect) : preset.long;
+    const size = RENDER_SIZES.find((x) => x.id === adv.size);
+    const [w, h] =
+      adv.size === "custom"
+        ? [clampSize(adv.width), clampSize(adv.height)]
+        : size?.w
+          ? [size.w, size.h]
+          : aspect >= 1
+            ? [preset.long, Math.round(preset.long / aspect)]
+            : [Math.round(preset.long * aspect), preset.long];
+    const look = {
+      bounces: adv.bounces,
+      exposure: Math.pow(2, adv.ev),
+      sun_strength: adv.sun,
+      sky_strength: adv.sky,
+      warmth: adv.warmth,
+      denoise: adv.denoise,
+      ground: adv.ground,
+      ground_color: adv.groundColor,
+      ...(adv.backdrop === "color" ? { background: adv.backdropColor } : {}),
+    };
     stopRef.current = false;
     setBusy(true);
     const sun = sunMode === "real" ? { date, time: clock, ...offsetFor(real?.lon) } : sunMode === "manual" ? { sun_azimuth: az, sun_altitude: alt } : { sun_altitude: alt };
@@ -1329,7 +1391,7 @@ export function RenderDialog({ camera, aspect, name, onClose, onToast }: { camer
     let per = 1;
     let base = -1;
     while (!stopRef.current) {
-      const r = await exec({ cmd: "photoreal", width: w, height: h, samples: per, progressive: true, camera: cam.current, ...sun });
+      const r = await exec({ cmd: "photoreal", width: w, height: h, samples: per, progressive: true, camera: cam.current, ...sun, ...look });
       if (!r.ok) {
         onToast(r.error ?? "The render didn't work", true);
         break;
@@ -1364,7 +1426,7 @@ export function RenderDialog({ camera, aspect, name, onClose, onToast }: { camer
         onClose();
       }}
     >
-      <div className="sheet render-dlg" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Render">
+      <div className={`sheet render-dlg${more ? " more" : ""}`} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Render">
         <div className="sheet-head">
           <b>Render</b>
           <span className="muted">Photoreal: sunlight, sky, soft shadows, reflections.</span>
@@ -1426,6 +1488,84 @@ export function RenderDialog({ camera, aspect, name, onClose, onToast }: { camer
                 {real && !real.located && " No location set, so this uses the central US (File ▸ Add location… for yours)."}
               </span>
             </>
+          )}
+          <button className="btn small ghost render-more-toggle" onClick={() => setMore((m) => !m)} aria-expanded={more}>
+            {more ? "▾" : "▸"} More settings
+          </button>
+          {more && (
+            <fieldset className="render-more" disabled={busy}>
+              <label className="field">
+                <span>Size</span>
+                <select value={adv.size} onChange={(e) => setAdv({ size: e.target.value })}>
+                  {RENDER_SIZES.map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {adv.size === "custom" && (
+                <div className="row gap">
+                  <label className="field">
+                    <span>Width</span>
+                    <input type="number" min={16} max={4096} value={adv.width} onChange={(e) => setAdv({ width: Number(e.target.value) })} />
+                  </label>
+                  <label className="field">
+                    <span>Height</span>
+                    <input type="number" min={16} max={4096} value={adv.height} onChange={(e) => setAdv({ height: Number(e.target.value) })} />
+                  </label>
+                </div>
+              )}
+              <label className="field" title="Brighter or darker overall, in camera stops">
+                <span>Exposure {adv.ev > 0 ? "+" : ""}{adv.ev.toFixed(1)}</span>
+                <input type="range" min={-3} max={3} step={0.1} value={adv.ev} onChange={(e) => setAdv({ ev: Number(e.target.value) })} />
+              </label>
+              <label className="field" title="How strong direct sunlight is (and how dark the shadows look next to it)">
+                <span>Sunlight {adv.sun.toFixed(1)}</span>
+                <input type="range" min={0} max={8} step={0.1} value={adv.sun} onChange={(e) => setAdv({ sun: Number(e.target.value) })} />
+              </label>
+              <label className="field" title="The sky's soft light: it fills in the shadows">
+                <span>Sky light {adv.sky.toFixed(1)}</span>
+                <input type="range" min={0} max={4} step={0.1} value={adv.sky} onChange={(e) => setAdv({ sky: Number(e.target.value) })} />
+              </label>
+              <label className="field" title="The sun's color: cool overcast to warm golden hour">
+                <span>Sun color {adv.warmth < -0.15 ? "cool" : adv.warmth > 0.15 ? "warm" : "daylight"}</span>
+                <input type="range" min={-1} max={1} step={0.05} value={adv.warmth} onChange={(e) => setAdv({ warmth: Number(e.target.value) })} />
+              </label>
+              <label className="field" title="How many times light bounces between surfaces. More: brighter, truer interiors; slower">
+                <span>Light bounces {adv.bounces}</span>
+                <input type="range" min={1} max={12} step={1} value={adv.bounces} onChange={(e) => setAdv({ bounces: Number(e.target.value) })} />
+              </label>
+              <div className="field">
+                <span>Background</span>
+                <div className="row gap">
+                  <div className="seg">
+                    <button className={adv.backdrop === "sky" ? "on" : ""} onClick={() => setAdv({ backdrop: "sky" })}>
+                      Sky
+                    </button>
+                    <button className={adv.backdrop === "color" ? "on" : ""} onClick={() => setAdv({ backdrop: "color" })} title="A plain color behind the model (the sky still lights it)">
+                      Color
+                    </button>
+                  </div>
+                  {adv.backdrop === "color" && <input type="color" aria-label="Background color" value={adv.backdropColor} onChange={(e) => setAdv({ backdropColor: e.target.value })} />}
+                </div>
+              </div>
+              <div className="field">
+                <span>Ground</span>
+                <div className="row gap">
+                  <label className="field check">
+                    <input type="checkbox" checked={adv.ground} onChange={(e) => setAdv({ ground: e.target.checked })} /> Show the ground
+                  </label>
+                  {adv.ground && <input type="color" aria-label="Ground color" value={adv.groundColor} onChange={(e) => setAdv({ groundColor: e.target.value })} />}
+                </div>
+              </div>
+              <label className="field check" title="Smooths the grain while the picture sharpens. Off: the raw samples">
+                <input type="checkbox" checked={adv.denoise} onChange={(e) => setAdv({ denoise: e.target.checked })} /> Remove grain (denoise)
+              </label>
+              <button className="btn small ghost" onClick={() => setAdv(RENDER_DEFAULTS)}>
+                Reset to defaults
+              </button>
+            </fieldset>
           )}
           <div className="row gap">
             {busy ? (
