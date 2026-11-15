@@ -2410,10 +2410,12 @@ impl Engine {
             Command::Reveal { path } => {
                 let p = crate::safety::path_arg(path.map(std::path::PathBuf::from).unwrap_or_else(crate::library::default_dir));
                 std::fs::create_dir_all(if p.extension().is_some() { p.parent().unwrap_or(&p) } else { &p }).ok();
-                #[cfg(target_os = "macos")]
                 // folders open; files and app bundles are only shown, never launched
-                let bundle = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("app"));
-                let r = if p.is_dir() && !bundle { std::process::Command::new("open").arg(&p).status() } else { std::process::Command::new("open").arg("-R").arg(&p).status() };
+                #[cfg(target_os = "macos")]
+                let r = {
+                    let bundle = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("app"));
+                    if p.is_dir() && !bundle { std::process::Command::new("open").arg(&p).status() } else { std::process::Command::new("open").arg("-R").arg(&p).status() }
+                };
                 #[cfg(target_os = "windows")]
                 let r = std::process::Command::new("explorer").arg(&p).status();
                 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
