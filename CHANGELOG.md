@@ -11,6 +11,8 @@ What changed in each SketchCraft release, newest first. The format follows
   one **Export ▸** entry. All menus scroll when the window is short, and the
   right-click menu opens upward or leftward near an edge instead of running
   off the screen.
+- **The side panel fits.** Dropdowns in the right panel (Style's Preset, Faces
+  and Background) stay inside it and line up, instead of running off the edge.
 
 ### Added
 - **See your version.** The bottom of the File menu shows which SketchCraft

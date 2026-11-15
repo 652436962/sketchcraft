@@ -2904,3 +2904,22 @@ details.panel-fold {
   font-size: 11.5px;
   user-select: text;
 }
+
+/* label / value rows in the side panels: the value column takes the room
+   left after the label, and a dropdown never grows past it (it used to size
+   itself to its longest option and run off the panel) */
+.kv {
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 12px;
+  align-items: center;
+}
+.kv > select,
+.kv > .units-select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  text-overflow: ellipsis;
+}
+.kv > b {
+  justify-self: end;
+}
