@@ -256,6 +256,7 @@ export default function App() {
   };
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [fileMenu, setFileMenu] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [currentFile, setCurrentFileState] = useState<string | null>(rememberedFile());
   const setCurrentFile = (p: string | null) => {
     setCurrentFileState(p);
@@ -770,29 +771,44 @@ export default function App() {
                   <hr />
                   <button onClick={file.import}>Import SketchUp, CAD or OBJ… <kbd>⌘I</kbd></button>
                   <button onClick={() => fileRef.current?.click()}>Import from browser upload…</button>
+                  <button
+                    className="submenu-btn"
+                    aria-expanded={exportOpen}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExportOpen((o) => !o);
+                    }}
+                  >
+                    Export <span className="caret">{exportOpen ? "▾" : "▸"}</span>
+                  </button>
+                  {exportOpen && (
+                    <div className="submenu">
+                      <button onClick={() => file.export("glb")}>glTF (.glb)…</button>
+                      <button onClick={() => file.export("obj")}>OBJ…</button>
+                      <button onClick={() => file.export("stl")}>STL (mm)…</button>
+                      <button onClick={() => file.export("dae")}>Collada (.dae)…</button>
+                      <button onClick={() => file.export("dxf")}>3D DXF (mm)…</button>
+                      <button onClick={() => file.export("dwg")}>DWG (AutoCAD)…</button>
+                      <button onClick={() => file.export("ifc")}>IFC (BIM)…</button>
+                      <button onClick={() => file.export("pdf")}>PDF (this view)…</button>
+                      <button onClick={file.render}>PNG (this view)…</button>
+                      <button onClick={file.animation}>Scene tour (MP4)…</button>
+                      {section && (
+                        <>
+                          <button onClick={() => file.section("svg")}>Section cut (SVG)…</button>
+                          <button onClick={() => file.section("dxf")}>Section cut (DXF)…</button>
+                        </>
+                      )}
+                    </div>
+                  )}
                   <hr />
-                  <button onClick={() => file.export("glb")}>Export glTF (.glb)…</button>
-                  <button onClick={() => file.export("obj")}>Export OBJ…</button>
-                  <button onClick={() => file.export("stl")}>Export STL (mm)…</button>
-                  <button onClick={() => file.export("dae")}>Export Collada (.dae)…</button>
-                  <button onClick={() => file.export("dxf")}>Export 3D DXF (mm)…</button>
-                  <button onClick={() => file.export("dwg")}>Export DWG (AutoCAD)…</button>
-                  <button onClick={() => file.export("pdf")}>Export PDF (this view)…</button>
-                  <button onClick={() => setShowTimeline(true)}>Timeline (video)…</button>
-                  <button onClick={file.animation}>Export scene tour (MP4)…</button>
                   <button onClick={file.blueprint}>Make blueprint (PDF)…</button>
                   <button onClick={() => setShowSheets(true)}>Drawing sheets (PDF)…</button>
-                  <button onClick={() => file.export("ifc")}>Export IFC (BIM)…</button>
+                  <button onClick={() => setShowTimeline(true)}>Timeline (video)…</button>
+                  <hr />
                   <button onClick={() => setShowLocation(true)}>Add location…</button>
                   <button onClick={() => setShowText3d(true)}>3D Text…</button>
                   <button onClick={file.report}>Generate report (CSV)…</button>
-                  <button onClick={file.render}>Render PNG…</button>
-                  {section && (
-                    <>
-                      <button onClick={() => file.section("svg")}>Export section cut (SVG)…</button>
-                      <button onClick={() => file.section("dxf")}>Export section cut (DXF)…</button>
-                    </>
-                  )}
                   <hr />
                   <button onClick={() => setShowKeys(true)}>
                     Keyboard shortcuts <kbd>?</kbd>

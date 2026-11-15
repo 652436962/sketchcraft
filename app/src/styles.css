@@ -2874,3 +2874,26 @@ details.panel-fold {
 .more-customize:hover {
   background: var(--bg);
 }
+
+/* ---------- menus never run off the window: they scroll ---------- */
+.menu,
+.dropdown-menu {
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.file-menu {
+  max-height: calc(100vh - 64px);
+}
+.file-menu .submenu-btn .caret {
+  color: var(--faint);
+  font-size: 11px;
+}
+.file-menu .submenu {
+  margin: 0 0 2px 10px;
+  padding-left: 6px;
+  border-left: 1px solid var(--line);
+}
+.file-menu .submenu button {
+  padding: 6px 10px;
+}

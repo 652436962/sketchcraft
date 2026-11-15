@@ -6,6 +6,12 @@ What changed in each SketchCraft release, newest first. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Menus fit the window.** The File menu is shorter: every export is under
+  one **Export ▸** entry. All menus scroll when the window is short, and the
+  right-click menu opens upward or leftward near an edge instead of running
+  off the screen.
+
 ## [0.3.3] - 2026-11-15
 
 ### Added

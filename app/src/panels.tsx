@@ -1,7 +1,7 @@
 // Side panels: Outliner (groups, components, tags), Library (assets and the
 // model's components), Views (saved cameras), Entity Info, and the
 // right-click menu.
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { ask } from "./ask";
 import { ASSETS, exec, type Reply, type Scene } from "./engine";
 import { pickOpen, pickSave } from "./files";
@@ -757,9 +757,25 @@ export function contextItems(scene: Scene, sel: Sel, run: Run, setSel: (s: Sel) 
 }
 
 export function ContextMenu({ x, y, items, close }: { x: number; y: number; items: MenuItem[]; close: () => void }) {
+  // keep the whole menu on screen: open upward or leftward near an edge
+  const box = useRef<HTMLDivElement>(null);
+  const [at, setAt] = useState({ left: x, top: y });
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    // measured where it landed (x, y are relative to the menu's container)
+    const m = 8;
+    const r = el.getBoundingClientRect();
+    const dx = r.left - x; // the container's offset from the window
+    const dy = r.top - y;
+    setAt({
+      left: r.right > window.innerWidth - m ? Math.max(m - dx, x - r.width) : x,
+      top: r.bottom > window.innerHeight - m ? Math.max(m - dy, window.innerHeight - m - r.height - dy) : y,
+    });
+  }, [x, y, items.length]);
   return (
     <div className="menu-scrim" onPointerDown={close} onContextMenu={(e) => (e.preventDefault(), close())}>
-      <div className="menu" style={{ left: x, top: y }} onPointerDown={(e) => e.stopPropagation()}>
+      <div className="menu" ref={box} style={at} onPointerDown={(e) => e.stopPropagation()}>
         {items.map((it) => (
           <button
             key={it.label}
