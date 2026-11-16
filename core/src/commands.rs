@@ -261,7 +261,11 @@ pub enum Command {
     /// Start one undo step that spans many commands (a plugin run); `end_batch` closes it.
     /// While it is open the model isn't saved after each command, and Undo is off.
     BeginBatch,
-    EndBatch,
+    /// `id`: the number `begin_batch` answered with; a stale one (its batch is already over) does nothing
+    EndBatch {
+        #[serde(default)]
+        id: Option<u64>,
+    },
     /// Render a PNG. Without `out`, just reports the camera it would use.
     Render {
         #[serde(default)]
@@ -1152,7 +1156,7 @@ impl Command {
                 | Command::Components
                 | Command::Pick { .. }
                 | Command::BeginBatch
-                | Command::EndBatch
+                | Command::EndBatch { .. }
                 | Command::Undo
                 | Command::Redo
                 | Command::Render { .. }
@@ -1195,10 +1199,13 @@ pub struct Engine {
     pub undo_budget: usize,
     /// an open batch: the model before it began, the revision then, and when
     batch: Option<(Model, u64, std::time::Instant)>,
+    /// counts batches, so an `end_batch` can say which one it means
+    batch_seq: u64,
 }
 
-/// A batch nobody closed (the app went away mid-run) is closed after this.
-const BATCH_MAX: std::time::Duration = std::time::Duration::from_secs(300);
+/// A batch nobody closed (the app went away mid-run) is closed after this (a plugin run is
+/// limited to 60 s, a Ruby replay to the same).
+pub const BATCH_MAX: std::time::Duration = std::time::Duration::from_secs(150);
 
 const UNDO_LIMIT: usize = 200;
 /// Undo history never holds more than about this much (per-step sizes are estimates).
@@ -1278,6 +1285,22 @@ impl Engine {
     /// Is a batch (see `BeginBatch`) open?
     pub fn in_batch(&self) -> bool {
         self.batch.is_some()
+    }
+
+    #[doc(hidden)]
+    pub fn expire_batch_for_test(&mut self) {
+        if let Some(b) = self.batch.as_mut() {
+            b.2 = std::time::Instant::now() - BATCH_MAX - std::time::Duration::from_secs(1);
+        }
+    }
+
+    /// Close a batch nobody closed in time (the page went away mid-run). True if one was closed.
+    pub fn close_expired_batch(&mut self) -> bool {
+        if self.batch.as_ref().is_some_and(|b| b.2.elapsed() > BATCH_MAX) {
+            self.end_batch();
+            return true;
+        }
+        false
     }
 
     /// Close a batch: everything since it began is ONE undo step.
@@ -1917,10 +1940,14 @@ impl Engine {
                     self.end_batch();
                 }
                 self.batch = Some((self.model.clone(), self.revision, std::time::Instant::now()));
-                json!({})
+                self.batch_seq += 1;
+                json!({"batch": self.batch_seq})
             }
-            Command::EndBatch => {
-                self.end_batch();
+            Command::EndBatch { id } => {
+                // an end that names a batch that is already over (closed by the timer, or replaced) leaves the current one alone
+                if id.is_none_or(|i| i == self.batch_seq) {
+                    self.end_batch();
+                }
                 json!({})
             }
             Command::Undo => {
@@ -2605,23 +2632,37 @@ impl Engine {
                 let model = crate::library::standalone(m, component)?;
                 let d = dir.map(std::path::PathBuf::from).unwrap_or_else(crate::library::default_dir);
                 let folder = match collection.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
-                    Some(c) => d.join(crate::library::safe(c)),
+                    Some(c) => {
+                        let c = crate::library::safe(c);
+                        if crate::library::reserved(&c) {
+                            bail!("{c:?} is a reserved folder name (Backups and Plugins are not library collections)");
+                        }
+                        d.join(c)
+                    }
                     None => d,
                 };
                 std::fs::create_dir_all(&folder)?;
                 let base = crate::library::safe(&name.unwrap_or_else(|| m.definitions[&component].name.clone()));
-                let mut path = folder.join(format!("{base}.sketchcraft"));
-                let mut k = 2;
-                while path.exists() {
-                    path = folder.join(format!("{base} {k}.sketchcraft"));
-                    k += 1;
-                }
-                std::fs::write(&path, serde_json::to_string(&model)?)?;
+                let bytes = serde_json::to_string(&model)?;
+                // a new file every time: never over an existing one (create_new also settles a race)
+                let mut k = 1;
+                let path = loop {
+                    let path = folder.join(if k == 1 { format!("{base}.sketchcraft") } else { format!("{base} {k}.sketchcraft") });
+                    match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+                        Ok(mut f) => {
+                            use std::io::Write;
+                            f.write_all(bytes.as_bytes())?;
+                            break path;
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && k < 10_000 => k += 1,
+                        Err(e) => return Err(e.into()),
+                    }
+                };
                 json!({"path": path.to_string_lossy()})
             }
             Command::LibraryAdd { paths, collection, dir } => {
                 let d = dir.map(std::path::PathBuf::from).unwrap_or_else(crate::library::default_dir);
-                json!({"added": crate::library::add_files(&d, &paths, collection.as_deref().unwrap_or(""))?})
+                json!({"added": crate::library::add_files(&d, &paths, collection.as_deref().unwrap_or(""), true)?})
             }
             Command::Purge => json!({"removed": crate::library::purge(m)}),
             Command::Skins => {

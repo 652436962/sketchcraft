@@ -173,18 +173,29 @@ export const MAX_COMMANDS = 10_000;
  */
 export function batcher() {
   let open = false;
+  let id: number | undefined;
+  // begin and end are sent in order, each after the last has answered (a plugin that finishes right
+  // after an un-awaited command must not get its end ahead of its begin)
+  let chain: Promise<unknown> = Promise.resolve();
+  const then = (f: () => Promise<unknown>) => (chain = chain.then(f, f));
   return {
     async begin() {
       if (!open) {
         open = true;
-        await exec({ cmd: "begin_batch" });
-      }
+        await then(async () => {
+          const r = await exec({ cmd: "begin_batch" });
+          id = typeof r.batch === "number" ? r.batch : undefined;
+        });
+      } else await chain;
     },
     async end() {
       if (open) {
         open = false;
-        await exec({ cmd: "end_batch" });
-      }
+        await then(async () => {
+          await exec(id === undefined ? { cmd: "end_batch" } : { cmd: "end_batch", id });
+          id = undefined;
+        });
+      } else await chain;
     },
   };
 }

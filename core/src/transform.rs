@@ -135,6 +135,7 @@ impl Model {
 
     /// Copy faces, groups or instances, offset by `by`. Returns the new ids.
     pub fn duplicate(&mut self, ids: &[Id], by: DVec3) -> Result<Vec<Id>> {
+        self.check_room(self.copy_cost(ids))?;
         let mut out = Vec::new();
         let mut loose = Vec::new();
         for &id in ids {
@@ -185,6 +186,8 @@ impl Model {
         if ids.len().saturating_mul(count) > 100_000 {
             bail!("that array would make over 100,000 copies: use fewer items or a smaller count");
         }
+        // by what is inside the ids, not how many ids there are
+        self.check_room(self.copy_cost(ids).saturating_mul(count))?;
         let mut out = Vec::new();
         for k in 1..=count {
             out.extend(self.duplicate(ids, by * k as f64)?);

@@ -411,7 +411,12 @@ pub fn report(m: &Model) -> Vec<BTreeMap<&'static str, String>> {
 pub const REPORT_COLUMNS: [&str; 12] = ["type", "id", "name", "component", "tag", "size_x_m", "size_y_m", "size_z_m", "faces", "area_m2", "volume_m3", "attributes"];
 
 pub fn report_csv(rows: &[BTreeMap<&'static str, String>]) -> String {
-    let q = |s: &str| if s.contains([',', '"', '\n']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() };
+    // a cell a spreadsheet would run as a formula (= + - @ tab CR first) gets a leading quote; real numbers stay numbers
+    let q = |s: &str| {
+        let number = s.parse::<f64>().is_ok_and(f64::is_finite);
+        let s = if !number && s.starts_with(['=', '+', '-', '@', '\t', '\r']) { format!("'{s}") } else { s.to_string() };
+        if s.contains([',', '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
+    };
     let mut out = REPORT_COLUMNS.join(",") + "\n";
     for r in rows {
         out += &REPORT_COLUMNS.iter().map(|c| q(r.get(c).map(|s| s.as_str()).unwrap_or(""))).collect::<Vec<_>>().join(",");

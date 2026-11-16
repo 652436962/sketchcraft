@@ -314,6 +314,27 @@ pub fn vet(caller: &Caller, cmd: &mut Value) -> Result<(), String> {
                 o.insert("dir".into(), Value::String(root.join("Library").to_string_lossy().into_owned()));
             }
         }
+        // the names an agent gives the library: one plain name each, never a folder path or a reserved folder
+        if matches!(name.as_str(), "save_to_library" | "library_add") {
+            for key in ["collection", "name"] {
+                if let Some(v) = cmd.get(key).and_then(Value::as_str).filter(|v| !v.trim().is_empty()) {
+                    crate::library::plain_name(v).map_err(|e| format!("\"{name}\" {key}: {e}"))?;
+                }
+            }
+        }
+        // library_add copies files: what it would create is judged like any other file an agent writes
+        if name == "library_add" {
+            let dir = cmd.get("dir").and_then(Value::as_str).map(PathBuf::from).unwrap_or_default();
+            let paths: Vec<String> = cmd.get("paths").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+            let collection = cmd.get("collection").and_then(Value::as_str).unwrap_or("").to_string();
+            let (_, plan) = crate::library::plan_add(&dir, &paths, &collection).map_err(|e| e.to_string())?;
+            let mut made = ws.made.lock().unwrap_or_else(|e| e.into_inner());
+            let dests: Vec<PathBuf> = plan.iter().map(|(_, d)| resolve(d)).collect();
+            if let Some(d) = dests.iter().find(|d| d.exists() && !made.contains(*d)) {
+                return Err(format!("{} already exists and wasn't made by this agent: an agent adds new files to the library, it doesn't replace the person's", d.display()));
+            }
+            made.extend(dests);
+        }
         for (c, key, exts) in WRITES.iter().filter(|(c, ..)| *c == name) {
             let Some(path) = cmd.get(*key).and_then(Value::as_str).map(str::to_string) else { continue };
             let p = Path::new(&path);
@@ -325,6 +346,21 @@ pub fn vet(caller: &Caller, cmd: &mut Value) -> Result<(), String> {
             let mut made = ws.made.lock().unwrap_or_else(|e| e.into_inner());
             if resolved.exists() && !made.contains(&resolved) {
                 return Err(format!("{path:?} already exists and wasn't made by this agent: an agent writes new file names, it doesn't replace the person's files"));
+            }
+            // the files an export writes beside the one it names (materials, textures) are held to the same rule
+            let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let textures = p.with_file_name(format!("{stem}_textures"));
+            let extras: Vec<PathBuf> = match *c {
+                "export_obj" => vec![p.with_extension("mtl"), textures],
+                "export_dae" => vec![textures],
+                _ => vec![],
+            };
+            for x in extras {
+                let x = resolve(&x);
+                if x.exists() && !made.contains(&x) {
+                    return Err(format!("{} already exists and wasn't made by this agent: \"{c}\" would write into it, and an agent doesn't replace the person's files", x.display()));
+                }
+                made.insert(x);
             }
             made.insert(resolved);
         }

@@ -23,7 +23,7 @@ pub fn cache_dir(name: &str) -> PathBuf {
     let base = {
         #[cfg(unix)]
         {
-            std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache"))).map(|d| d.join("sketchcraft"))
+            std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).or_else(|| if crate::live::running_as_cargo_test() { Some(std::env::temp_dir().join(format!("sketchcraft-test-cache-{}", std::process::id()))) } else { std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")) }).map(|d| d.join("sketchcraft"))
         }
         #[cfg(not(unix))]
         {

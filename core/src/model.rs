@@ -1016,6 +1016,7 @@ impl Model {
 
     /// Duplicate a group, offset by `by`. Returns the new group id.
     pub fn copy_group(&mut self, gid: Id, by: DVec3, name: Option<String>) -> Result<Id> {
+        self.check_room(self.copy_cost(&[gid]))?;
         let parent = self.groups.get(&gid).ok_or_else(|| anyhow!("{gid} is not a group"))?.parent;
         self.copy_group_into(gid, by, name, parent)
     }
@@ -1211,6 +1212,11 @@ fn sane3(v: DVec3) -> bool {
     sane(v.x) && sane(v.y) && sane(v.z)
 }
 
+/// The most one command may add (copies of heavy groups), and the most a model may hold:
+/// past these a model can't be saved, reloaded or drawn in reasonable time or memory.
+pub const MAX_GROWTH: usize = 1_000_000;
+pub const MAX_ENTITIES: usize = 8_000_000;
+
 impl Model {
     /// Every number the model holds is finite and within `MAX_COORD`. A model
     /// that fails this can't be saved (NaN would be written as `null` and the
@@ -1259,6 +1265,9 @@ impl Model {
         for d in self.definitions.values() {
             d.model.check_sane()?;
         }
+        if self.entity_count() > MAX_ENTITIES {
+            bail!("the model has more than {MAX_ENTITIES} points, edges and faces, so it was not saved");
+        }
         if self.text_bytes() > MAX_TEXT_BYTES {
             bail!("the model's names and notes add up to more than {} MB, so that was not done", MAX_TEXT_BYTES >> 20);
         }
@@ -1280,6 +1289,41 @@ impl Model {
             + self.definitions.values().map(|d| d.name.len() + d.model.text_bytes()).sum::<usize>()
             + notes
             + views
+    }
+
+    /// How much geometry the model holds (points, edges, faces and placements, with every
+    /// component's own once). Copying and saving are bounded by this, not by how many ids
+    /// a command names, since one id can stand for a whole subdivided model.
+    pub fn entity_count(&self) -> usize {
+        self.vertices.len() + self.edges.len() + self.faces.len() + self.instances.len() + self.definitions.values().map(|d| d.model.entity_count()).sum::<usize>()
+    }
+
+    /// What copying these faces, groups and placements once would add (see `entity_count`).
+    pub fn copy_cost(&self, ids: &[Id]) -> usize {
+        let mut cost = 0usize;
+        let mut trees: BTreeSet<Id> = BTreeSet::new();
+        for id in ids {
+            if self.groups.contains_key(id) {
+                trees.extend(self.subtree(*id));
+            } else if self.faces.contains_key(id) {
+                cost += 1 + self.faces[id].loops().map(|l| l.len()).sum::<usize>();
+            } else if self.instances.contains_key(id) {
+                cost += 1;
+            }
+        }
+        if !trees.is_empty() {
+            let inside = |g: &Option<Id>| g.is_some_and(|g| trees.contains(&g));
+            cost += self.vertices.values().filter(|v| inside(&v.group)).count() + self.edges.values().filter(|e| inside(&e.group)).count() + self.faces.values().filter(|f| inside(&f.group)).count() + self.instances.values().filter(|i| inside(&i.parent)).count();
+        }
+        cost
+    }
+
+    /// Refuse to grow past the limits: `adding` more entities in one go, or the model's total.
+    pub fn check_room(&self, adding: usize) -> Result<()> {
+        if adding > MAX_GROWTH || self.entity_count().saturating_add(adding) > MAX_ENTITIES {
+            bail!("that would add about {adding} points, edges and faces to a model of {}; the limits are {MAX_GROWTH} at a time and {MAX_ENTITIES} in all, so it was not done", self.entity_count());
+        }
+        Ok(())
     }
 
     /// Nothing drawn yet (a fresh model): not worth a backup.

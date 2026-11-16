@@ -95,7 +95,7 @@ fn fuzz_obj() {
 #[test]
 #[ignore]
 fn fuzz_skp() {
-    let dir = std::path::PathBuf::from(std::env::var("HOME").unwrap()).join("Documents/SketchCraft/skp-samples");
+    let dir = sketchcraft::live::default_doc().with_file_name("skp-samples"); // beside the model folder (a temp folder in tests unless SKETCHCRAFT_DOC says otherwise)
     let Ok(rd) = std::fs::read_dir(&dir) else { return println!("no SketchUp samples; skipped") };
     let iters: usize = std::env::var("FUZZ_SKP_ITERS").ok().and_then(|v| v.parse().ok()).unwrap_or(1500);
     let mut files: Vec<_> = rd.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "skp")).collect();

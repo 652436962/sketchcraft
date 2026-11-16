@@ -206,13 +206,35 @@ pub fn thumbnail_of_file(path: &str, px: u32) -> Result<Vec<u8>> {
     Ok(png)
 }
 
-/// Copy files into the library (a collection subfolder if given). OBJ files
-/// bring their .mtl along.
-pub fn add_files(dir: &Path, paths: &[String], collection: &str) -> Result<Vec<String>> {
-    let to = if collection.trim().is_empty() { dir.to_path_buf() } else { dir.join(safe(collection)) };
-    std::fs::create_dir_all(&to)?;
-    let to_real = std::fs::canonicalize(&to)?;
-    let mut added = Vec::new();
+/// Folder names the library never writes into: the model's own `Backups` and `Plugins` (a
+/// file there is a backup or code the app would run), and hidden names.
+pub fn reserved(name: &str) -> bool {
+    let n = name.trim();
+    n.starts_with('.') || n.eq_ignore_ascii_case("backups") || n.eq_ignore_ascii_case("plugins")
+}
+
+/// A collection or file name an agent may give: one plain name, no separators, drive letters
+/// or traversal, not hidden, and not a reserved folder.
+pub fn plain_name(s: &str) -> Result<()> {
+    let t = s.trim();
+    if t.is_empty() || t.contains(['/', '\\', ':', '\0']) || t.starts_with('.') || t.contains("..") || t.chars().any(char::is_control) {
+        bail!("{s:?} isn't a plain name (no folders, dots at the start or control characters)");
+    }
+    if reserved(&safe(t)) {
+        bail!("{s:?} is a reserved folder name (Backups and Plugins are not library collections)");
+    }
+    Ok(())
+}
+
+/// Where `add_files` would put each file: (source, destination) pairs, including the `.mtl`
+/// beside an OBJ. The destination folder is the library `dir`, or a collection inside it.
+pub fn plan_add(dir: &Path, paths: &[String], collection: &str) -> Result<(PathBuf, Vec<(PathBuf, PathBuf)>)> {
+    let coll = safe(collection);
+    if !collection.trim().is_empty() && reserved(&coll) {
+        bail!("{collection:?} is a reserved folder name (Backups and Plugins are not library collections)");
+    }
+    let to = if collection.trim().is_empty() { dir.to_path_buf() } else { dir.join(coll) };
+    let mut plan = Vec::new();
     for p in paths {
         let src = Path::new(p);
         let ext = src.extension().and_then(|x| x.to_str()).map(|x| x.to_ascii_lowercase()).unwrap_or_default();
@@ -220,8 +242,7 @@ pub fn add_files(dir: &Path, paths: &[String], collection: &str) -> Result<Vec<S
             bail!("{} isn't a model file ({})", src.display(), EXTS.join(", "));
         }
         let name = src.file_name().context("no file name")?;
-        let dest = to.join(name);
-        copy_into(src, &dest, &to_real)?;
+        plan.push((src.to_path_buf(), to.join(name)));
         if ext == "obj" {
             if let Ok(text) = std::fs::read_to_string(src) {
                 for line in text.lines().filter(|l| l.starts_with("mtllib")) {
@@ -229,12 +250,37 @@ pub fn add_files(dir: &Path, paths: &[String], collection: &str) -> Result<Vec<S
                     let mtl = line[6..].trim();
                     let plain = !mtl.is_empty() && Path::new(mtl).file_name().is_some_and(|n| n == std::ffi::OsStr::new(mtl)) && !mtl.contains(['/', '\\', ':']);
                     if let (true, Some(parent)) = (plain && mtl.to_ascii_lowercase().ends_with(".mtl"), src.parent()) {
-                        copy_into(&parent.join(mtl), &to.join(mtl), &to_real).ok();
+                        plan.push((parent.join(mtl), to.join(mtl)));
                     }
                 }
             }
         }
-        added.push(dest.to_string_lossy().to_string());
+    }
+    Ok((to, plan))
+}
+
+/// Copy files into the library (a collection subfolder if given). OBJ files
+/// bring their .mtl along. With `replace` false a file that is already there is
+/// an error (nothing is overwritten).
+pub fn add_files(dir: &Path, paths: &[String], collection: &str, replace: bool) -> Result<Vec<String>> {
+    let (to, plan) = plan_add(dir, paths, collection)?;
+    std::fs::create_dir_all(&to)?;
+    let to_real = std::fs::canonicalize(&to)?;
+    if !replace {
+        for (src, dest) in &plan {
+            if dest.exists() && std::fs::canonicalize(src).ok() != std::fs::canonicalize(dest).ok() {
+                bail!("{} is already in the library, so nothing was replaced", dest.display());
+            }
+        }
+    }
+    let mut added = Vec::new();
+    for (src, dest) in &plan {
+        let is_model = paths.iter().any(|p| Path::new(p) == src.as_path());
+        let r = copy_into(src, dest, &to_real);
+        if is_model {
+            r?;
+            added.push(dest.to_string_lossy().to_string());
+        }
     }
     Ok(added)
 }
