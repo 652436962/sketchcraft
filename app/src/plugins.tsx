@@ -1,10 +1,17 @@
 // Plugins: small scripts that add commands to SketchCraft (see docs/PLUGINS.md).
 // Each run gets a fresh Web Worker: no page, no network, no files. Its only
-// way out is ctx.run(), and the app refuses commands that read or write files.
+// way out is ctx.run(), and the engine only lets those commands model: draw,
+// edit, inspect (core/src/policy.rs: an allowlist, enforced in Rust for
+// JavaScript plugins and for SketchUp Ruby alike).
 import { useRef, useState } from "react";
 import { confirm } from "./ask";
 import { exec, type Reply } from "./engine";
 import { pickSave } from "./files";
+import { LOCKDOWN_SOURCE } from "./lockdown";
+import { cleanForm, cleanResult, type PluginField, type PluginForm, type PluginResult } from "./pluginclean";
+
+export { cleanForm, cleanResult };
+export type { PluginField, PluginForm, PluginResult };
 import { formatLength, parseLength } from "./units";
 
 export interface PluginCommand {
@@ -35,31 +42,6 @@ export interface Plugin {
   entry?: string[];
 }
 
-export interface PluginResult {
-  title?: string;
-  text?: string;
-  table?: { columns: string[]; rows: (string | number)[][] };
-}
-
-/** A form a plugin asks you to fill in (ctx.ask). Lengths are in meters. */
-export interface PluginForm {
-  title?: string;
-  text?: string;
-  ok?: string;
-  fields: PluginField[];
-}
-export interface PluginField {
-  id: string;
-  label: string;
-  /** "length" (typed in the model's units, answered in meters), "number", "text", "choice" or "check" */
-  type?: "length" | "number" | "text" | "choice" | "check";
-  value?: string | number | boolean;
-  options?: string[];
-  min?: number;
-  max?: number;
-  hint?: string;
-}
-
 export interface PluginList {
   dir: string;
   plugins: Plugin[];
@@ -73,24 +55,42 @@ export async function loadPlugins(): Promise<PluginList> {
   return { dir: String(r.dir ?? ""), plugins, problems: (r.problems as PluginList["problems"]) ?? [] };
 }
 
-/** Commands a plugin may not send: anything that reads or writes files. */
-const FILE_KEYS = ["path", "out", "dir", "file", "folder", "paths"];
-const FILE_CMDS = new Set(["save", "open", "reveal", "save_text", "save_image", "save_skin", "save_to_library", "library_add", "insert_file", "animate", "sheets", "blueprint", "timeline_frames", "video_frame", "video_finish", "plugins", "library"]);
+/**
+ * A first check on what a plugin sends. The real gate is the engine's:
+ * commands from plugins run as `execPlugin`, which allows modeling and
+ * inspection only (no files, programs, network or plugin management).
+ */
 export function allowed(cmd: Record<string, unknown>): string | null {
-  const name = String(cmd?.cmd ?? "");
-  if (!name) return "a command needs a cmd";
-  if (FILE_CMDS.has(name) || name.startsWith("import_") || name.startsWith("export_")) return `plugins can't use "${name}" (it reads or writes files)`;
-  if (FILE_KEYS.some((k) => k in cmd)) return `plugins can't pass file paths ("${name}")`;
+  if (!cmd || typeof cmd !== "object" || Array.isArray(cmd)) return "a command is an object with a cmd";
+  if (typeof cmd.cmd !== "string" || !cmd.cmd) return "a command needs a cmd";
   return null;
 }
+
+// ---- what a plugin hands the interface -----------------------------------------------
+// Plugin code is untrusted, so what it asks the window to show is checked
+// and cut down before React sees it (a wrong shape can't blank the app).
+
+/**
+ * Always shown above anything a plugin puts on screen, in the app's own words
+ * (the plugin can't change it), so a window can't pass for SketchCraft's.
+ */
+export function PluginBanner({ plugin, form }: { plugin: Plugin; form?: boolean }) {
+  return (
+    <p className="plugin-banner small" role="note">
+      {plugin.builtin ? "From a built-in plugin." : `This ${form ? "form" : "window"} comes from the ${plugin.ruby ? "SketchUp Ruby " : ""}plugin “${plugin.name.slice(0, 60)}”, not from SketchCraft.`}
+      {form && !plugin.builtin ? " Never type a password or a key here." : ""}
+    </p>
+  );
+}
+
 
 // What runs in the worker before the plugin: the sketchcraft API, and no
 // way to reach the network or load more code.
 const PRELUDE = `
 "use strict";
-for (const k of ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "indexedDB", "caches"]) {
-  try { Object.defineProperty(self, k, { value: undefined, configurable: false }); } catch {}
-}
+// No network, no more code, and no way to start another worker (a new worker
+// would begin without any of this lockdown).
+${LOCKDOWN_SOURCE}
 const __commands = Object.create(null);
 const __tools = Object.create(null);
 let __tool = null; // the tool in use: { handlers, ctx }
@@ -216,13 +216,13 @@ export function runPlugin(
         worker.postMessage({ type: "reply", rid: m.rid, reply });
       } else if (m.type === "ask") {
         clearTimeout(timer);
-        const answers = await env.ask(m.form as PluginForm, plugin);
+        const answers = await env.ask(cleanForm(m.form), plugin);
         arm();
         worker.postMessage({ type: "reply", rid: m.rid, reply: answers });
-      } else if (m.type === "show") env.show(m.result as PluginResult, plugin);
-      else if (m.type === "toast") env.toast(String(m.text));
+      } else if (m.type === "show") env.show(cleanResult(m.result), plugin);
+      else if (m.type === "toast") env.toast(String(m.text).slice(0, 300));
       else if (m.type === "error") {
-        env.toast(`${plugin.name}: ${m.error}`, true);
+        env.toast(`${plugin.name}: ${String(m.error).slice(0, 300)}`, true);
         finish();
       } else if (m.type === "done") {
         env.onDone?.();
@@ -257,6 +257,7 @@ export function PluginResultDialog({ result, plugin, onClose, onToast }: { resul
           <b>{result.title ?? plugin.name}</b>
           <span className="muted">{plugin.builtin ? "Built-in plugin" : `Plugin: ${plugin.name}${plugin.version ? ` ${plugin.version}` : ""}`}</span>
         </div>
+        <PluginBanner plugin={plugin} />
         {result.text && <p className="plugin-text">{result.text}</p>}
         {t && (
           <div className="plugin-table">
@@ -334,7 +335,31 @@ export function PluginsDialog({
       fr.onerror = () => res("");
       fr.readAsDataURL(f);
     });
-    const r = await exec({ cmd: "install_plugin", data, name: f.name });
+    // look first: what is it, what does it contain, what would it replace
+    const look = await exec({ cmd: "install_plugin", data, name: f.name, preview: true });
+    if (!look.ok) {
+      setBusy(false);
+      return onToast(`Couldn't read ${f.name}: ${look.error}`, true);
+    }
+    const files = (look.files as { name: string; bytes: number }[]) ?? [];
+    const cmds = (look.commands as string[]) ?? [];
+    const was = look.installed as { version?: string | null; sha256?: string } | null;
+    const replacing = !!was;
+    const lines = [
+      `${look.kind}${look.version ? ` · version ${look.version}` : ""}${look.author ? ` · by ${look.author}` : ""}`,
+      look.description ? String(look.description) : "",
+      cmds.length ? `Commands: ${cmds.slice(0, 12).join(", ")}` : "",
+      `${files.length} file${files.length === 1 ? "" : "s"}: ${files.slice(0, 8).map((x) => `${x.name} (${x.bytes} B)`).join(", ")}${files.length > 8 ? ", …" : ""}`,
+      `Fingerprint (SHA-256): ${String(look.sha256).slice(0, 16)}…`,
+      replacing ? `This REPLACES the installed copy (version ${was?.version ?? "unknown"}${was?.sha256 === look.sha256 ? ", identical files" : ", different files"}). The old one is kept in .removed.` : "",
+      "Plugins can draw, edit and inspect the model. Install only ones you trust.",
+    ].filter(Boolean);
+    const yes = await confirm(`${replacing ? "Replace" : "Install"} “${String(look.name).slice(0, 60)}”?`, lines.join("\n"), replacing ? "Replace" : "Install");
+    if (!yes) {
+      setBusy(false);
+      return;
+    }
+    const r = await exec({ cmd: "install_plugin", data, name: f.name, replace: replacing });
     setBusy(false);
     if (!r.ok) return onToast(`Couldn't install ${f.name}: ${r.error}`, true);
     await reload();
@@ -357,7 +382,7 @@ export function PluginsDialog({
       <div className="sheet plugins-dlg" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Plugins">
         <div className="sheet-head">
           <b>Plugins</b>
-          <span className="muted">Add commands to SketchCraft. They run sandboxed: no network, no files, and what they change can be undone.</span>
+          <span className="muted">Add commands to SketchCraft. They can draw, edit and inspect the model, nothing else: the app refuses any plugin command that touches files, other programs or the network, and what they change can be undone.</span>
         </div>
         <div className="plugin-list">
           {list.plugins.map((p) => (
@@ -458,6 +483,7 @@ export function PluginFormDialog({ form, plugin, units, done }: { form: PluginFo
           <b>{form.title ?? plugin.name}</b>
           <span className="muted">{plugin.builtin ? "Built-in plugin" : `Plugin: ${plugin.name}`}</span>
         </div>
+        <PluginBanner plugin={plugin} form />
         {form.text && <p className="plugin-text">{form.text}</p>}
         <div className="kv plugin-fields">
           {fields.map((f) =>
@@ -586,17 +612,17 @@ export function startPluginTool(
       worker.postMessage({ type: "reply", rid: m.rid, reply });
     } else if (m.type === "ask") {
       clearTimeout(timer);
-      const answers = await env.ask(m.form as PluginForm, plugin);
+      const answers = await env.ask(cleanForm(m.form), plugin);
       arm();
       worker.postMessage({ type: "reply", rid: m.rid, reply: answers });
-    } else if (m.type === "show") env.show(m.result as PluginResult, plugin);
-    else if (m.type === "toast") env.toast(String(m.text));
+    } else if (m.type === "show") env.show(cleanResult(m.result), plugin);
+    else if (m.type === "toast") env.toast(String(m.text).slice(0, 300));
     else if (m.type === "preview") env.preview(Array.isArray(m.lines) ? m.lines.slice(0, 5000) : []);
     else if (m.type === "hint") env.hint(String(m.text).slice(0, 300));
     else if (m.type === "anchor") env.anchor(Array.isArray(m.point) && m.point.length === 3 ? m.point : null);
     else if (m.type === "finish") end();
     else if (m.type === "error") {
-      env.toast(`${plugin.name}: ${m.error}`, true);
+      env.toast(`${plugin.name}: ${String(m.error).slice(0, 300)}`, true);
       end();
     } else if (m.type === "handled") {
       busy = false;

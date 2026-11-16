@@ -10,8 +10,22 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-export const BRIDGE = 'http://127.0.0.1:5175';
-export const PAGE = 'http://127.0.0.1:5174/';
+// the dev page and bridge ports (defaults 5174 and 5175; set both for a throwaway instance)
+export const BRIDGE = `http://127.0.0.1:${process.env.VITE_BRIDGE_PORT ?? 5175}`;
+export const PAGE = `http://127.0.0.1:${process.env.SKETCHCRAFT_DEV_PORT ?? 5174}/`;
+
+/** The bridge's per-launch token: from SKETCHCRAFT_BRIDGE_TOKEN, else the file the bridge wrote beside the model. */
+export function bridgeToken() {
+  if (process.env.SKETCHCRAFT_BRIDGE_TOKEN) return process.env.SKETCHCRAFT_BRIDGE_TOKEN;
+  const doc = process.env.SKETCHCRAFT_DOC ?? path.join(os.homedir(), 'Documents/SketchCraft/live.sketchcraft');
+  const file = process.env.SKETCHCRAFT_BRIDGE_TOKEN_FILE ?? path.join(path.dirname(doc), '.bridge-token');
+  try {
+    return fs.readFileSync(file, 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+export const authHeaders = () => ({ 'X-Sketchcraft-Token': bridgeToken() });
 
 /** A browser: Playwright from the project if installed, else the /design skill's copy. */
 export async function chromium() {
@@ -53,14 +67,14 @@ export async function launch() {
 
 /** Send one engine command to the bridge. */
 export async function exec(cmd) {
-  const r = await fetch(BRIDGE + '/exec', { method: 'POST', body: JSON.stringify(cmd) }).then((r) => r.json());
+  const r = await fetch(BRIDGE + '/exec', { method: 'POST', headers: authHeaders(), body: JSON.stringify(cmd) }).then((r) => r.json());
   if (!r.ok) throw new Error(`${cmd.cmd}: ${r.error}`);
   return r;
 }
 
 async function up(url) {
   try {
-    await fetch(url, { signal: AbortSignal.timeout(800) });
+    await fetch(url, { signal: AbortSignal.timeout(800), headers: authHeaders() });
     return true;
   } catch {
     return false;
@@ -73,11 +87,14 @@ export async function servers() {
   if (!(await up(BRIDGE + '/scene'))) {
     const bin = path.join(ROOT, 'target/release/sketchcraft');
     if (!fs.existsSync(bin)) throw new Error('build first: cargo build --release');
-    const doc = path.join(os.tmpdir(), `sketchcraft-demo-${process.pid}.sketchcraft`);
-    kids.push(spawn(bin, ['bridge'], { env: { ...process.env, SKETCHCRAFT_DOC: doc }, stdio: 'ignore' }));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sketchcraft-demo-'));
+    // a bridge of our own: its own model and token (the dev page gets the token from the environment too)
+    process.env.SKETCHCRAFT_BRIDGE_TOKEN = Math.random().toString(16).slice(2).padEnd(16, '0') + Date.now().toString(16);
+    process.env.SKETCHCRAFT_DOC = path.join(dir, 'live.sketchcraft');
+    kids.push(spawn(bin, ['bridge'], { env: process.env, stdio: 'ignore' }));
   }
   if (!(await up(PAGE))) {
-    kids.push(spawn('npx', ['vite', '--host', '127.0.0.1', '--port', '5174', '--strictPort'], { cwd: path.join(ROOT, 'app'), stdio: 'ignore' }));
+    kids.push(spawn('npx', ['vite', '--host', '127.0.0.1', '--port', String(process.env.SKETCHCRAFT_DEV_PORT ?? 5174), '--strictPort'], { cwd: path.join(ROOT, 'app'), stdio: 'ignore', env: process.env }));
   }
   for (let i = 0; i < 60 && !((await up(BRIDGE + '/scene')) && (await up(PAGE))); i++) await new Promise((r) => setTimeout(r, 500));
   return () => kids.forEach((k) => k.kill());

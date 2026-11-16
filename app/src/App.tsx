@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { UpdateCard, checkForUpdatesNow } from "./updater";
 import { ask, AskHost } from "./ask";
-import { exec, inTauri, loadScene, sync, type Reply, type Scene, type Vec3 } from "./engine";
+import { exec, execPlugin, inTauri, loadScene, sync, type Reply, type Scene, type Vec3 } from "./engine";
 import { Icons, Logo } from "./icons";
 import { BuildTools, ContextMenu, contextItems, EntityInfo, Environments, Library, LocationDialog, Outliner, RenderDialog, Sandbox, SheetsDialog, ShortcutSheet, Templates, Textures, Views } from "./panels";
 import { EMPTY, isEmpty, selIds, type Sel } from "./selection";
@@ -17,7 +17,8 @@ import { AppearanceDialog, WorkspaceDialog } from "./appearance";
 import { WorkspaceStrip } from "./wsstrip";
 import { Toolbar } from "./toolbar";
 import { runRuby } from "./ruby";
-import { loadPlugins, PluginFormDialog, PluginResultDialog, PluginsDialog, runPlugin, startPluginTool, type Plugin, type PluginCommand, type PluginForm, type PluginList, type PluginResult, type ToolSession } from "./plugins";
+import { cleanForm, cleanResult, loadPlugins, PluginFormDialog, PluginResultDialog, PluginsDialog, runPlugin, startPluginTool, type Plugin, type PluginCommand, type PluginForm, type PluginList, type PluginResult, type ToolSession } from "./plugins";
+import { ErrorBoundary } from "./boundary";
 import { PhotoModeler } from "./photomodel";
 import { RefImageDialog } from "./refimage";
 import { Text3dDialog } from "./text3d";
@@ -371,11 +372,33 @@ export default function App() {
     async (cmd: Record<string, unknown>): Promise<Reply> => {
       const r = await exec(cmd);
       if (!r.ok) say(r.error ?? "That didn't work", true);
+      else if (r.save_error) say(`Couldn't save your model: ${r.save_error}`, true);
       await refresh();
       return r;
     },
     [refresh, say]
   );
+
+  // what plugin code asks for (JavaScript or Ruby): the engine only lets it model
+  const runForPlugin = useCallback(
+    async (cmd: Record<string, unknown>): Promise<Reply> => {
+      const r = await execPlugin(cmd);
+      if (!r.ok) say(r.error ?? "That didn't work", true);
+      await refresh();
+      return r;
+    },
+    [refresh, say]
+  );
+
+  // a notice from the engine (a damaged model file was set aside...): say it once
+  const lastNotice = useRef("");
+  useEffect(() => {
+    const n = scene?.notice;
+    if (n && n !== lastNotice.current) {
+      lastNotice.current = n;
+      say(n, true);
+    }
+  }, [scene, say]);
 
   useEffect(() => {
     refresh();
@@ -667,7 +690,7 @@ export default function App() {
     const session = startPluginTool(plugin, toolId, {
       selection: { faces: sel.faces, edges: sel.edges, groups: sel.groups, instances: sel.instances },
       units: scene?.units || "m",
-      run: (cmd) => run(cmd),
+      run: (cmd) => runForPlugin(cmd),
       show: (result, pl) => setPluginShown({ result, plugin: pl }),
       toast: (t, bad) => say(t, bad),
       ask: (form, pl) => new Promise((resolve) => setPluginForm({ form, plugin: pl, done: (a) => (setPluginForm(null), resolve(a)) })),
@@ -711,13 +734,13 @@ export default function App() {
         const need = r.need;
         const got = await new Promise<Record<string, unknown> | null>((resolve) =>
           setPluginForm({
-            form: {
+            form: cleanForm({
               title: need.title,
               fields: need.prompts.map((label, i) => {
                 const list = need.lists[i];
                 return list && list.includes("|") ? { id: `f${i}`, label, type: "choice" as const, options: list.split("|"), value: need.defaults[i] } : { id: `f${i}`, label, type: "text" as const, value: need.defaults[i] ?? "" };
               }),
-            },
+            }),
             plugin,
             done: (a) => (setPluginForm(null), resolve(a)),
           }),
@@ -729,7 +752,8 @@ export default function App() {
       if (r.error) return say(`${plugin.name}: ${r.error}`, true);
       let failed = "";
       for (const [i, cmd] of r.journal.entries()) {
-        const res = await exec(cmd);
+        // Ruby's recorded commands are plugin commands too: same limits as JavaScript plugins
+        const res = await execPlugin(cmd);
         if (!res.ok) {
           failed = `step ${i + 1} (${String(cmd.cmd)}): ${res.error}`;
           break;
@@ -737,9 +761,9 @@ export default function App() {
       }
       await refresh();
       setPluginRuns((n) => n + 1);
-      for (const t of r.toasts) say(t);
+      for (const t of r.toasts.slice(0, 5)) say(String(t).slice(0, 300));
       if (failed) say(`${plugin.name} stopped at ${failed}. ⌘Z undoes what it did.`, true);
-      if (r.out.trim()) setPluginShown({ result: { title: plugin.name, text: r.out.trim() }, plugin });
+      if (r.out.trim()) setPluginShown({ result: cleanResult({ title: plugin.name, text: r.out.trim() }), plugin });
       return;
     }
     say(`${plugin.name} kept asking for input, so it was stopped.`, true);
@@ -753,7 +777,7 @@ export default function App() {
       onDone: () => setPluginRuns((n) => n + 1),
       selection: { faces: sel.faces, edges: sel.edges, groups: sel.groups, instances: sel.instances },
       units: scene?.units || "m",
-      run: (cmd) => run(cmd),
+      run: (cmd) => runForPlugin(cmd),
       show: (result, pl) => setPluginShown({ result, plugin: pl }),
       toast: (t, bad) => say(t, bad),
       ask: (form, pl) =>
@@ -1283,9 +1307,17 @@ export default function App() {
         {showRef && scene && <RefImageDialog scene={scene} run={run} onClose={() => setShowRef(false)} onToast={say} />}
         {showPhotoModel && scene && <PhotoModeler scene={scene} run={run} onClose={() => setShowPhotoModel(false)} onToast={say} />}
         {showSkins && <AppearanceDialog current={skin} onPick={wearSkin} onClose={() => setShowSkins(false)} onToast={say} layout={layout} onLayout={setLayout} />}
-        {pluginForm && <PluginFormDialog form={pluginForm.form} plugin={pluginForm.plugin} units={scene?.units || "m"} done={pluginForm.done} />}
+        {pluginForm && (
+          <ErrorBoundary onError={() => pluginForm.done(null)} fallback={() => null}>
+            <PluginFormDialog form={pluginForm.form} plugin={pluginForm.plugin} units={scene?.units || "m"} done={pluginForm.done} />
+          </ErrorBoundary>
+        )}
         {showPlugins && <PluginsDialog list={plugins} reload={reloadPlugins} onClose={() => setShowPlugins(false)} onToast={say} commandsOf={(p) => livePlugins.find((x) => x.id === p.id)?.commands ?? p.commands} />}
-        {pluginShown && <PluginResultDialog result={pluginShown.result} plugin={pluginShown.plugin} onClose={() => setPluginShown(null)} onToast={say} />}
+        {pluginShown && (
+          <ErrorBoundary onError={() => setPluginShown(null)} fallback={() => null}>
+            <PluginResultDialog result={pluginShown.result} plugin={pluginShown.plugin} onClose={() => setPluginShown(null)} onToast={say} />
+          </ErrorBoundary>
+        )}
         {showWs && <WorkspaceDialog ws={ws} onChange={editWs} onReset={() => editWs(null)} onClose={() => setShowWs(false)} />}
         {toast && <div className={`toast ${toast.bad ? "bad" : ""}`}>{toast.text}</div>}
         <AskHost />

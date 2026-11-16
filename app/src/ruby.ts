@@ -3,15 +3,11 @@
 // SketchCraft commands they recorded. Both steps run in sandboxed workers (no
 // network, no files); the app replays the commands, so they undo as usual.
 import SKETCHUP_RB from "./ruby/sketchup.rb?raw";
+import { LOCKDOWN_SOURCE } from "./lockdown";
 import type { Plugin } from "./plugins";
 
 // the same lockdown as JavaScript plugins (see plugins.tsx)
-const LOCKDOWN = `
-"use strict";
-for (const k of ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "indexedDB", "caches"]) {
-  try { Object.defineProperty(self, k, { value: undefined, configurable: false }); } catch {}
-}
-`;
+const LOCKDOWN = `"use strict";\n${LOCKDOWN_SOURCE}`;
 
 let runtime: Promise<string> | null = null;
 let compiler: Promise<string> | null = null;
@@ -63,26 +59,66 @@ self.onmessage = (e) => {
   return r as { js?: string; error?: string };
 }
 
-// compiled JavaScript is kept between sessions (by a hash of the Ruby), so
-// the 2 MB compiler only loads the first time a script is seen
+// Compiled JavaScript is kept between sessions, so the 2 MB compiler only
+// loads the first time a script is seen. The key is a SHA-256 of the Ruby
+// source (all its files and the compiler's version), and the entry stores a
+// SHA-256 of the JavaScript beside it: an entry that doesn't match its own
+// hash (damaged or edited) is thrown away and compiled again, never run.
+// Old entries are dropped, so the cache can't grow without end or outlive
+// the plugins it was made for.
 const OPAL = "opal-1.7.3";
-function hash(s: string) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
-  return (h >>> 0).toString(36) + s.length.toString(36);
+const CACHE_PREFIX = `sketchcraft.rubyjs.${OPAL}.`;
+const CACHE_MAX = 40;
+
+async function sha256(s: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
 }
-async function cachedCompile(files: Record<string, string>): Promise<{ js?: string; error?: string }> {
-  const key = `sketchcraft.rubyjs.${OPAL}.${hash(JSON.stringify(files))}`;
+
+function dropOldCache() {
   try {
-    const hit = localStorage.getItem(key);
-    if (hit) return { js: hit };
+    const keys: { k: string; t: number }[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k?.startsWith("sketchcraft.rubyjs.")) continue;
+      // other Opal versions' entries are never used again
+      if (!k.startsWith(CACHE_PREFIX)) {
+        keys.push({ k, t: 0 });
+        continue;
+      }
+      let t = 0;
+      try {
+        t = JSON.parse(localStorage.getItem(k) ?? "{}").t ?? 0;
+      } catch {
+        /* unreadable: oldest */
+      }
+      keys.push({ k, t });
+    }
+    keys.sort((a, b) => a.t - b.t);
+    for (const { k } of keys.slice(0, Math.max(0, keys.length - CACHE_MAX))) localStorage.removeItem(k);
   } catch {
-    /* no storage: compile every time */
+    /* no storage */
+  }
+}
+
+async function cachedCompile(files: Record<string, string>): Promise<{ js?: string; error?: string }> {
+  let key = "";
+  try {
+    key = CACHE_PREFIX + (await sha256(JSON.stringify(files)));
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const hit = JSON.parse(raw) as { js?: string; h?: string };
+      if (typeof hit.js === "string" && typeof hit.h === "string" && (await sha256(hit.js)) === hit.h) return { js: hit.js };
+      localStorage.removeItem(key); // doesn't match its own hash: not trusted
+    }
+  } catch {
+    /* no storage or no crypto: compile every time */
   }
   const r = await compile(files);
-  if (r.js) {
+  if (r.js && key) {
     try {
-      localStorage.setItem(key, r.js);
+      localStorage.setItem(key, JSON.stringify({ js: r.js, h: await sha256(r.js), t: Date.now() }));
+      dropOldCache();
     } catch {
       /* full: fine, it compiles again next time */
     }
@@ -93,12 +129,15 @@ async function cachedCompile(files: Record<string, string>): Promise<{ js?: stri
 const compiled = new Map<string, Promise<{ js?: string; error?: string }>>();
 let apiJs: Promise<{ js?: string; error?: string }> | null = null;
 
-/** The plugin's files compiled, once per version of them. */
-function compiledPlugin(p: Plugin): Promise<{ js?: string; error?: string }> {
+/** The plugin's files compiled, once per version of them (keyed by a hash of every file). */
+async function compiledPlugin(p: Plugin): Promise<{ js?: string; error?: string }> {
   const files = p.files ?? {};
-  const key = `${p.id}:${Object.entries(files)
-    .map(([k, v]) => `${k}:${v.length}:${v.slice(0, 64)}`)
-    .join("|")}`;
+  let key = p.id;
+  try {
+    key += ":" + (await sha256(JSON.stringify(files)));
+  } catch {
+    key += ":" + JSON.stringify(files); // no crypto: the whole text is the key
+  }
   if (!compiled.has(key)) {
     const named = Object.fromEntries(Object.entries(files).map(([k, v]) => [k.replace(/\.rb$/i, ""), v]));
     compiled.set(key, cachedCompile(named));
@@ -182,7 +221,9 @@ for (const n of ["sketchup", "sketchup.rb", "extensions", "extensions.rb", "lang
     return req.call(Opal, n);
   };
 })();`;
-  const r = await worker(`${LOCKDOWN}\n${rt}\n;\n${api.js}\n;\n${mine.js}\n;\n${shims}\n;\n${driver}`, 30_000, {
+  // loading it (no menu item chosen) gets a short leash: it runs on every launch
+  const limit = opts.item == null ? 10_000 : 30_000;
+  const r = await worker(`${LOCKDOWN}\n${rt}\n;\n${api.js}\n;\n${mine.js}\n;\n${shims}\n;\n${driver}`, limit, {
     runId: Date.now().toString(36),
     entries,
     item: opts.item ?? null,

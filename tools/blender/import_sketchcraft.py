@@ -23,11 +23,23 @@ ap.add_argument("blend_json")
 ap.add_argument("out")
 ap.add_argument("--levels", type=int, default=None)
 ap.add_argument("--bridge", default="http://127.0.0.1:5175")
+ap.add_argument("--token-file", default=None, help="the bridge's token file (default: .bridge-token beside the live model, or $SKETCHCRAFT_BRIDGE_TOKEN)")
 args = ap.parse_args()
 
 
+def token():
+    import os
+    if os.environ.get("SKETCHCRAFT_BRIDGE_TOKEN"):
+        return os.environ["SKETCHCRAFT_BRIDGE_TOKEN"]
+    doc = os.environ.get("SKETCHCRAFT_DOC") or os.path.expanduser("~/Documents/SketchCraft/live.sketchcraft")
+    path = args.token_file or os.path.join(os.path.dirname(doc), ".bridge-token")
+    with open(path) as f:
+        return f.read().strip()
+
+
 def ex(cmd):
-    r = json.load(urllib.request.urlopen(urllib.request.Request(args.bridge + "/exec", json.dumps(cmd).encode()), timeout=600))
+    req = urllib.request.Request(args.bridge + "/exec", json.dumps(cmd).encode(), {"X-Sketchcraft-Token": token()})
+    r = json.load(urllib.request.urlopen(req, timeout=600))
     if not r.get("ok"):
         raise SystemExit(f"{cmd.get('cmd')}: {r.get('error')}")
     return r

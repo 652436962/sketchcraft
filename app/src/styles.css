@@ -3135,6 +3135,13 @@ input[type="color"]::-moz-color-swatch {
 .sheet.plugin-result {
   width: min(760px, calc(100vw - 32px));
 }
+.plugin-banner {
+  margin: 0 0 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--text);
+}
 .plugin-text {
   margin: 0 0 12px;
   white-space: pre-wrap;

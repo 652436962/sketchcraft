@@ -4,7 +4,7 @@
 //   node tools/ruby-tests/run.mjs
 import fs from 'node:fs';
 import path from 'node:path';
-import { launch, PAGE, ROOT } from '../demos/lib.mjs';
+import { authHeaders, BRIDGE, launch, PAGE, ROOT } from '../demos/lib.mjs';
 
 const dir = path.join(ROOT, 'tools/ruby-tests');
 const b64 = (f) => fs.readFileSync(f).toString('base64');
@@ -18,7 +18,9 @@ const b = await launch();
 const p = await (await b.newContext()).newPage();
 await p.goto(PAGE);
 await p.waitForSelector('.viewport canvas');
-const X = (c) => p.evaluate(async (c) => (await fetch('http://127.0.0.1:5175/exec', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c) })).json(), c);
+// X: as the person using the app (installing plugins, new model); the page's own calls carry the token too
+const HDR = { 'Content-Type': 'application/json', ...authHeaders() };
+const X = (c) => p.evaluate(async ({ c, BRIDGE, HDR }) => (await fetch(BRIDGE + '/exec', { method: 'POST', headers: HDR, body: JSON.stringify(c) })).json(), { c, BRIDGE, HDR });
 let failed = 0;
 const check = (ok, what) => {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}`);
@@ -27,9 +29,9 @@ const check = (ok, what) => {
 
 // run one menu item of an installed plugin, answering forms with their defaults
 async function runItem(id, label, selection = []) {
-  return p.evaluate(async ({ id, label, selection }) => {
+  return p.evaluate(async ({ id, label, selection, BRIDGE, HDR }) => {
     const { runRuby } = await import('/src/ruby.ts');
-    const call = async (c) => (await fetch('http://127.0.0.1:5175/exec', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c) })).json();
+    const call = async (c, as) => (await fetch(BRIDGE + '/exec' + (as ? '?as=plugin' : ''), { method: 'POST', headers: HDR, body: JSON.stringify(c) })).json();
     const list = await call({ cmd: 'plugins' });
     const pl = list.plugins.find((x) => x.id === id);
     if (!pl) return { error: 'not installed' };
@@ -42,20 +44,21 @@ async function runItem(id, label, selection = []) {
       if (r.need) { answers.push(r.need.defaults.map((d, i) => (r.need.lists[i] && r.need.lists[i].includes('|') ? d || r.need.lists[i].split('|')[0] : d))); continue; }
       if (r.error) return { error: r.error, menu };
       for (const cmd of r.journal) {
-        const res = await call(cmd);
+        // replayed as plugin commands, like the app does
+        const res = await call(cmd, 'plugin');
         if (!res.ok) return { error: `replay ${cmd.cmd}: ${res.error}`, menu };
       }
       return { ok: true, menu, out: r.out, toasts: r.toasts, steps: r.journal.length };
     }
     return { error: 'kept asking' };
-  }, { id, label, selection });
+  }, { id, label, selection, BRIDGE, HDR });
 }
 
 const parts = async () => (await X({ cmd: 'parts' })).parts;
 const inch = (m) => Math.round(m / 0.0254);
 
-for (const f of ['stairs.rb', 'fence_posts.rb', 'selection.rb', 'unsupported.rb']) check((await X({ cmd: 'install_plugin', data: b64(path.join(dir, f)), name: f })).ok, `install ${f}`);
-check((await X({ cmd: 'install_plugin', data: b64(rbz), name: 'house_kit.rbz' })).ok, 'install house_kit.rbz');
+for (const f of ['stairs.rb', 'fence_posts.rb', 'selection.rb', 'unsupported.rb']) check((await X({ cmd: 'install_plugin', data: b64(path.join(dir, f)), name: f, replace: true })).ok, `install ${f}`);
+check((await X({ cmd: 'install_plugin', data: b64(rbz), name: 'house_kit.rbz', replace: true })).ok, 'install house_kit.rbz');
 
 await X({ cmd: 'new' });
 let r = await runItem('stairs', 'Stairs…');

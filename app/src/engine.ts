@@ -194,23 +194,46 @@ export interface Scene {
   annotations: Annotation[];
   units: string;
   doc: string;
+  /** something to tell the person (a damaged file was set aside, a save failed) */
+  notice?: string;
 }
 
 export interface Reply {
   ok: boolean;
   error?: string;
+  /** the command worked but the model couldn't be saved (why) */
+  save_error?: string;
   [k: string]: unknown;
 }
 
 export const inTauri = "__TAURI_INTERNALS__" in window;
-const BRIDGE = "http://127.0.0.1:5175";
+const BRIDGE = `http://127.0.0.1:${import.meta.env.VITE_BRIDGE_PORT ?? 5175}`;
 
-async function http<T>(path: string, body?: unknown): Promise<T> {
-  const r = await fetch(BRIDGE + path, body === undefined ? undefined : { method: "POST", body: JSON.stringify(body) });
+// In a plain browser the bridge needs its per-launch token. The dev server
+// hands it over from the file the bridge wrote (see docs/dev/building.md);
+// it is read again if the bridge was restarted.
+let bridgeToken: Promise<string> | null = null;
+const readToken = () => (bridgeToken ??= fetch("/__bridge-token", { cache: "no-store" }).then((r) => (r.ok ? r.text() : "")).catch(() => ""));
+
+async function http<T>(path: string, body?: unknown, retry = true): Promise<T> {
+  const token = (await readToken()).trim();
+  const r = await fetch(BRIDGE + path, { method: body === undefined ? "GET" : "POST", body: body === undefined ? undefined : JSON.stringify(body), headers: { "X-Sketchcraft-Token": token } });
+  if (r.status === 403 && retry) {
+    bridgeToken = null; // restarted bridge: new token
+    return http<T>(path, body, false);
+  }
   return r.json() as Promise<T>;
 }
 
+/** Run an engine command as the person using the app. */
 export const exec = (cmd: Record<string, unknown>) => (inTauri ? invoke<Reply>("exec", { cmd }) : http<Reply>("/exec", cmd));
+/**
+ * Run an engine command that plugin code asked for (JavaScript or SketchUp
+ * Ruby). The engine only lets these model: no files, programs, network or
+ * plugin management (core/src/policy.rs). Anything a plugin triggers goes
+ * through here, never through `exec`.
+ */
+export const execPlugin = (cmd: Record<string, unknown>) => (inTauri ? invoke<Reply>("exec", { cmd, source: "plugin" }) : http<Reply>("/exec?as=plugin", cmd));
 export const loadScene = () => (inTauri ? invoke<Scene>("scene") : http<Scene>("/scene"));
 export const sync = () => (inTauri ? invoke<boolean>("sync") : http<boolean>("/sync"));
 

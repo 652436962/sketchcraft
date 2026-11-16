@@ -62,7 +62,7 @@ export function AskHost() {
     <div className="sheet-backdrop" onClick={() => finish(null)}>
       <div className="sheet ask" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={a.title}>
         <b>{a.title}</b>
-        {a.hint && <p className="muted small">{a.hint}</p>}
+        {a.hint && <p className="muted small" style={{ whiteSpace: "pre-line" }}>{a.hint}</p>}
         {!a.confirm && <input
           ref={input}
           value={text}

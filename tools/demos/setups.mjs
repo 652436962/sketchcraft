@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { exec, ROOT, runJsonl } from './lib.mjs';
+import { authHeaders, BRIDGE, exec, ROOT, runJsonl } from './lib.mjs';
 
 export async function townhouse() {
   await exec({ cmd: 'new' });
@@ -31,7 +31,7 @@ export async function townhouseNested() {
   await tag(names.filter((n) => has(n, ['kitchen', 'range', 'refrigerator', 'island', 'vanity', 'shower', 'washer', 'dryer', 'toilet', 'bathtub'])).map((n) => g[n]), 'Fixtures');
   await tag(names.filter((n) => has(n, ['roof'])).map((n) => g[n]), 'Roof');
   for (const t of ['Walls', 'Site', 'Fixtures', 'Roof']) await exec({ cmd: 'tag_visible', tag: t, visible: true });
-  const scene = await fetch('http://127.0.0.1:5175/scene').then((r) => r.json());
+  const scene = await fetch(BRIDGE + '/scene', { headers: authHeaders() }).then((r) => r.json());
   await exec({ cmd: 'set_parent', ids: scene.instances.map((i) => i.id), parent: house });
 }
 

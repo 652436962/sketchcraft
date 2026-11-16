@@ -3,6 +3,8 @@
 // suggested model backdrop. Built-ins live here; your own are saved as
 // .sketchskin files in ~/Documents/SketchCraft/Skins, so they can be shared.
 
+import { skinValueOk } from "./skinvalue";
+
 export interface Skin {
   id: string;
   name: string;
@@ -141,6 +143,8 @@ export function applySkin(s: Skin) {
   const root = document.documentElement;
   for (const k of TOKENS) {
     let v = s.tokens[k];
+    // whatever the skin came from (a file, saved settings), only plain colors, lengths and fonts get on the page
+    if (!skinValueOk(k, v)) v = SKINS[0].tokens[k];
     // skins saved before the font was bundled name it without "Variable"
     if (k === "font" && v.includes('"Bricolage Grotesque"') && !v.includes("Bricolage Grotesque Variable")) v = v.replace('"Bricolage Grotesque"', '"Bricolage Grotesque Variable", "Bricolage Grotesque"');
     root.style.setProperty(`--${k}`, v);
@@ -160,8 +164,8 @@ export function readSkin(raw: unknown, fallbackName: string): Skin | null {
   const tokens = { ...base };
   for (const k of TOKENS) {
     const v = r.tokens[k];
-    // colors, lengths and font lists only: nothing that could load anything
-    if (typeof v === "string" && v.length < 160 && !/url\s*\(|expression|[;{}<>]/i.test(v)) tokens[k] = v;
+    // each token takes a color, a length or a font list in plain form: nothing that could load anything
+    if (skinValueOk(k, v)) tokens[k] = v;
   }
   const name = typeof r.name === "string" && r.name.trim() ? r.name.trim().slice(0, 40) : fallbackName;
   return {
