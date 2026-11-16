@@ -472,6 +472,8 @@ export default function Viewport(props: Props) {
     pickMesh: THREE.Mesh | null;
     editMesh: THREE.Mesh | null;
     groundZ: number;
+    /** face-me figures, turned toward the camera every frame */
+    figures?: { id: number; obj: THREE.Group; mesh: THREE.Mesh; lines: THREE.LineSegments; facing: number }[];
   } | null>(null);
 
   /** camera tools: eye height, the drag in progress, keys held, view history */
@@ -687,6 +689,7 @@ export default function Viewport(props: Props) {
       } else renderer.render(world, cam);
       updateCoach();
       placeLabels();
+      turnFigures();
       raf = requestAnimationFrame(loop);
     };
     loop();
@@ -1159,6 +1162,27 @@ export default function Viewport(props: Props) {
     syncLabels();
     T.pickMesh = front;
 
+    // face-me figures (scale people): each its own object at its point
+    T.figures = [];
+    for (const f of s.figures ?? []) {
+      const obj = new THREE.Group();
+      obj.position.set(f.pivot[0], f.pivot[1], f.pivot[2]);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(f.positions, 3));
+      const col: number[] = [];
+      for (let i = 0; i < f.colors.length; i += 3) for (let k = 0; k < 3; k++) col.push(f.colors[i], f.colors[i + 1], f.colors[i + 2]);
+      g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+      g.computeVertexNormals();
+      const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, clippingPlanes: clip, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
+      mesh.userData.owner = f.id;
+      const lg = new THREE.BufferGeometry();
+      lg.setAttribute("position", new THREE.Float32BufferAttribute(f.edges, 3));
+      const lines = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x1d1e24, clippingPlanes: clip }));
+      obj.add(mesh, lines);
+      T.model.add(obj);
+      T.figures.push({ id: f.id, obj, mesh, lines, facing: f.facing });
+    }
+
     T.editMesh = null;
     if (s.editing != null && s.editPositions.length) {
       const eg = new THREE.BufferGeometry();
@@ -1325,6 +1349,19 @@ export default function Viewport(props: Props) {
     return rayFrom({ camera: t.current!.camera, rect: rect() }, e);
   }
 
+  /** Turn the face-me figures toward the camera; a selected one is outlined. */
+  function turnFigures() {
+    const T = t.current;
+    if (!T?.figures?.length) return;
+    const sel = live.current.sel;
+    for (const f of T.figures) {
+      const d = T.camera.position.clone().sub(f.obj.position);
+      if (Math.hypot(d.x, d.y) > 1e-6) f.obj.rotation.z = Math.atan2(d.y, d.x) - f.facing;
+      const on = !!sel?.instances.includes(f.id);
+      (f.lines.material as THREE.LineBasicMaterial).color.setHex(on ? 0x6b5cff : 0x1d1e24);
+    }
+  }
+
   function pick(e: { clientX: number; clientY: number }): Pick | null {
     const T = t.current!;
     const s = live.current.scene;
@@ -1334,13 +1371,14 @@ export default function Viewport(props: Props) {
     const mat = T.pickMesh.material as THREE.Material;
     const side = mat.side;
     mat.side = THREE.DoubleSide;
-    let hits = rc.intersectObjects(T.editMesh ? [T.editMesh, T.pickMesh] : [T.pickMesh], false);
+    const figs = (T.figures ?? []).map((f) => f.mesh);
+    let hits = rc.intersectObjects([...(T.editMesh ? [T.editMesh] : []), T.pickMesh, ...figs], false);
     mat.side = side;
     // ignore what the section plane cut away
     if (st.current.section) hits = hits.filter((h) => st.current.section!.distanceToPoint(h.point) >= -1e-4);
     const hit = hits[0];
     if (!hit || hit.faceIndex == null) return null;
-    const owner = hit.object === T.editMesh ? s.editTriFace[hit.faceIndex] : s.triFace[hit.faceIndex];
+    const owner = hit.object.userData.owner != null ? (hit.object.userData.owner as number) : hit.object === T.editMesh ? s.editTriFace[hit.faceIndex] : s.triFace[hit.faceIndex];
     return { face: faceById(owner), owner, point: hit.point.clone(), distance: hit.distance };
   }
 

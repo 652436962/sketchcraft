@@ -6,6 +6,14 @@ What changed in each SketchCraft release, newest first. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Scale figures.** New models start with a person standing at the origin,
+  a flat figure that always turns to face you, for a sense of size (as in
+  SketchUp). Pick who it is under **Document › Scale figure**: a person, the
+  SketchCraft beaver with a clipboard, or nobody. On April 1, the beaver
+  clocks in. Both are in the Library, renders turn them to the camera too,
+  and any component can be set to **Always face the camera**.
+
 ## [0.3.4] - 2026-11-15
 
 ### Changed

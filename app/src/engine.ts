@@ -49,6 +49,20 @@ export interface InstanceInfo {
   transform: number[];
   /** Dynamic Component attributes (values or "=formulas") */
   attrs?: Record<string, string>;
+  /** it always turns to face the camera (a flat scale figure) */
+  faceMe?: boolean;
+}
+
+/** A face-me figure: drawn around its own point, turned toward the camera. */
+export interface Figure {
+  id: number;
+  pivot: Vec3;
+  /** which way it faces now (radians in the ground plane) */
+  facing: number;
+  positions: number[];
+  /** one color per triangle */
+  colors: number[];
+  edges: number[];
 }
 
 export interface ComponentInfo {
@@ -159,6 +173,7 @@ export interface Scene {
   softEdges: number[];
   groups: GroupInfo[];
   instances: InstanceInfo[];
+  figures?: Figure[];
   components: ComponentInfo[];
   loose: number;
   activeGroup: number | null;
@@ -206,6 +221,8 @@ export const ASSETS = [
   { key: "streetlight", name: "Streetlight" },
   { key: "bench", name: "Bench" },
   { key: "hydrant", name: "Hydrant" },
+  { key: "person", name: "Person" },
+  { key: "beaver", name: "Beaver" },
 ] as const;
 
 export interface CamSpec {

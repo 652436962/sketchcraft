@@ -20,7 +20,11 @@ use std::collections::HashMap;
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Command {
     /// Start an empty model.
-    New,
+    /// A blank model; `figure` places a scale figure ("person" or "beaver") at the origin.
+    New {
+        #[serde(default)]
+        figure: Option<String>,
+    },
     /// Axis-aligned rectangle between two opposite corners (one coordinate must match).
     Rect { from: [f64; 3], to: [f64; 3] },
     /// Planar polygon through the points (a building footprint, a gable end...).
@@ -1319,9 +1323,17 @@ impl Engine {
             None => &mut self.model,
         };
         Ok(match cmd {
-            Command::New => {
+            Command::New { figure } => {
                 *m = Model::default();
-                json!({})
+                match figure.as_deref() {
+                    None | Some("" | "none") => json!({}),
+                    Some(key @ ("person" | "beaver")) => {
+                        let def = crate::assets::definition(m, key)?;
+                        let id = m.place(def, DVec3::ZERO, 0.0, None)?;
+                        json!({"figure": id})
+                    }
+                    Some(other) => bail!("figure is person, beaver or none (got {other:?})"),
+                }
             }
             Command::Rect { from, to } => {
                 let (a, b) = (v3(from), v3(to));

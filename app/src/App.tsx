@@ -257,6 +257,14 @@ export default function App() {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [fileMenu, setFileMenu] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  // who stands at the origin of a new model, for scale
+  const [figure, setFigureRaw] = useState<FigureChoice>(() => readFigure());
+  const setFigure = (f: FigureChoice) => {
+    setFigureRaw(f);
+    try {
+      localStorage.setItem("sketchcraft.figure", f);
+    } catch {}
+  };
   const [currentFile, setCurrentFileState] = useState<string | null>(rememberedFile());
   const setCurrentFile = (p: string | null) => {
     setCurrentFileState(p);
@@ -595,7 +603,7 @@ export default function App() {
 
   const file = {
     new: async () => {
-      await run({ cmd: "new" });
+      await run({ cmd: "new", figure: figureToday(figure) });
       setCurrentFile(null);
       setSel(EMPTY);
       say("New model. ⌘Z brings the last one back.");
@@ -1132,6 +1140,12 @@ export default function App() {
                   </option>
                 ))}
               </select>
+              <span title="Who stands at the origin of a new model, for a sense of size">Scale figure</span>
+              <select className="units-select" value={figure} onChange={(e) => setFigure(e.target.value as FigureChoice)} title="For new models (File › New). Add one any time from the Library.">
+                <option value="person">Person</option>
+                <option value="beaver">Beaver, with clipboard</option>
+                <option value="none">None</option>
+              </select>
             </div>
           </div>
         )}
@@ -1260,4 +1274,20 @@ export default function App() {
       </aside>
     </div>
   );
+}
+
+type FigureChoice = "person" | "beaver" | "none";
+
+function readFigure(): FigureChoice {
+  try {
+    const v = localStorage.getItem("sketchcraft.figure");
+    if (v === "person" || v === "beaver" || v === "none") return v;
+  } catch {}
+  return "person";
+}
+
+/** The figure for a new model today: on April 1 the beaver clocks in. */
+function figureToday(choice: FigureChoice): FigureChoice {
+  const d = new Date();
+  return choice !== "none" && d.getMonth() === 3 && d.getDate() === 1 ? "beaver" : choice;
 }
