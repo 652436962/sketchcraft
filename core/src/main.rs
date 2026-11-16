@@ -11,16 +11,17 @@
 //!   sketchcraft bridge [--port 5175]
 //!       Browser bridge for the UI on 127.0.0.1 (shares the live model file).
 //!
-//!   sketchcraft mcp [--doc model.sketchcraft]
+//!   sketchcraft mcp [--doc model.sketchcraft] [--workspace DIR | --any-path]
 //!       MCP server on stdio for AI agents. With --doc, the model is loaded
-//!       from FILE (if it exists) and saved back after every change.
+//!       from FILE (if it exists) and saved back after every change. The
+//!       agent's files stay in the workspace (default: the model's folder).
 
 use sketchcraft::Engine;
 use serde_json::json;
 use std::io::{BufRead, Write};
 
 fn usage() -> ! {
-    eprintln!("usage:\n  sketchcraft run <script.jsonl> [--open FILE] [--save FILE] [--keep-going]\n  sketchcraft serve [--open FILE]\n  sketchcraft bridge [--port 5175]\n  sketchcraft mcp [--doc FILE]");
+    eprintln!("usage:\n  sketchcraft run <script.jsonl> [--open FILE] [--save FILE] [--keep-going]\n  sketchcraft serve [--open FILE]\n  sketchcraft bridge [--port 5175]\n  sketchcraft mcp [--doc FILE] [--workspace DIR | --any-path]");
     std::process::exit(2)
 }
 
@@ -83,19 +84,34 @@ fn main() {
         Some("bridge") => {
             let port = flag(&args, "--port").and_then(|p| p.parse().ok()).unwrap_or(5175);
             let live = sketchcraft::live::Live::open(sketchcraft::live::default_doc());
-            if let Err(e) = sketchcraft::http::serve(live, port) {
+            let opts = sketchcraft::http::Options {
+                port,
+                page: flag(&args, "--origin").unwrap_or_else(|| sketchcraft::http::DEFAULT_PAGE.into()),
+                token_file: flag(&args, "--token-file").map(Into::into),
+                token: std::env::var("SKETCHCRAFT_BRIDGE_TOKEN").ok().filter(|t| !t.is_empty()),
+            };
+            if let Err(e) = sketchcraft::http::serve_with(live, opts) {
                 eprintln!("{e}");
                 std::process::exit(1);
             }
         }
         Some("mcp") => {
             let doc = flag(&args, "--doc");
-            if let Some(path) = &doc {
-                if std::path::Path::new(path).exists() {
-                    engine.exec_json(&json!({"cmd": "open", "path": path}).to_string());
-                }
+            // an agent's files stay in one folder: --workspace, else the model's folder, else here
+            let workspace = if args.iter().any(|a| a == "--any-path") {
+                sketchcraft::policy::Workspace::anywhere()
+            } else {
+                let dir = flag(&args, "--workspace")
+                    .map(std::path::PathBuf::from)
+                    .or_else(|| doc.as_ref().and_then(|d| std::path::Path::new(d).parent().filter(|p| !p.as_os_str().is_empty()).map(|p| p.to_path_buf())))
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                std::fs::create_dir_all(&dir).ok();
+                sketchcraft::policy::Workspace::at(dir)
+            };
+            if let Some(root) = &workspace.root {
+                eprintln!("sketchcraft mcp: files limited to {}", root.display());
             }
-            sketchcraft::mcp::serve(engine, doc);
+            sketchcraft::mcp::serve(sketchcraft::mcp::Options { doc, workspace });
         }
         _ => usage(),
     }

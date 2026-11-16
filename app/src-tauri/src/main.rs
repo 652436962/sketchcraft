@@ -34,10 +34,14 @@ fn guarded<T>(f: impl FnOnce() -> T, fallback: impl FnOnce(String) -> T) -> T {
     }
 }
 
+/// `source` is "plugin" for commands that plugin code asked for (JavaScript or
+/// SketchUp Ruby): those run under the plugin allowlist in `sketchcraft::policy`
+/// (modeling only: no files, programs, network or plugin management).
 #[tauri::command]
-fn exec(state: tauri::State<App>, cmd: Value) -> Value {
+fn exec(state: tauri::State<App>, cmd: Value, source: Option<String>) -> Value {
+    let caller = if source.as_deref() == Some("plugin") { sketchcraft::policy::Caller::Plugin } else { sketchcraft::policy::Caller::Ui };
     let mut live = engine(&state);
-    guarded(|| live.exec(&cmd), |msg| serde_json::json!({"ok": false, "error": format!("SketchCraft hit a bug running that ({msg}). Undo if anything looks wrong.")}))
+    guarded(|| live.exec_as(&caller, &cmd), |msg| serde_json::json!({"ok": false, "error": format!("SketchCraft hit a bug running that ({msg}). Undo if anything looks wrong.")}))
 }
 
 #[tauri::command]
