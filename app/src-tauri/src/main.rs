@@ -93,12 +93,47 @@ fn open_releases() -> bool {
     r.is_ok()
 }
 
+/// Where this project's releases are downloaded from.
+const RELEASE_BASE: &str = "https://github.com/jasonsutter87/sketchcraft/releases/download/";
+
+/// An update's files must come from the release it says it is: its download
+/// address sits under that version's own tag. (The signature proves who made
+/// a file, not which version it is, so a manifest claiming a new version
+/// can't point at an older signed build.)
+fn release_url_ok(version: &str, url: &str) -> bool {
+    url.starts_with(&format!("{RELEASE_BASE}v{version}/"))
+}
+
+/// Every download in the release is from its own release's address.
+fn release_files_ok(release: &tauri_plugin_updater::RemoteRelease) -> bool {
+    use tauri_plugin_updater::RemoteReleaseInner::{Dynamic, Static};
+    let version = release.version.to_string();
+    match &release.data {
+        Dynamic(p) => release_url_ok(&version, p.url.as_str()),
+        Static { platforms } => !platforms.is_empty() && platforms.values().all(|p| release_url_ok(&version, p.url.as_str())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn downloads_come_from_their_own_release() {
+        assert!(release_url_ok("0.3.6", "https://github.com/jasonsutter87/sketchcraft/releases/download/v0.3.6/SketchCraft.app.tar.gz"));
+        assert!(!release_url_ok("0.3.6", "https://github.com/jasonsutter87/sketchcraft/releases/download/v0.2.0/SketchCraft.app.tar.gz"));
+        assert!(!release_url_ok("0.3.6", "https://evil.example/jasonsutter87/sketchcraft/releases/download/v0.3.6/x"));
+        assert!(!release_url_ok("0.3.6", "https://github.com/jasonsutter87/sketchcraft/releases/download/v0.3.60/x"));
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         // signed self-updates from GitHub Releases (see app/src/updater.tsx)
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        // (and only newer than this copy, from the matching release: see release_files_ok)
+        .plugin(tauri_plugin_updater::Builder::new().default_version_comparator(|current, release| release.version > current && release_files_ok(&release)).build())
         .manage(App(Mutex::new(Live::open(default_doc()))))
         .invoke_handler(tauri::generate_handler![exec, scene, sync, open_releases, portable, open_guide])
         .run(tauri::generate_context!())
