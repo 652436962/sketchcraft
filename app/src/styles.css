@@ -3315,3 +3315,42 @@ input[type="color"]::-moz-color-swatch {
   height: 26px;
   min-height: 26px;
 }
+
+/* ---------- the Plugins window ---------- */
+.sheet.plugins-dlg {
+  width: min(640px, calc(100vw - 32px));
+}
+.plugin-list {
+  display: grid;
+  max-height: 52vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.plugin-row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: start;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.plugin-row:last-child {
+  border-bottom: 0;
+}
+.plugin-row.off .plugin-about {
+  opacity: 0.55;
+}
+.plugin-about {
+  display: grid;
+  gap: 2px;
+}
+.plugin-switch {
+  padding-top: 2px;
+}
+.plugin-row .warn {
+  color: var(--danger);
+}
+.plugins-dlg .row .btn {
+  white-space: nowrap;
+}

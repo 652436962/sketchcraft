@@ -160,6 +160,10 @@ pub fn install(bytes: &[u8]) -> Result<Value> {
         }
         std::fs::write(p, b)?;
     }
+    // installing it means you want it: on, even if an older copy was off
+    if disabled().contains(&id) {
+        enable(&id, true)?;
+    }
     Ok(json!({"id": id, "name": name, "files": files.len(), "replaced": replaced}))
 }
 

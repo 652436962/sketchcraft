@@ -16,7 +16,7 @@ import { TOOL_INFO, WORKSPACES, withEdits, type WorkspaceEdits, type WorkspaceId
 import { AppearanceDialog, WorkspaceDialog } from "./appearance";
 import { WorkspaceStrip } from "./wsstrip";
 import { Toolbar } from "./toolbar";
-import { loadPlugins, PluginResultDialog, runPlugin, type Plugin, type PluginList, type PluginResult } from "./plugins";
+import { loadPlugins, PluginResultDialog, PluginsDialog, runPlugin, type Plugin, type PluginList, type PluginResult } from "./plugins";
 import { PhotoModeler } from "./photomodel";
 import { RefImageDialog } from "./refimage";
 import { Text3dDialog } from "./text3d";
@@ -278,6 +278,10 @@ export default function App() {
   const [pluginsOpen, setPluginsOpen] = useState(false);
   const [plugins, setPlugins] = useState<PluginList>({ dir: "", plugins: [], problems: [] });
   const [pluginShown, setPluginShown] = useState<{ result: PluginResult; plugin: Plugin } | null>(null);
+  const [showPlugins, setShowPlugins] = useState(false);
+  const reloadPlugins = () => loadPlugins().then(setPlugins, () => {});
+  // plugins that are on
+  const livePlugins = plugins.plugins.filter((p) => p.enabled !== false);
   useEffect(() => {
     loadPlugins().then(setPlugins, () => {});
   }, []);
@@ -745,7 +749,8 @@ export default function App() {
       { label: "3D Text…", hint: "File", run: () => setShowText3d(true) },
       { label: "Generate report (CSV)…", hint: "File", run: file.report },
       { label: "Themes…", hint: "Colors, layout and icons (skins)", run: () => setShowSkins(true) },
-      ...plugins.plugins.flatMap((pl) => pl.commands.map((c) => ({ label: c.label, hint: `Plugin · ${c.hint ?? pl.name}`, run: () => void runPluginCommand(pl, c.id) }))),
+      ...livePlugins.flatMap((pl) => pl.commands.map((c) => ({ label: c.label, hint: `Plugin · ${c.hint ?? pl.name}`, run: () => void runPluginCommand(pl, c.id) }))),
+      { label: "Manage plugins…", hint: "Install, turn on or off, remove", run: () => (reloadPlugins(), setShowPlugins(true)) },
       {
         label: ws.dock === "classic" ? "Floating layout" : "Classic layout",
         hint: ws.dock === "classic" ? "SketchCraft's floating tool bars" : "Tool bars docked above the model, like SketchUp",
@@ -862,7 +867,7 @@ export default function App() {
                   </button>
                   {pluginsOpen && (
                     <div className="submenu">
-                      {plugins.plugins.flatMap((pl) =>
+                      {livePlugins.flatMap((pl) =>
                         pl.commands.map((c) => (
                           <button key={`${pl.id}:${c.id}`} title={c.hint ?? pl.description} onClick={() => void runPluginCommand(pl, c.id)}>
                             {c.label}
@@ -874,7 +879,7 @@ export default function App() {
                           {p.id}: {p.error}
                         </button>
                       ))}
-                      {plugins.dir && <button onClick={() => exec({ cmd: "reveal", path: plugins.dir })}>Open plugins folder…</button>}
+                      <button onClick={() => (reloadPlugins(), setShowPlugins(true))}>Manage plugins…</button>
                     </div>
                   )}
                   <hr />
@@ -1139,6 +1144,7 @@ export default function App() {
         {showRef && scene && <RefImageDialog scene={scene} run={run} onClose={() => setShowRef(false)} onToast={say} />}
         {showPhotoModel && scene && <PhotoModeler scene={scene} run={run} onClose={() => setShowPhotoModel(false)} onToast={say} />}
         {showSkins && <AppearanceDialog current={skin} onPick={wearSkin} onClose={() => setShowSkins(false)} onToast={say} layout={layout} onLayout={setLayout} />}
+        {showPlugins && <PluginsDialog list={plugins} reload={reloadPlugins} onClose={() => setShowPlugins(false)} onToast={say} />}
         {pluginShown && <PluginResultDialog result={pluginShown.result} plugin={pluginShown.plugin} onClose={() => setPluginShown(null)} onToast={say} />}
         {showWs && <WorkspaceDialog ws={ws} onChange={editWs} onReset={() => editWs(null)} onClose={() => setShowWs(false)} />}
         {toast && <div className={`toast ${toast.bad ? "bad" : ""}`}>{toast.text}</div>}

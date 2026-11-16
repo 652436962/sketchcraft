@@ -55,9 +55,12 @@ fn install_turn_off_and_remove_a_plugin() {
     assert_eq!(list["plugins"].as_array().unwrap().iter().find(|p| p["id"] == "stair-maker").unwrap()["enabled"], false);
     run(&mut e, json!({"cmd":"plugin_enable","id":"stair-maker","on":true}));
 
-    // installing again replaces it (the old one is kept aside)
+    // installing again replaces it (the old one is kept aside), and turns it on
+    run(&mut e, json!({"cmd":"plugin_enable","id":"stair-maker","on":false}));
     let r = run(&mut e, json!({"cmd":"install_plugin","data": b64(&z)}));
     assert_eq!(r["replaced"], true);
+    let list = run(&mut e, json!({"cmd":"plugins"}));
+    assert_eq!(list["plugins"].as_array().unwrap().iter().find(|p| p["id"] == "stair-maker").unwrap()["enabled"], true);
 
     // a zip that reaches outside its folder is refused, and nothing is written
     let evil = zip_of(&[("plugin.json", r#"{"name":"Evil","commands":[]}"#), ("main.js", ""), ("../../escape.js", "x")]);

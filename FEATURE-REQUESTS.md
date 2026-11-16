@@ -28,8 +28,8 @@ buttons, forms and tools.
 
 | # | Feature | Asked by | Added | Status | Completed |
 | - | ------- | -------- | ----- | ------ | --------- |
-| 1 | **Plugin manager**: one window listing every plugin (name, version, author, built in or yours), turn each on or off, open its folder | rats4final (Reddit) | 2026-11-16 | todo | |
-| 2 | **Install a plugin from a file**: pick a .zip; it's checked and unpacked into the Plugins folder | rats4final (Reddit) | 2026-11-16 | todo | |
+| 1 | **Plugin manager**: one window listing every plugin (name, version, author, built in or yours), turn each on or off, open its folder | rats4final (Reddit) | 2026-11-16 | done | 2026-11-16 |
+| 2 | **Install a plugin from a file**: pick a .zip; it's checked and unpacked into the Plugins folder | rats4final (Reddit) | 2026-11-16 | done | 2026-11-16 |
 | 3 | **Input forms**: `ctx.ask()` shows a form (numbers with units, text, choices, checkboxes) and returns the answers | Jason | 2026-11-16 | todo | |
 | 4 | **Toolbar buttons**: a plugin command can have an icon and sit on the tool bar | Jason | 2026-11-16 | todo | |
 | 5 | **Interactive tools**: a plugin can add a tool that gets clicks in the model (snapped points, the face under the cursor) and draws previews | Jason | 2026-11-16 | todo | |

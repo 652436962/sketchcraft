@@ -1,7 +1,8 @@
 // Plugins: small scripts that add commands to SketchCraft (see docs/PLUGINS.md).
 // Each run gets a fresh Web Worker: no page, no network, no files. Its only
 // way out is ctx.run(), and the app refuses commands that read or write files.
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { confirm } from "./ask";
 import { exec, type Reply } from "./engine";
 import { pickSave } from "./files";
 
@@ -9,6 +10,8 @@ export interface PluginCommand {
   id: string;
   label: string;
   hint?: string;
+  /** its icon (a data URL), for the tool bar */
+  icon?: string | null;
 }
 
 export interface Plugin {
@@ -20,6 +23,9 @@ export interface Plugin {
   commands: PluginCommand[];
   code: string;
   builtin: boolean;
+  /** off: its commands don't show anywhere */
+  enabled?: boolean;
+  folder?: string;
 }
 
 export interface PluginResult {
@@ -212,6 +218,96 @@ export function PluginResultDialog({ result, plugin, onClose, onToast }: { resul
           )}
           <button className="btn small ghost" onClick={onClose}>
             Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The Plugins window: every plugin, on or off, install from a .zip, remove yours. */
+export function PluginsDialog({ list, reload, onClose, onToast }: { list: PluginList; reload: () => Promise<void>; onClose: () => void; onToast: (t: string, bad?: boolean) => void }) {
+  const file = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const install = async (f: File | undefined) => {
+    if (!f) return;
+    setBusy(true);
+    const data = await new Promise<string>((res) => {
+      const fr = new FileReader();
+      fr.onload = () => res(String(fr.result).replace(/^data:[^,]*,/, ""));
+      fr.onerror = () => res("");
+      fr.readAsDataURL(f);
+    });
+    const r = await exec({ cmd: "install_plugin", data });
+    setBusy(false);
+    if (!r.ok) return onToast(`Couldn't install ${f.name}: ${r.error}`, true);
+    await reload();
+    onToast(`${r.replaced ? "Updated" : "Installed"} ${r.name}. Its commands are in File › Plugins and Shift+S.`);
+  };
+  const toggle = async (p: Plugin, on: boolean) => {
+    const r = await exec({ cmd: "plugin_enable", id: p.id, on });
+    if (!r.ok) return onToast(r.error ?? "Couldn't change it", true);
+    await reload();
+  };
+  const remove = async (p: Plugin) => {
+    if (!(await confirm(`Remove ${p.name}?`, "It's moved to the .removed folder inside Plugins, so you can put it back.", "Remove"))) return;
+    const r = await exec({ cmd: "remove_plugin", id: p.id });
+    if (!r.ok) return onToast(r.error ?? "Couldn't remove it", true);
+    await reload();
+    onToast(`Removed ${p.name}`);
+  };
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet plugins-dlg" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Plugins">
+        <div className="sheet-head">
+          <b>Plugins</b>
+          <span className="muted">Add commands to SketchCraft. They run sandboxed: no network, no files, and what they change can be undone.</span>
+        </div>
+        <div className="plugin-list">
+          {list.plugins.map((p) => (
+            <div key={p.id} className={`plugin-row${p.enabled === false ? " off" : ""}`}>
+              <label className="plugin-switch" title={p.enabled === false ? "Turn on" : "Turn off"}>
+                <input type="checkbox" checked={p.enabled !== false} onChange={(e) => toggle(p, e.target.checked)} aria-label={`${p.name} on`} />
+              </label>
+              <div className="plugin-about">
+                <b>{p.name}</b>
+                <span className="muted small">
+                  {[p.version && `v${p.version}`, p.author, p.builtin ? "built in" : "yours"].filter(Boolean).join(" · ")}
+                </span>
+                {p.description && <span className="small">{p.description}</span>}
+                <span className="muted small">{p.commands.map((c) => c.label).join(", ")}</span>
+              </div>
+              {!p.builtin && (
+                <button className="btn small ghost" onClick={() => remove(p)}>
+                  Remove
+                </button>
+              )}
+            </div>
+          ))}
+          {list.problems.map((p) => (
+            <div key={`x${p.id}`} className="plugin-row off">
+              <span />
+              <div className="plugin-about">
+                <b>{p.id}</b>
+                <span className="small warn">{p.error}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <input ref={file} type="file" accept=".zip,application/zip" hidden onChange={(e) => (install(e.target.files?.[0]), (e.target.value = ""))} />
+        <div className="row gap" style={{ marginTop: 14 }}>
+          <button className="btn small" onClick={() => file.current?.click()} disabled={busy}>
+            {busy ? "Installing…" : "Install from file…"}
+          </button>
+          {list.dir && (
+            <button className="btn small ghost" onClick={() => exec({ cmd: "reveal", path: list.dir })}>
+              Open plugins folder
+            </button>
+          )}
+          <span className="muted small">A plugin is a .zip with plugin.json and main.js (see docs/PLUGINS.md).</span>
+          <span style={{ flex: 1 }} />
+          <button className="btn small" onClick={onClose}>
+            Done
           </button>
         </div>
       </div>

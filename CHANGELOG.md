@@ -6,6 +6,12 @@ What changed in each SketchCraft release, newest first. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Plugins window** (File › Plugins ▸ Manage plugins…, or Shift+S): every
+  plugin with its version and author, turn each on or off, remove yours
+  (moved aside, so it can come back), and **Install from file…** for a .zip.
+  Installs are checked: safe file names only, plugin files only, size limits.
+
 ## [0.3.5] - 2026-11-16
 
 ### Added
