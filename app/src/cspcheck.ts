@@ -5,8 +5,8 @@
 // access again. So before the first plugin runs, a probe worker (without the
 // lockdown) tries a fetch, an `import()` and an `eval` at an address that
 // isn't allowed, and the policy must report each one blocked.
-// Where a webview can't report violations at all the probe says so and plugins
-// run (the policy is all that is left to rely on there).
+// Where a webview has no violation reports at all (no SecurityPolicyViolationEvent)
+// the probe says so and plugins run: the policy is all that is left to rely on there.
 
 const PROBE = `
 const hits = { fetch: false, import: false, eval: false };
@@ -18,7 +18,8 @@ self.addEventListener("securitypolicyviolation", (e) => {
 });
 const probe = async (name, f) => { key = name; try { await f(); } catch (e) { /* refused, or nothing listening */ } await new Promise((r) => setTimeout(r, 30)); };
 (async () => {
-  if (!("onsecuritypolicyviolation" in self)) return postMessage({ unverifiable: true });
+  // a webview that can't report violations to workers can't be checked this way
+  if (typeof SecurityPolicyViolationEvent === "undefined") return postMessage({ unverifiable: true });
   await probe("fetch", () => fetch("http://127.0.0.1:9/csp-probe"));
   await probe("import", () => import("http://127.0.0.1:9/csp-probe.js"));
   await probe("eval", () => eval("1"));

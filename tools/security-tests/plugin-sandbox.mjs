@@ -131,6 +131,18 @@ await p.evaluate(async () => {
   window.__ok = JSON.stringify(cleanResult({ table: { columns: 1 }, title: {} })).length > 0;
 });
 check(await p.evaluate(() => window.__ok === true), 'a malformed result is cleaned');
+// 5. a plugin run is ONE undo step, and the window's policy is shown to hold in workers
+const X = (c, as) => p.evaluate(async ({ c, as, BRIDGE, HDR }) => (await fetch(BRIDGE + '/exec' + (as ? '?as=plugin' : ''), { method: 'POST', headers: HDR, body: JSON.stringify(c) })).json(), { c, as, BRIDGE, HDR: { 'Content-Type': 'application/json', ...authHeaders() } });
+await X({ cmd: 'new' });
+await X({ cmd: 'rect', from: [0, 0, 0], to: [2, 2, 0] });
+const before = (await X({ cmd: 'info' })).faces;
+r = await runJs(`for (let i = 0; i < 6; i++) await ctx.run({ cmd: 'rect', from: [10 + i * 5, 0, 0], to: [13 + i * 5, 3, 0] });`);
+const mid = (await X({ cmd: 'info' })).faces;
+await X({ cmd: 'undo' });
+const after = (await X({ cmd: 'info' })).faces;
+check(mid === before + 6 && after === before, `a plugin run of 6 commands is one Undo (faces ${before} -> ${mid} -> ${after})`);
+const sandbox = await p.evaluate(async () => (await import('/src/cspcheck.ts')).pluginSandboxHolds());
+check(sandbox.ok === true, `the window's policy blocks fetch, import() and eval inside workers (${JSON.stringify(sandbox)})`);
 check(problems.length === 0, `no page errors (${problems.join('; ').slice(0, 200)})`);
 
 await b.close();
