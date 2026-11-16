@@ -115,7 +115,17 @@ pub fn serve_with(mut live: Live, opts: Options) -> anyhow::Result<()> {
     write_token_file(&token_file, &token).map_err(|e| anyhow::anyhow!("couldn't write the token file {}: {e}", token_file.display()))?;
     eprintln!("sketchcraft bridge on http://127.0.0.1:{port}  (model: {})", live.doc.display());
     eprintln!("token file: {} (send its contents as {TOKEN_HEADER}; the dev page reads it for you)", token_file.display());
-    for mut req in server.incoming_requests() {
+    loop {
+        // wake up now and then even when nobody asks for anything, so a plugin run nobody closed is
+        // closed and saved on time (the 150 s limit) and not only when the next request comes
+        let mut req = match server.recv_timeout(std::time::Duration::from_secs(2)) {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| live.housekeeping())).ok();
+                continue;
+            }
+            Err(_) => break,
+        };
         let header = |name: &str| req.headers().iter().find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name)).map(|h| h.value.as_str().to_string());
         let (origin, host, supplied) = (header("Origin"), header("Host"), header(TOKEN_HEADER));
         // a preflight carries no token (browsers never send one); it only learns what's allowed

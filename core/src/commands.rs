@@ -8,6 +8,7 @@
 //! Each reply is JSON too: {"ok":true, ...} or {"ok":false,"error":"..."}.
 
 use crate::export;
+use crate::history::Step;
 use crate::model::{Id, Model};
 use crate::policy::Caller;
 use crate::render::{self, RenderOpts};
@@ -1125,7 +1126,7 @@ fn up() -> [f64; 3] {
 }
 
 impl Command {
-    fn mutates(&self) -> bool {
+    pub fn mutates(&self) -> bool {
         !matches!(
             self,
             Command::Faces { .. }
@@ -1184,8 +1185,8 @@ impl Command {
 #[derive(Default)]
 pub struct Engine {
     pub model: Model,
-    undo: Vec<Model>,
-    redo: Vec<Model>,
+    undo: Vec<Step>,
+    redo: Vec<Step>,
     /// Script names: `"as":"front"` on a command stores its result id,
     /// and any later `"@front"` value is replaced by it.
     pub names: HashMap<String, Id>,
@@ -1201,6 +1202,9 @@ pub struct Engine {
     batch: Option<(Model, u64, std::time::Instant)>,
     /// counts batches, so an `end_batch` can say which one it means
     batch_seq: u64,
+    /// the model was opened with more geometry than the limit allows: it can be looked at and
+    /// cut down, but nothing that adds geometry runs and it can't be saved until it is under
+    pub oversize: bool,
 }
 
 /// A batch nobody closed (the app went away mid-run) is closed after this (a plugin run is
@@ -1312,11 +1316,56 @@ impl Engine {
     fn end_batch(&mut self) {
         if let Some((before, rev, _)) = self.batch.take() {
             if self.revision != rev {
-                self.undo.push(before);
+                self.undo.push(Step::Snap(Box::new(before)));
                 self.redo.clear();
                 self.trim_undo();
             }
         }
+    }
+
+    /// Close an open batch now (the person went on working): what it did becomes one undo step.
+    pub fn close_batch(&mut self) {
+        self.end_batch();
+    }
+
+    /// Steps added after the history had `depth` of them are forgotten (their change was thrown away).
+    pub fn drop_steps_after(&mut self, depth: usize) {
+        self.undo.truncate(depth);
+    }
+
+    /// The undo and redo lists in a form that survives the reload of a model somebody else saved
+    /// (see `history`). Nothing here changes the engine; give the result to `install_history` once the
+    /// new model is in.
+    pub fn history_for_reload(&self) -> Option<crate::history::History> {
+        if self.undo.is_empty() && self.redo.is_empty() {
+            return None;
+        }
+        Some(crate::history::carry(&self.undo, &self.redo, &self.model))
+    }
+
+    /// Put a carried history back after a reload. Returns how many steps could not be kept.
+    pub fn install_history(&mut self, h: crate::history::History) -> usize {
+        self.undo = h.undo;
+        self.redo = h.redo;
+        self.trim_undo();
+        h.dropped
+    }
+
+    /// Replace the whole model with `model` as one undoable step (a restore from a backup).
+    pub fn replace_model(&mut self, model: Model) -> Result<()> {
+        if self.batch.is_some() {
+            bail!("a plugin is still running; try again when it has finished");
+        }
+        model.check_sane()?;
+        let before = std::mem::replace(&mut self.model, model);
+        self.undo.push(Step::Snap(Box::new(before)));
+        self.redo.clear();
+        self.ctx = None;
+        self.names.clear();
+        self.oversize = false;
+        self.revision += 1;
+        self.trim_undo();
+        Ok(())
     }
 
     /// How many steps Undo can go back.
@@ -1354,7 +1403,7 @@ impl Engine {
         self.model.environment = None;
         self.model.active_group = None;
         if kind == "none" {
-            self.undo.push(before);
+            self.undo.push(Step::Snap(Box::new(before)));
             return Ok(json!({"environment": null}));
         }
         // around what's there (or a 10 m square at the origin)
@@ -1385,7 +1434,7 @@ impl Engine {
         self.model.environment = Some(kind.to_string());
         // all of it is one undo step
         self.undo.truncate(depth);
-        self.undo.push(before);
+        self.undo.push(Step::Snap(Box::new(before)));
         self.redo.clear();
         Ok(json!({"environment": kind, "group": outer}))
     }
@@ -1416,6 +1465,8 @@ impl Engine {
         }
         // everything needed to put things back as they were
         let saved = mutates.then(|| (self.model.clone(), self.ctx, self.names.clone(), self.undo.len()));
+        let count_before = self.model.entity_count();
+        let oversize_before = self.oversize;
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if let Command::Environment { kind } = &cmd {
                 // pushes its own (single) undo step
@@ -1440,15 +1491,30 @@ impl Engine {
         match outcome {
             Ok(Ok((v, push_undo))) => {
                 if mutates {
-                    if let Err(e) = self.model.check_sane() {
+                    // a model over the geometry limit (opened that way) may only get smaller; one command may not add more than MAX_GROWTH
+                    let count = self.model.entity_count();
+                    let checked = if is_open && self.oversize {
+                        self.model.check_sane_with(false)
+                    } else if self.oversize && count <= crate::model::MAX_ENTITIES {
+                        self.oversize = false;
+                        self.model.check_sane()
+                    } else if self.oversize {
+                        self.model.check_sane_with(false).and_then(|_| if count > count_before { Err(anyhow::anyhow!("this model has more than {} points, edges and faces ({count_before}), so it is open for viewing and for deleting parts only; that would add more", crate::model::MAX_ENTITIES)) } else { Ok(()) })
+                    } else if !is_open && count > count_before.saturating_add(crate::model::MAX_GROWTH) {
+                        Err(anyhow::anyhow!("that would add {} points, edges and faces at once (the limit is {}), so it was not done", count - count_before, crate::model::MAX_GROWTH))
+                    } else {
+                        self.model.check_sane()
+                    };
+                    if let Err(e) = checked {
                         restore(self, saved);
+                        self.oversize = oversize_before;
                         return json!({"ok": false, "error": e.to_string()});
                     }
                     if is_open {
                         self.undo.clear();
                     } else if push_undo && self.batch.is_none() {
                         if let Some((before, ..)) = saved {
-                            self.undo.push(before);
+                            self.undo.push(Step::Snap(Box::new(before)));
                         }
                     }
                     self.redo.clear();
@@ -1472,10 +1538,17 @@ impl Engine {
     /// Keep undo history within `UNDO_LIMIT` steps and `UNDO_BYTES` of memory
     /// (the newest step is always kept).
     fn trim_undo(&mut self) {
-        let mut total: usize = self.undo.iter().map(Model::approx_bytes).sum();
+        let mut total: usize = self.undo.iter().map(Step::approx_bytes).sum();
         while self.undo.len() > UNDO_LIMIT || (self.undo.len() > 1 && total > if self.undo_budget == 0 { UNDO_BYTES } else { self.undo_budget }) {
             total = total.saturating_sub(self.undo[0].approx_bytes());
             self.undo.remove(0);
+        }
+        // what Redo holds counts against the same memory (patches are small; copies are not)
+        let limit = if self.undo_budget == 0 { UNDO_BYTES } else { self.undo_budget };
+        let mut redo_total: usize = self.redo.iter().map(Step::approx_bytes).sum();
+        while self.redo.len() > 1 && redo_total > limit {
+            redo_total = redo_total.saturating_sub(self.redo[0].approx_bytes());
+            self.redo.remove(0);
         }
     }
 
@@ -1959,16 +2032,47 @@ impl Engine {
                 if self.batch.is_some() {
                     bail!("a plugin is still running; Undo works when it has finished");
                 }
-                let Some(prev) = self.undo.pop() else { bail!("nothing to undo") };
-                self.redo.push(std::mem::replace(&mut self.model, prev));
+                match self.undo.pop() {
+                    None => bail!("nothing to undo"),
+                    // a step taken since the last reload: the model is exactly as that step left it
+                    Some(Step::Snap(prev)) => {
+                        let next = self.model.next_id;
+                        let was = std::mem::replace(&mut self.model, *prev);
+                        // ids are never handed out twice: not after Undo either (another program may have used the ones this step freed)
+                        self.model.next_id = self.model.next_id.max(next);
+                        self.redo.push(Step::Snap(Box::new(was)));
+                    }
+                    // a step carried across another program's save: take back what it changed, nothing else
+                    Some(Step::Patch(p)) => match p.apply(&self.model, false) {
+                        Ok(m) => {
+                            self.model = m;
+                            self.redo.push(Step::Patch(p));
+                        }
+                        Err(why) => bail!("Undo stopped: this step can't be taken back because {why} (another program changed it). The step was dropped; Undo again goes one step further back."),
+                    },
+                }
                 json!({})
             }
             Command::Redo => {
                 if self.batch.is_some() {
                     bail!("a plugin is still running; Redo works when it has finished");
                 }
-                let Some(next) = self.redo.pop() else { bail!("nothing to redo") };
-                self.undo.push(std::mem::replace(&mut self.model, next));
+                match self.redo.pop() {
+                    None => bail!("nothing to redo"),
+                    Some(Step::Snap(next)) => {
+                        let keep = self.model.next_id;
+                        let was = std::mem::replace(&mut self.model, *next);
+                        self.model.next_id = self.model.next_id.max(keep);
+                        self.undo.push(Step::Snap(Box::new(was)));
+                    }
+                    Some(Step::Patch(p)) => match p.apply(&self.model, true) {
+                        Ok(m) => {
+                            self.model = m;
+                            self.undo.push(Step::Patch(p));
+                        }
+                        Err(why) => bail!("Redo stopped: this step can't be done again because {why} (another program changed it). The step was dropped."),
+                    },
+                }
                 json!({})
             }
             Command::Photoreal { out, samples, bounces, mut sun_azimuth, mut sun_altitude, sun_strength, denoise, exposure, sky_strength, background, ground, ground_color, warmth, date, time, utc_offset, progressive, opts } => {
@@ -2062,7 +2166,9 @@ impl Engine {
             }
             Command::Open { path } => {
                 let opened: Model = serde_json::from_str(&std::fs::read_to_string(&path)?).map_err(|e| anyhow::anyhow!("{path} isn't a model SketchCraft can read: {e}"))?;
-                opened.check_sane()?;
+                // too much geometry is not a reason to refuse the file: it opens for viewing and cutting down (see `oversize`)
+                opened.check_sane_with(false)?;
+                self.oversize = opened.entity_count() > crate::model::MAX_ENTITIES;
                 self.model = opened;
                 self.batch = None;
                 self.ctx = None;

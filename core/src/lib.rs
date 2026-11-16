@@ -5,6 +5,7 @@
 //! all drive exactly the same thing.
 
 pub mod animate;
+pub mod backups;
 pub mod assets;
 pub mod builders;
 pub mod callouts;
@@ -23,6 +24,7 @@ pub mod export2;
 pub mod fbx;
 pub mod geo;
 pub mod geom;
+pub mod history;
 pub mod http;
 pub mod ifc;
 pub mod ifcin;

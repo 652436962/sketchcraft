@@ -12,34 +12,40 @@
 //!  - before every command we pick up what another client saved, so two
 //!    clients don't overwrite each other's work.
 
+use crate::backups::{self, Backup, Origin, Side};
 use crate::policy::Caller;
 use crate::safety::write_atomic;
 use crate::Engine;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-/// How many of the newest backups of the live file are always kept. Older
-/// ones are thinned (one per hour for two days, then one per day) rather than
-/// dropped, up to `MAX_BACKUPS`, so a burst of activity can't push out the history.
-const KEEP_BACKUPS: usize = 8;
-const MAX_BACKUPS: usize = 60;
-/// Damaged copies (`.damaged-*`) kept beside the live file.
-const KEEP_DAMAGED: usize = 5;
+/// Side files (`.damaged-*`, `.unsaved-*`) are only removed past this many (of one kind) or this much disk,
+/// oldest first, never the newest, and always with a notice.
+const KEEP_SIDE: usize = 20;
+const KEEP_SIDE_BYTES: u64 = 1 << 30;
 /// How long a notice about a damaged file stays on the scene.
 const NOTICE_FOR: Duration = Duration::from_secs(600);
-/// A backup is taken at most this often while working (and always before `new`/`open`).
+/// A backup is taken at most this often while working.
 const BACKUP_EVERY: Duration = Duration::from_secs(300);
-/// A backup taken just before something destructive (`new`, `open`, a delete or any change that
-/// drops a quarter of the model) is kept this long whatever else is thinned.
-const PRE_KEEP_SECS: u64 = 86_400;
-/// Destructive commands that take a backup first (at most this often, unless they shrink the model a lot).
+/// Destructive commands that take a backup first.
 const DESTRUCTIVE: [&str; 8] = ["new", "open", "delete", "purge", "explode", "ungroup", "clear_guides", "delete_view"];
-const DESTRUCTIVE_EVERY: Duration = Duration::from_secs(15);
-/// Backups whose names say they were made further ahead than this are not ours: ignored, never thinned.
-const CLOCK_SLACK_SECS: u64 = 120;
-/// Files kept when memory was set aside because another program saved first.
-const KEEP_UNSAVED: usize = 5;
+/// At most one forced backup this often per origin (the person's own steps / an agent's or a plugin's),
+/// unless the model changed size a lot (more than half, or the file doubled or halved).
+const FORCE_EVERY_UI: Duration = Duration::from_secs(15);
+const FORCE_EVERY_OTHER: Duration = Duration::from_secs(60);
+/// The biggest file a restore will read.
+const MAX_RESTORE_BYTES: u64 = 1 << 30;
+
+/// A forced ("pre") backup of the outgoing file: who asked, what kind of step, and whether it is
+/// exempt from pacing (only a restore the person asked for, or an explicit save, is).
+#[derive(Clone, Copy, Debug)]
+struct Force {
+    origin: Origin,
+    kind: &'static str,
+    big: bool,
+}
 
 pub struct Live {
     pub engine: Engine,
@@ -53,13 +59,17 @@ pub struct Live {
     notice_at: Option<SystemTime>,
     /// commands ran inside a batch and the file doesn't have them yet
     unsaved_batch: bool,
+    /// how much the model held when the open batch began, and whether a destructive command ran in it
+    batch_weight: usize,
+    batch_destructive: bool,
     /// saving is off: the file couldn't be read and couldn't be copied aside
     blocked: bool,
     /// memory holds work the file doesn't (a save failed): never replaced without keeping it first
     dirty: bool,
     /// the side file that holds work set aside; the notice about it stays while the file does
     sticky: Option<PathBuf>,
-    last_destructive: Option<SystemTime>,
+    /// the last forced backup per origin: when, and how big the file was
+    last_forced: HashMap<Origin, (SystemTime, u64)>,
 }
 
 fn mtime(p: &Path) -> Option<SystemTime> {
@@ -68,6 +78,10 @@ fn mtime(p: &Path) -> Option<SystemTime> {
 
 fn epoch(t: SystemTime) -> u64 {
     t.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+fn weight(m: &crate::model::Model) -> usize {
+    m.faces.len() + m.instances.len() + m.groups.len() + m.definitions.values().map(|d| weight(&d.model)).sum::<usize>()
 }
 
 /// True when this process is a Rust test program: a unit test (`cfg!(test)`), a program cargo put in
@@ -101,7 +115,7 @@ pub fn default_doc() -> PathBuf {
 
 impl Live {
     pub fn open(doc: PathBuf) -> Self {
-        let mut live = Live { engine: Engine::new(), doc, seen: None, persist: true, last_backup: None, notice: None, notice_at: None, unsaved_batch: false, blocked: false, dirty: false, sticky: None, last_destructive: None };
+        let mut live = Self::blank(Engine::new(), doc, true);
         if live.doc.exists() {
             live.load(true);
         }
@@ -109,9 +123,13 @@ impl Live {
         live
     }
 
+    fn blank(engine: Engine, doc: PathBuf, persist: bool) -> Self {
+        Live { engine, doc, seen: None, persist, last_backup: None, notice: None, notice_at: None, unsaved_batch: false, batch_weight: 0, batch_destructive: false, blocked: false, dirty: false, sticky: None, last_forced: HashMap::new() }
+    }
+
     /// A model that is not saved anywhere.
     pub fn memory(engine: Engine) -> Self {
-        Live { engine, doc: PathBuf::new(), seen: None, persist: false, last_backup: None, notice: None, notice_at: None, unsaved_batch: false, blocked: false, dirty: false, sticky: None, last_destructive: None }
+        Self::blank(engine, PathBuf::new(), false)
     }
 
     /// Open the file into the engine. If it can't be read, set it aside (a copy
@@ -128,7 +146,9 @@ impl Live {
         }
         // a reload keeps the component being edited, if it is still there
         let ctx = self.engine.ctx;
-        let had_history = self.engine.undo_depth() > 0;
+        // the person's own steps are kept as changes (what each step did), so that Undo after another
+        // program's save takes back the person's step and never the other program's work
+        let history = if at_start { None } else { self.engine.history_for_reload() };
         let r = self.engine.exec_json(&json!({"cmd": "open", "path": self.doc}).to_string());
         if r["ok"] == true {
             if let Some(d) = ctx.filter(|d| self.engine.model.definitions.contains_key(d)) {
@@ -138,12 +158,18 @@ impl Live {
             self.blocked = false;
             self.unsaved_batch = false;
             self.dirty = false;
+            let mut lost = 0;
+            if let Some(h) = history {
+                lost = self.engine.install_history(h);
+            }
             if self.sticky.is_none() {
                 self.notice = None;
-                if had_history {
-                    // the person's own steps can't be kept: undoing past another program's save would erase its work
-                    self.set_notice("Another program saved this model, so Undo can only go back to that point.".into());
+                if lost > 0 {
+                    self.set_notice(format!("Another program saved this model. {lost} of your oldest steps couldn't be kept for Undo; the rest still work."));
                 }
+            }
+            if self.engine.oversize {
+                self.set_notice(format!("This model has {} points, edges and faces, over the limit of {}. It is open for looking at and for deleting parts; it can't be saved until it is under the limit (the file on disk is untouched meanwhile).", self.engine.model.entity_count(), crate::model::MAX_ENTITIES));
             }
             return true;
         }
@@ -152,8 +178,9 @@ impl Live {
         match std::fs::copy(&self.doc, &aside) {
             Ok(_) => {
                 self.blocked = false;
-                self.set_notice(format!("The model file couldn't be opened ({why}). A copy was kept at {}; this session started from {}.", aside.display(), if at_start { "an empty model" } else { "the model in memory" }));
-                self.prune_damaged();
+                self.index_side(&aside);
+                self.set_notice(format!("The model file couldn't be opened ({why}). A copy was kept at {}; this session started from {}. File > Restore from backup... lists it.", aside.display(), if at_start { "an empty model" } else { "the model in memory" }));
+                self.prune_side(Side::Damaged);
             }
             Err(e) => {
                 self.blocked = true;
@@ -180,20 +207,47 @@ impl Live {
         }
     }
 
-    /// Keep only the newest few `<stem>.<kind>-*` side copies.
-    fn prune_side(&self, kind: &str, keep: usize) {
-        let (Some(dir), Some(stem)) = (self.doc.parent().filter(|d| !d.as_os_str().is_empty()).or(Some(Path::new("."))), self.doc.file_stem().map(|s| s.to_string_lossy().into_owned())) else { return };
-        let prefix = format!("{stem}.{kind}-");
-        let mut all: Vec<PathBuf> = std::fs::read_dir(dir).map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&prefix))).collect()).unwrap_or_default();
-        all.sort_by_key(|p| (mtime(p), p.clone()));
-        while all.len() > keep {
-            std::fs::remove_file(all.remove(0)).ok();
+    /// Note a side file this program wrote in the hidden index beside the model. Only files named there are ever pruned.
+    fn index_side(&self, p: &Path) {
+        if let Some(name) = p.file_name().map(|n| n.to_string_lossy().into_owned()) {
+            let mut names = backups::read_index(&self.doc);
+            if !names.contains(&name) {
+                names.push(name);
+                backups::write_index(&self.doc, &names);
+            }
         }
     }
 
-    /// Keep only the newest few `.damaged-*` copies.
-    fn prune_damaged(&self) {
-        self.prune_side("damaged", KEEP_DAMAGED);
+    /// Keep the side files of one kind within `KEEP_SIDE` files and `KEEP_SIDE_BYTES`: the oldest of the ones this
+    /// program wrote go first, the newest never, and whatever goes is named in a notice.
+    fn prune_side(&mut self, kind: Side) {
+        let indexed = backups::read_index(&self.doc);
+        let all: Vec<(Side, u64, PathBuf, u64)> = backups::side_files(&self.doc).into_iter().filter(|(k, ..)| *k == kind).collect();
+        let mut total: u64 = all.iter().map(|x| x.3).sum();
+        let mut count = all.len();
+        let mut removed: Vec<String> = vec![];
+        for (i, (_, _, p, size)) in all.iter().enumerate() {
+            if i + 1 == all.len() || (count <= KEEP_SIDE && total <= KEEP_SIDE_BYTES) {
+                break;
+            }
+            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            // only what we wrote; a file with such a name that we didn't make is left alone
+            if indexed.contains(&name) && std::fs::remove_file(p).is_ok() {
+                count -= 1;
+                total -= size;
+                removed.push(name);
+            }
+        }
+        if !removed.is_empty() {
+            let left: Vec<String> = indexed.into_iter().filter(|n| !removed.contains(n)).collect();
+            backups::write_index(&self.doc, &left);
+            let msg = format!("{} older {} file{} beside the model {} removed to stay under {KEEP_SIDE} files / {} GB: {}.", removed.len(), kind.word(), if removed.len() == 1 { "" } else { "s" }, if removed.len() == 1 { "was" } else { "were" }, KEEP_SIDE_BYTES >> 30, removed.join(", "));
+            let note = match self.notice.take() {
+                Some(n) => format!("{n} {msg}"),
+                None => msg,
+            };
+            self.set_notice(note);
+        }
     }
 
     /// Set the model in memory aside (`<name>.unsaved-<time>.sketchcraft` beside the file) before
@@ -210,9 +264,10 @@ impl Live {
         };
         let bytes = serde_json::to_vec(&self.engine.model).map_err(|e| e.to_string())?;
         write_atomic(&path, &bytes).map_err(|e| e.to_string())?;
-        self.prune_side("unsaved", KEEP_UNSAVED);
+        self.index_side(&path);
         self.sticky = Some(path.clone());
-        self.set_notice(format!("{why} Your changes were kept in {} (open it to get them back). This message stays until that file is moved or deleted.", path.display()));
+        self.set_notice(format!("{why} Your changes were kept in {} (File > Restore from backup... lists it). This message stays until that file is moved or deleted.", path.display()));
+        self.prune_side(Side::Unsaved);
         Ok(path)
     }
 
@@ -229,7 +284,12 @@ impl Live {
     }
 
     /// Housekeeping that must not wait for the next command: close a batch nobody closed (saving
-    /// what it did), and forget a side-file notice once the file is gone.
+    /// what it did), and forget a side-file notice once the file is gone. The bridge and the app call this
+    /// on a timer, so the 150 s limit holds even when nothing polls.
+    pub fn housekeeping(&mut self) {
+        self.tick();
+    }
+
     fn tick(&mut self) {
         if self.sticky.as_ref().is_some_and(|p| !p.exists()) {
             self.sticky = None;
@@ -240,7 +300,14 @@ impl Live {
         }
     }
 
-    /// Save what an unclosed batch did (no reply to give anyone).
+    /// What a closed batch that shrank the model a lot, or ran something destructive, forces a backup for.
+    fn batch_force(&self) -> Option<Force> {
+        let after = weight(&self.engine.model);
+        let shrank = self.batch_weight > 0 && after * 4 < self.batch_weight * 3;
+        (shrank || self.batch_destructive).then_some(Force { origin: Origin::Plugin, kind: "bat", big: false })
+    }
+
+    /// Save what a batch that has ended did (no reply to give anyone).
     fn finish_batch(&mut self) {
         if !self.unsaved_batch {
             return;
@@ -251,7 +318,8 @@ impl Live {
             self.take_theirs(true, "The plugin run was cut off and another program had saved the model meanwhile.");
             return;
         }
-        if let Err(e) = self.save(false) {
+        let force = self.batch_force();
+        if let Err(e) = self.save_with(force) {
             self.dirty = true;
             self.set_notice(format!("Couldn't save your model: {e}"));
         }
@@ -264,22 +332,36 @@ impl Live {
 
     pub fn exec_as(&mut self, caller: &Caller, cmd: &Value) -> Value {
         self.tick();
+        let name = cmd["cmd"].as_str().unwrap_or("");
+        // the person's own list of backups and the restore (only the app's own user; never a plugin or an agent)
+        if matches!(name, "list_backups" | "restore_backup") {
+            return if matches!(caller, Caller::Ui) { self.restore_command(name, cmd) } else { json!({"ok": false, "error": format!("\"{name}\" isn't available to plugins or agents")}) };
+        }
+        let origin = Origin::of(caller);
+        // the person edits while a plugin run is open: the run ends here (its work is saved first), so
+        // the person's own edits are never held inside a batch that a crash would lose
+        if self.persist && self.engine.in_batch() && matches!(caller, Caller::Ui) && !matches!(name, "begin_batch" | "end_batch" | "undo" | "redo") && serde_json::from_value::<crate::Command>(cmd.clone()).is_ok_and(|c| c.mutates()) {
+            self.engine.close_batch();
+            self.finish_batch();
+        }
         // someone else may have saved since we last looked: start from theirs. Never inside a batch (a
         // plugin run): the rest of its commands would land on their model; theirs is picked up when it ends.
         if !self.engine.in_batch() {
             self.sync();
         }
-        let name = cmd["cmd"].as_str().unwrap_or("");
-        fn weight(m: &crate::model::Model) -> usize {
-            m.faces.len() + m.instances.len() + m.groups.len() + m.definitions.values().map(|d| weight(&d.model)).sum::<usize>()
-        }
         let size = |e: &Engine| weight(&e.model);
-        let (before, size_before) = (self.engine.revision(), size(&self.engine));
+        let (before, size_before, depth_before) = (self.engine.revision(), size(&self.engine), self.engine.undo_depth());
         let destructive = DESTRUCTIVE.contains(&name);
         let mut r = self.engine.exec_value_as(caller, cmd.clone());
         // inside a batch (a plugin run) the file is written once, when the batch ends
         let changed = r["ok"] == true && self.engine.revision() != before;
         if self.engine.in_batch() {
+            if name == "begin_batch" && !self.unsaved_batch {
+                self.batch_weight = size_before;
+                self.batch_destructive = false;
+            } else if destructive && r["ok"] == true {
+                self.batch_destructive = true;
+            }
             self.unsaved_batch |= changed;
             return r;
         }
@@ -287,14 +369,24 @@ impl Live {
         let changed = changed || (r["ok"] == true && self.unsaved_batch);
         self.unsaved_batch = false;
         if changed && self.persist {
-            // a change that drops a quarter of the model (or a destructive command) keeps the file as it
-            // was in Backups first: the person's own undo doesn't cross a reload, so this is the way back
-            let shrank = !matches!(name, "undo" | "redo") && size_before > 0 && size(&self.engine) * 4 < size_before * 3;
-            let paced = self.last_destructive.is_none_or(|t| SystemTime::now().duration_since(t).unwrap_or_default() >= DESTRUCTIVE_EVERY);
-            let force = matches!(name, "new" | "open") || shrank || (destructive && paced);
-            if force && !matches!(name, "new" | "open") {
-                self.last_destructive = Some(SystemTime::now());
-            }
+            // a change that drops a quarter of the model (or a destructive command, or a plugin run that did) keeps
+            // the file as it was in Backups first. Forced backups are paced per origin (see `backup`).
+            let size_after = size(&self.engine);
+            let shrank = !matches!(name, "undo" | "redo") && size_before > 0 && size_after * 4 < size_before * 3;
+            let batch = if had_batch { self.batch_force() } else { None };
+            let force = if let Some(b) = batch {
+                Some(b)
+            } else if matches!(name, "new" | "open") || shrank || destructive {
+                let kind = match name {
+                    "new" => "new",
+                    "open" => "open",
+                    "delete" | "purge" | "explode" | "ungroup" | "clear_guides" | "delete_view" => "del",
+                    _ => "shr",
+                };
+                Some(Force { origin, kind: if shrank && !destructive { "shr" } else { kind }, big: false })
+            } else {
+                None
+            };
             // another client saved while this command ran: theirs wins, so nobody's work is overwritten.
             // A plugin run's whole output is set aside first (a single command is just run again)
             if self.doc.exists() && !self.blocked && mtime(&self.doc) != self.seen {
@@ -304,6 +396,8 @@ impl Live {
                 if had_batch && kept.is_none() {
                     return json!({"ok": false, "error": "Another program saved the model while the plugin ran, and the plugin's changes couldn't be set aside, so nothing was saved. Run it again."});
                 }
+                // what this command did is being thrown away: it is not a step to undo
+                self.engine.drop_steps_after(depth_before);
                 if self.load(false) {
                     return json!({"ok": false, "error": match kept {
                         Some(p) => format!("Someone else saved the model while that ran, so their version was kept. What the plugin made was set aside in {}.", p.display()),
@@ -311,7 +405,7 @@ impl Live {
                     }});
                 }
             }
-            match self.save(force) {
+            match self.save_with(force) {
                 Ok(()) => {
                     self.dirty = false;
                     if self.notice.as_deref().is_some_and(|n| n.starts_with("Couldn't save")) {
@@ -330,30 +424,37 @@ impl Live {
 
     /// Write the model to the live file (atomically), keeping backups.
     pub fn save(&mut self, force_backup: bool) -> Result<(), String> {
+        self.save_with(force_backup.then_some(Force { origin: Origin::Ui, kind: "big", big: true }))
+    }
+
+    fn save_with(&mut self, force: Option<Force>) -> Result<(), String> {
         if self.blocked {
             return Err("saving is off because the model file couldn't be read (see the notice)".into());
+        }
+        if self.engine.oversize {
+            return Err(format!("the model has {} points, edges and faces, over the limit of {}: delete parts of it and saving resumes", self.engine.model.entity_count(), crate::model::MAX_ENTITIES));
         }
         self.engine.model.check_sane().map_err(|e| e.to_string())?;
         let bytes = serde_json::to_vec(&self.engine.model).map_err(|e| e.to_string())?;
         if let Some(dir) = self.doc.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        self.backup(force_backup);
+        self.backup(force);
         write_atomic(&self.doc, &bytes).map_err(|e| e.to_string())?;
         self.seen = mtime(&self.doc);
         Ok(())
     }
 
-    /// Keep the file as it is now in `Backups/`, if the last backup is old
-    /// enough (or `force`). A file that is blank, unreadable or identical to
-    /// the newest backup is not worth a slot, and thinning (see `thin`) keeps
-    /// older history, so repeated `new`/`open` can't push out the last good copy.
-    /// A forced backup is a "pre" one: kept a day whatever else is thinned.
-    fn backup(&mut self, force: bool) {
+    /// Keep the file as it is now in `Backups/`, if the last backup is old enough (or `force`d). A file
+    /// that is blank, unreadable or identical to the newest backup is not worth a slot. A forced backup
+    /// is a "pre" one, named for what asked for it; they are paced per origin (15 s for the person's own
+    /// steps, 60 s for an agent's or a plugin's) unless the model changed size a lot, and each origin has
+    /// its own quota (see `backups`), so an agent's loop can't push out the person's backups.
+    fn backup(&mut self, force: Option<Force>) {
         let Some(dir) = self.doc.parent().map(|d| d.join("Backups")) else { return };
         let now = SystemTime::now();
-        let due = force || self.last_backup.is_none_or(|t| now.duration_since(t).unwrap_or_default() >= BACKUP_EVERY);
-        if !due || !self.doc.is_file() {
+        let timed_due = self.last_backup.is_none_or(|t| now.duration_since(t).unwrap_or_default() >= BACKUP_EVERY);
+        if (force.is_none() && !timed_due) || !self.doc.is_file() {
             return;
         }
         let Ok(bytes) = std::fs::read(&self.doc) else { return };
@@ -361,31 +462,46 @@ impl Live {
             Ok(m) if !m.is_blank() => {}
             _ => return,
         }
+        let size = bytes.len() as u64;
+        // pacing: a forced backup that comes too soon after the last one from the same origin is held back,
+        // unless the file is more than twice or less than half the size of that one (or the force is exempt)
+        let force = force.filter(|f| {
+            let pace = if f.origin == Origin::Ui { FORCE_EVERY_UI } else { FORCE_EVERY_OTHER };
+            match self.last_forced.get(&f.origin) {
+                None => true,
+                Some((t, sz)) => f.big || now.duration_since(*t).unwrap_or(pace) >= pace || size > sz.saturating_mul(2) || size.saturating_mul(2) < *sz,
+            }
+        });
+        if force.is_none() && !timed_due {
+            return;
+        }
         let stem = self.doc.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "live".into());
         if std::fs::create_dir_all(&dir).is_err() {
             return;
         }
-        let mut all = list_backups(&dir, &stem, epoch(now));
+        let t = epoch(now);
+        let all = backups::list(&dir, &stem, t);
         if all.last().is_some_and(|newest| std::fs::read(&newest.path).is_ok_and(|b| b == bytes)) {
             self.last_backup = Some(now);
             return;
         }
         let mut n = 0;
-        let t = epoch(now);
         let target = loop {
-            let tail = if n == 0 { String::new() } else { format!("-{n}") };
-            let plain = dir.join(format!("{stem}-{t}{tail}.sketchcraft"));
-            let pre = dir.join(format!("{stem}-{t}{tail}-pre.sketchcraft"));
-            if !plain.exists() && !pre.exists() {
-                break if force { pre } else { plain };
+            // a name in use in either spelling (plain or pre, any kind) is skipped
+            let taken = backups::list(&dir, &stem, t).iter().any(|b| b.secs == t && b.n == n);
+            let name = backups::file_name(&stem, t, n, force.map(|f| (Some(f.kind), f.origin)));
+            if !taken && !dir.join(&name).exists() {
+                break dir.join(name);
             }
             n += 1;
         };
         // whole or not at all: a crash or a full disk must not leave a half file that counts as a slot
         if write_atomic(&target, &bytes).is_ok() {
             self.last_backup = Some(now);
-            all = list_backups(&dir, &stem, epoch(now));
-            for p in thin(&all, epoch(now)) {
+            if let Some(f) = force {
+                self.last_forced.insert(f.origin, (now, size));
+            }
+            for p in backups::to_delete(&backups::list(&dir, &stem, t), t) {
                 std::fs::remove_file(p).ok();
             }
         }
@@ -421,59 +537,131 @@ impl Live {
         let mut s = crate::scene::build(&self.engine.model, self.engine.ctx);
         s["doc"] = json!(self.doc);
         if let (Some(n), Some(at)) = (&self.notice, self.notice_at) {
-            if SystemTime::now().duration_since(at).unwrap_or_default() < NOTICE_FOR || self.blocked || self.dirty || self.sticky.as_ref().is_some_and(|p| p.exists()) {
+            if SystemTime::now().duration_since(at).unwrap_or_default() < NOTICE_FOR || self.blocked || self.dirty || self.engine.oversize || self.sticky.as_ref().is_some_and(|p| p.exists()) {
                 s["notice"] = json!(n);
             }
         }
         s
     }
-}
 
-/// A backup SketchCraft wrote: its name is exactly `<stem>-<seconds>[-<n>][-pre].sketchcraft`.
-#[derive(Clone, Debug)]
-struct Backup {
-    path: PathBuf,
-    secs: u64,
-    n: u64,
-    pre: bool,
-    size: u64,
-}
+    // ---- Restore from backup -------------------------------------------------------------
 
-/// What `name` says about itself if it is one of the backups of the document `stem` (and nothing
-/// else: `a-b-170...` is not a backup of `a`).
-fn parse_backup(stem: &str, name: &str) -> Option<(u64, u64, bool)> {
-    let rest = name.strip_prefix(stem)?.strip_prefix('-')?.strip_suffix(".sketchcraft")?;
-    let (rest, pre) = match rest.strip_suffix("-pre") {
-        Some(r) => (r, true),
-        None => (rest, false),
-    };
-    let mut parts = rest.split('-');
-    let secs = parts.next().filter(|d| (9..=11).contains(&d.len()) && d.bytes().all(|b| b.is_ascii_digit()))?.parse::<u64>().ok()?;
-    let n = match parts.next() {
-        None => 0,
-        Some(d) if !d.is_empty() && d.len() <= 6 && d.bytes().all(|b| b.is_ascii_digit()) => d.parse().ok()?,
-        _ => return None,
-    };
-    parts.next().is_none().then_some((secs, n, pre))
-}
+    fn stem(&self) -> String {
+        self.doc.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "live".into())
+    }
 
-/// The backups of `stem` in `dir`, oldest first. Only real files with SketchCraft's own names;
-/// a name claiming a time well in the future (`now` plus a couple of minutes: a clock that was
-/// set back, or a file put there by something else) is ignored, so it can't push out real ones.
-fn list_backups(dir: &Path, stem: &str, now: u64) -> Vec<Backup> {
-    let mut all: Vec<Backup> = std::fs::read_dir(dir)
-        .map(|rd| {
-            rd.flatten()
-                .filter_map(|e| {
-                    let meta = std::fs::symlink_metadata(e.path()).ok().filter(|m| m.is_file() && m.len() > 0)?;
-                    let (secs, n, pre) = parse_backup(stem, &e.file_name().to_string_lossy())?;
-                    (secs <= now + CLOCK_SLACK_SECS).then(|| Backup { path: e.path(), secs, n, pre, size: meta.len() })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    all.sort_by(|a, b| (a.secs, a.n, a.pre).cmp(&(b.secs, b.n, b.pre)));
-    all
+    /// Everything the person can restore from: backups (newest first), then work set aside and copies of
+    /// unreadable files (newest first).
+    fn restorable(&self) -> Vec<Value> {
+        let t = epoch(SystemTime::now());
+        let dir = self.doc.parent().map(|d| d.join("Backups")).unwrap_or_default();
+        let mut items: Vec<Value> = vec![];
+        let mut all: Vec<Backup> = backups::list(&dir, &self.stem(), t);
+        all.reverse();
+        for b in all {
+            let what = if b.pre { backups::kind_label(b.kind.as_deref()).to_string() } else { "Timed backup".to_string() };
+            let by = if b.pre && b.origin != Origin::Ui { format!(" by {}", b.origin.name()) } else { String::new() };
+            items.push(json!({"kind": "backup", "name": b.name(), "secs": b.secs, "size": b.size, "label": format!("{what}{by}")}));
+        }
+        let mut side = backups::side_files(&self.doc);
+        side.reverse();
+        for (kind, secs, path, size) in side {
+            items.push(json!({"kind": kind.word(), "name": path.file_name().map(|n| n.to_string_lossy().into_owned()), "secs": secs, "size": size, "label": kind.label()}));
+        }
+        items
+    }
+
+    /// The file a request names, found by name in the folders we write to: a bare name that is exactly one of
+    /// our backups or side files for this model, a plain file (never a link), of readable size.
+    fn restore_source(&self, kind: &str, name: &str) -> Result<PathBuf, String> {
+        if name.is_empty() || name.contains(['/', '\\', '\0']) || name.starts_with('.') {
+            return Err("that isn't one of the model's backups".into());
+        }
+        let stem = self.stem();
+        let path = match kind {
+            "backup" if backups::parse(&stem, name).is_some() => self.doc.parent().map(|d| d.join("Backups").join(name)),
+            "unsaved" | "damaged" if backups::parse_side(&stem, name).is_some_and(|(s, _)| s.word() == kind) => self.doc.parent().filter(|d| !d.as_os_str().is_empty()).map(|d| d.join(name)).or_else(|| Some(PathBuf::from(name))),
+            _ => None,
+        };
+        let path = path.ok_or_else(|| "that isn't one of the model's backups".to_string())?;
+        let meta = std::fs::symlink_metadata(&path).map_err(|_| "that backup is gone".to_string())?;
+        if !meta.is_file() {
+            return Err("that backup isn't a plain file".into());
+        }
+        if meta.len() > MAX_RESTORE_BYTES {
+            return Err("that file is too big to restore from here".into());
+        }
+        Ok(path)
+    }
+
+    fn restore_command(&mut self, name: &str, cmd: &Value) -> Value {
+        if !self.persist {
+            return json!({"ok": false, "error": "this model isn't saved anywhere, so it has no backups"});
+        }
+        if name == "list_backups" {
+            return json!({"ok": true, "dir": self.doc.parent().map(|d| d.join("Backups")), "items": self.restorable()});
+        }
+        if self.engine.in_batch() {
+            return json!({"ok": false, "error": "a plugin is still running; restore when it has finished"});
+        }
+        let (kind, file) = (cmd["kind"].as_str().unwrap_or("backup"), cmd["name"].as_str().unwrap_or(""));
+        let src = match self.restore_source(kind, file) {
+            Ok(p) => p,
+            Err(e) => return json!({"ok": false, "error": e}),
+        };
+        let mode = cmd["mode"].as_str().unwrap_or("replace");
+        if mode == "copy" {
+            // a copy beside the model, in a folder of its own, never over anything
+            let dir = self.doc.parent().filter(|d| !d.as_os_str().is_empty()).map(|d| d.join("Restored")).unwrap_or_else(|| PathBuf::from("Restored"));
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                return json!({"ok": false, "error": format!("couldn't make the Restored folder: {e}")});
+            }
+            let bytes = match std::fs::read(&src) {
+                Ok(b) => b,
+                Err(e) => return json!({"ok": false, "error": format!("couldn't read it: {e}")}),
+            };
+            if serde_json::from_slice::<crate::model::Model>(&bytes).is_err() {
+                return json!({"ok": false, "error": "that file isn't a model SketchCraft can read"});
+            }
+            let base = file.trim_end_matches(".sketchcraft");
+            let mut k = 0;
+            loop {
+                let p = dir.join(if k == 0 { format!("{base}-copy.sketchcraft") } else { format!("{base}-copy-{k}.sketchcraft") });
+                match std::fs::OpenOptions::new().write(true).create_new(true).open(&p) {
+                    Ok(mut f) => {
+                        use std::io::Write;
+                        return match f.write_all(&bytes) {
+                            Ok(()) => json!({"ok": true, "path": p, "mode": "copy"}),
+                            Err(e) => json!({"ok": false, "error": format!("couldn't write the copy: {e}")}),
+                        };
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && k < 1000 => k += 1,
+                    Err(e) => return json!({"ok": false, "error": format!("couldn't write the copy: {e}")}),
+                }
+            }
+        }
+        self.sync();
+        let model: crate::model::Model = match std::fs::read(&src).map_err(|e| e.to_string()).and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string())) {
+            Ok(m) => m,
+            Err(e) => return json!({"ok": false, "error": format!("that file isn't a model SketchCraft can read ({e})")}),
+        };
+        let _ = ();
+        if let Err(e) = self.engine.replace_model(model) {
+            return json!({"ok": false, "error": e.to_string()});
+        }
+        // the model it replaced is kept in Backups first (the outgoing file), and the restore is one undoable step
+        match self.save_with(Some(Force { origin: Origin::Ui, kind: "rst", big: true })) {
+            Ok(()) => {
+                self.dirty = false;
+                json!({"ok": true, "mode": "replace", "faces": self.engine.model.faces.len()})
+            }
+            Err(e) => {
+                self.dirty = true;
+                self.set_notice(format!("Couldn't save your model: {e}"));
+                json!({"ok": true, "mode": "replace", "faces": self.engine.model.faces.len(), "save_error": e})
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -492,97 +680,4 @@ mod tests {
         // and this very process is recognized as a test program
         assert!(running_as_cargo_test());
     }
-
-    fn b(secs: u64, n: u64, pre: bool, size: u64) -> Backup {
-        Backup { path: PathBuf::from(format!("b-{secs}-{n}{}", if pre { "-pre" } else { "" })), secs, n, pre, size }
-    }
-
-    #[test]
-    fn backup_names_match_only_their_own_document() {
-        assert_eq!(parse_backup("a", "a-1794862562.sketchcraft"), Some((1794862562, 0, false)));
-        assert_eq!(parse_backup("a", "a-1794862562-3-pre.sketchcraft"), Some((1794862562, 3, true)));
-        // another document whose name starts with this one's, and names that aren't ours
-        assert_eq!(parse_backup("a", "a-b-1794862562.sketchcraft"), None);
-        assert_eq!(parse_backup("a-b", "a-b-1794862562.sketchcraft"), Some((1794862562, 0, false)));
-        assert_eq!(parse_backup("a", "a-draft.sketchcraft"), None);
-        assert_eq!(parse_backup("a", "a-12.sketchcraft"), None);
-        assert_eq!(parse_backup("a", "a-1794862562.skp"), None);
-        assert_eq!(parse_backup("a", "a-1794862562-1-2.sketchcraft"), None);
-    }
-
-    #[test]
-    fn thinning_keeps_the_newest_of_a_bucket_and_what_was_taken_before_a_destructive_change() {
-        let now = 1_800_000_000;
-        // twenty backups inside one 30 s bucket: the newest eight, plus the newest of the bucket (one of those)
-        let mut all: Vec<Backup> = (0..20).map(|i| b(now - 100 + i, 0, false, 10)).collect();
-        // the good one, older and taken just before a `new`
-        all.insert(0, b(now - 100, 1, true, 5000));
-        all.sort_by(|x, y| (x.secs, x.n, x.pre).cmp(&(y.secs, y.n, y.pre)));
-        let gone: Vec<String> = thin(&all, now).iter().map(|p| p.to_string_lossy().into_owned()).collect();
-        assert!(!gone.iter().any(|g| g.contains("-pre")), "the pre-destructive backup was thinned: {gone:?}");
-        assert!(!gone.iter().any(|g| g == &format!("b-{}-0", now - 81)), "newest 8 kept");
-        assert!(gone.len() >= 8, "the older plain ones are thinned: {gone:?}");
-        // more than MAX_BACKUPS: the oldest go, the newest never
-        let many: Vec<Backup> = (0..200).map(|i| b(now - 200_000 + i * 1000, 0, false, 10)).collect();
-        let gone = thin(&many, now);
-        assert!(!gone.contains(&many[199].path));
-        assert!(many.len() - gone.len() <= MAX_BACKUPS);
-    }
-}
-
-/// Which backups (given oldest first) to delete. Kept: the newest `KEEP_BACKUPS`; of the older
-/// ones the newest of each 30 s (last 10 min), 5 min (last hour), hour (two days) and day; every
-/// "pre" backup (taken just before a destructive change) for a day; and the biggest of the last day.
-/// At most `MAX_BACKUPS` in all: when there are more, the oldest unprotected go first.
-fn thin(all: &[Backup], now: u64) -> Vec<PathBuf> {
-    let mut keep = vec![false; all.len()];
-    let cut = all.len().saturating_sub(KEEP_BACKUPS);
-    let mut seen = std::collections::HashSet::new();
-    // newest first, so the first seen in a bucket is the newest in it
-    for (i, b) in all.iter().enumerate().rev() {
-        if i >= cut {
-            keep[i] = true;
-            continue;
-        }
-        let t = b.secs;
-        let age = now.saturating_sub(t);
-        let bucket = match age {
-            0..600 => (0u8, t / 30),
-            600..3600 => (1, t / 300),
-            3600..172_800 => (2, t / 3600),
-            _ => (3, t / 86400),
-        };
-        keep[i] = seen.insert(bucket);
-    }
-    let day = |b: &Backup| now.saturating_sub(b.secs) < PRE_KEEP_SECS;
-    let mut protected = vec![false; all.len()];
-    for (i, b) in all.iter().enumerate() {
-        if b.pre && day(b) {
-            protected[i] = true;
-        }
-    }
-    if let Some((i, _)) = all.iter().enumerate().filter(|(_, b)| day(b)).max_by_key(|(_, b)| b.size) {
-        protected[i] = true;
-    }
-    for i in 0..all.len() {
-        keep[i] |= protected[i];
-    }
-    let mut kept = keep.iter().filter(|k| **k).count();
-    let mut drop = vec![false; all.len()];
-    for (i, k) in keep.iter().enumerate() {
-        drop[i] = !*k;
-    }
-    // over the limit: the oldest unprotected go first, then the oldest protected (never the newest)
-    for pass in [false, true] {
-        for i in 0..all.len().saturating_sub(1) {
-            if kept <= MAX_BACKUPS {
-                break;
-            }
-            if keep[i] && !drop[i] && (pass || !protected[i]) && i < cut.max(1) {
-                drop[i] = true;
-                kept -= 1;
-            }
-        }
-    }
-    all.iter().zip(drop).filter(|(_, d)| *d).map(|(b, _)| b.path.clone()).collect()
 }

@@ -23,6 +23,7 @@ import { ErrorBoundary } from "./boundary";
 import { PhotoModeler } from "./photomodel";
 import { RefImageDialog } from "./refimage";
 import { Text3dDialog } from "./text3d";
+import { RestoreDialog } from "./restore";
 import { TimelinePanel } from "./timeline";
 import { LearnCenter, LessonCard, lessonsDone, useLearnCtx } from "./learn";
 
@@ -261,6 +262,7 @@ export default function App() {
   const [showPhotoModel, setShowPhotoModel] = useState(false);
   const [showRef, setShowRef] = useState(false);
   const [showText3d, setShowText3d] = useState(false);
+  const [showRestore, setShowRestore] = useState(false);
   const [showTimeline, setShowTimeline] = useState(false);
   const [showLearn, setShowLearn] = useState(false);
   const [lesson, setLesson] = useState<string | null>(null);
@@ -916,6 +918,7 @@ export default function App() {
       { label: "Open…", hint: "File", key: "⌘O", run: file.open },
       { label: "Save", hint: "File", key: "⌘S", run: () => file.save(false) },
       { label: "Save As…", hint: "File", run: () => file.save(true) },
+      { label: "Restore from backup…", hint: "File · earlier copies of this model, and work set aside", run: () => setShowRestore(true) },
       { label: "Import…", hint: "File · SketchUp, DWG/DXF, IFC, FBX, OBJ, point clouds", key: "⌘I", run: file.import },
       ...(["glb", "obj", "stl", "dae", "dxf", "dwg", "pdf", "ifc"] as const).map((k) => ({ label: `Export ${k.toUpperCase()}…`, hint: "File", run: () => file.export(k) })),
       { label: "Render…", hint: "Photoreal render", run: () => setShowRender(true) },
@@ -998,6 +1001,7 @@ export default function App() {
                   <button onClick={file.open}>Open… <kbd>⌘O</kbd></button>
                   <button onClick={() => file.save(false)}>Save <kbd>⌘S</kbd></button>
                   <button onClick={() => file.save(true)}>Save As… <kbd>⇧⌘S</kbd></button>
+                  <button onClick={() => setShowRestore(true)}>Restore from backup…</button>
                   <hr />
                   <button onClick={file.import}>Import SketchUp, CAD or OBJ… <kbd>⌘I</kbd></button>
                   <button onClick={() => fileRef.current?.click()}>Import from browser upload…</button>
@@ -1322,6 +1326,7 @@ export default function App() {
           />
         )}
         {lesson && learnCtx && <LessonCard key={lesson} id={lesson} ctx={learnCtx} onClose={() => setLesson(null)} onToast={say} />}
+        {showRestore && <RestoreDialog run={run} onClose={() => setShowRestore(false)} onToast={say} />}
         {showText3d && scene && <Text3dDialog scene={scene} run={run} camera={() => api.current!.camera()} onClose={() => setShowText3d(false)} onToast={say} />}
         {showRef && scene && <RefImageDialog scene={scene} run={run} onClose={() => setShowRef(false)} onToast={say} />}
         {showPhotoModel && scene && <PhotoModeler scene={scene} run={run} onClose={() => setShowPhotoModel(false)} onToast={say} />}

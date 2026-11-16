@@ -34,6 +34,14 @@ try {
   const sk = readSkin({ name: "x", tokens: { bg: `image-set("https://example.com/x.png" 1x)`, text: "#000" } }, "x");
   check(sk && sk.tokens.bg === SKINS[0].tokens.bg && sk.tokens.text === "#000", "a shared skin's bad value falls back, good ones stay");
 
+  // ---- the restore list: rows are data, never markup ---------------------------------
+  const { cleanItems, ago, bytes } = await load("/src/restoreclean.ts");
+  const rows = cleanItems([{ kind: "backup", name: "live-1.sketchcraft", secs: 5, size: 9, label: "Timed backup" }, { kind: "evil", name: "x", label: "x" }, { kind: "backup", name: 5, label: "x" }, null, "x", { kind: "unsaved", name: "a".repeat(999), secs: "7", size: "1e3", label: "y".repeat(999) }]);
+  check(rows.length === 2 && rows[1].name.length === 200 && rows[1].label.length === 80 && rows[1].secs === 7, "restore rows: unknown kinds and malformed rows are dropped, text is capped");
+  check(cleanItems("no").length === 0 && cleanItems(Array(100000).fill({ kind: "backup", name: "a", label: "b" })).length === 500, "restore rows: not a list is empty, a long list is capped");
+  check(ago(1000, 1010) === "just now" && ago(1000, 1000 + 600) === "10 min ago" && ago(1000, 1000 + 7200) === "2 h ago" && ago(1000, 1000 + 90000) === "yesterday" && ago(1000, 1000 + 5 * 86400) === "5 days ago", "restore times read plainly");
+  check(bytes(10) === "10 B" && bytes(2048) === "2 KB" && bytes(5 * 1024 * 1024) === "5.0 MB", "restore sizes read plainly");
+
   // ---- what plugins hand the window ------------------------------------------------
   const { cleanResult, cleanForm } = await load("/src/pluginclean.ts");
   const hostile = [null, 5, "x", [], { title: {} }, { table: { columns: 1, rows: "x" } }, { table: { columns: ["a"], rows: [1, null, [{}], ["x".repeat(10000)]] } }, { text: { toString: 1 } }];

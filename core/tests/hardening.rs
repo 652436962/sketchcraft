@@ -436,17 +436,23 @@ fn undo_after_a_reload_cannot_erase_the_other_clients_work() {
     other.exec(&json!({"cmd": "rect", "from": [10, 0, 0], "to": [14, 4, 0]}));
     other.exec(&json!({"cmd": "rect", "from": [20, 0, 0], "to": [24, 4, 0]}));
     std::thread::sleep(std::time::Duration::from_millis(1100));
-    // the app picks up their work, then the person presses Undo
+    // the app picks up their work, then the person presses Undo: it takes back the person's own rectangle
+    // (the one step they made) and never one of theirs
     assert_eq!(app.exec(&json!({"cmd": "info"}))["faces"], 3);
-    app.exec(&json!({"cmd": "undo"}));
+    assert_eq!(app.exec(&json!({"cmd": "undo"}))["ok"], true);
     let mut check = Engine::new();
     run(&mut check, json!({"cmd": "open", "path": doc}));
-    assert_eq!(faces(&mut check), 3, "their rectangles are still on disk");
-    // and the person's own steps still undo normally afterwards
+    assert_eq!(faces(&mut check), 2, "their two rectangles are still on disk, the person's own step is undone");
+    assert!(!check.model.vertices.values().any(|v| v.p.x < 5.0), "the person's rectangle at x 0..4 is the one that went");
+    // there was only one step of theirs: a second Undo has nothing to undo, and theirs stay
+    assert_eq!(app.exec(&json!({"cmd": "undo"}))["ok"], false);
+    run(&mut check, json!({"cmd": "open", "path": doc}));
+    assert_eq!(faces(&mut check), 2);
+    // and the person's own new steps undo normally afterwards
     app.exec(&json!({"cmd": "rect", "from": [30, 0, 0], "to": [34, 4, 0]}));
     app.exec(&json!({"cmd": "undo"}));
     run(&mut check, json!({"cmd": "open", "path": doc}));
-    assert_eq!(faces(&mut check), 3);
+    assert_eq!(faces(&mut check), 2);
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -511,13 +517,24 @@ fn repeated_new_cannot_erase_the_last_good_backup() {
 fn damaged_copies_are_pruned_and_the_notice_clears_when_the_file_is_repaired() {
     let dir = scratch("damaged-prune");
     let doc = dir.join("live.sketchcraft");
-    for _ in 0..9 {
+    let mut last = None;
+    for _ in 0..24 {
         std::fs::write(&doc, b"{ not a model").unwrap();
         let live = Live::open(doc.clone());
         assert!(live.notice.is_some());
+        last = live.notice.clone();
     }
     let kept = std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().contains(".damaged-")).count();
-    assert!(kept <= 5, "{kept} damaged copies");
+    assert_eq!(kept, 20, "{kept} damaged copies");
+    // R4-BRN-006: nothing is removed without a notice that names what went
+    assert!(last.as_deref().is_some_and(|n| n.contains("older damaged file") && n.contains("removed")), "{last:?}");
+    // a look-alike the program didn't write is never counted or removed (R4-MBK-005)
+    std::fs::write(dir.join("live.damaged-1700000001"), b"planted").unwrap();
+    for _ in 0..3 {
+        std::fs::write(&doc, b"{ not a model").unwrap();
+        Live::open(doc.clone());
+    }
+    assert!(dir.join("live.damaged-1700000001").exists(), "a planted look-alike was removed");
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -703,12 +720,6 @@ fn a_batch_of_commands_is_one_undo_step_and_one_save() {
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
-}
-
-fn tiny_model_file(path: &std::path::Path) {
-    let mut e = Engine::new();
-    run(&mut e, json!({"cmd": "rect", "from": [0, 0, 0], "to": [4, 4, 0]}));
-    run(&mut e, json!({"cmd": "save", "path": path}));
 }
 
 /// R3-MBK-002: an agent can't put files in Backups or Plugins through the library commands.
@@ -973,8 +984,9 @@ fn undo_history_survives_a_touch_and_the_loss_is_reported() {
     other.exec(&json!({"cmd": "rect", "from": [50, 0, 0], "to": [54, 4, 0]}));
     std::thread::sleep(std::time::Duration::from_millis(1100));
     app.sync();
-    assert_eq!(app.engine.undo_depth(), 0);
-    assert!(app.scene()["notice"].as_str().is_some_and(|n| n.contains("Undo")), "{:?}", app.scene()["notice"]);
+    // R4 (per-client undo): the person's own steps are kept across another program's real save
+    assert_eq!(app.engine.undo_depth(), 2, "the history is kept");
+    assert!(app.scene()["notice"].is_null(), "{:?}", app.scene()["notice"]);
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -1220,5 +1232,180 @@ fn a_failed_command_reserves_no_name_and_a_replaced_file_is_not_the_agents() {
     let r = e.exec_json_as(&a, &json!({"cmd": "export_obj", "path": "x/Mine.obj"}).to_string());
     assert_eq!(r["ok"], false, "{r}");
     assert_eq!(std::fs::read(ws.join("x/Mine.obj")).unwrap(), b"the person edited this");
+    std::fs::remove_dir_all(&base).ok();
+}
+
+fn pre_backups(dir: &std::path::Path) -> Vec<String> {
+    backups(dir).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).filter(|n| n.contains("-pre")).collect()
+}
+
+/// R4-MBK-001: an agent's `new` loop cannot push out the person's backups: its own quota is small and separate.
+#[test]
+fn an_agents_new_loop_cannot_evict_the_persons_backups() {
+    let base = scratch("agent-flood");
+    let ws = base.clone();
+    let doc = base.join("live.sketchcraft");
+    let mut person = Live::open(doc.clone());
+    for i in 0..6 {
+        person.exec(&json!({"cmd": "rect", "from": [i * 10, 0, 0], "to": [i * 10 + 4, 4, 0]}));
+    }
+    // the person's own destructive step: a pre backup of the six rectangles
+    person.exec(&json!({"cmd": "new"}));
+    let good: Vec<PathBuf> = backups(&base);
+    assert!(!good.is_empty());
+    // a prompt-injected agent in its own process on the same file, 70 build-and-reset cycles
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let mut theirs = Live::open(doc.clone());
+    let a = agent(&ws);
+    for i in 0..70 {
+        let r = theirs.exec_as(&a, &json!({"cmd": "rect", "from": [0, 0, 0], "to": [4 + i, 4, 0]}));
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(theirs.exec_as(&a, &json!({"cmd": "new"}))["ok"], true);
+    }
+    assert!(good.iter().all(|p| p.exists()), "the person's backups survived 70 cycles");
+    let others = backups(&base).iter().filter(|p| p.to_string_lossy().ends_with("-a.sketchcraft")).count();
+    assert!(others <= 10, "the agent's slots are capped ({others})");
+    // paced: far fewer than 70 forced backups were even taken
+    assert!(others <= 3, "forced backups are paced for agents ({others})");
+    std::fs::remove_dir_all(&base).ok();
+}
+
+/// R4-BRN-002: a plugin run that wipes the model takes a "before a plugin run" backup first.
+#[test]
+fn a_plugin_run_that_deletes_most_of_the_model_takes_a_backup_first() {
+    let dir = scratch("batch-backup");
+    let doc = dir.join("live.sketchcraft");
+    let mut live = Live::open(doc.clone());
+    let mut ids = vec![];
+    for i in 0..3 {
+        ids.push(live.exec(&json!({"cmd": "rect", "from": [i * 10, 0, 0], "to": [i * 10 + 4, 4, 0]}))["face"].as_u64().unwrap());
+    }
+    live.exec(&json!({"cmd": "begin_batch"}));
+    let r = live.exec_as(&Caller::Plugin, &json!({"cmd": "delete", "ids": ids}));
+    assert_eq!(r["ok"], true, "{r}");
+    live.exec(&json!({"cmd": "end_batch"}));
+    let mut check = Engine::new();
+    run(&mut check, json!({"cmd": "open", "path": doc}));
+    assert_eq!(faces(&mut check), 0);
+    let pre = pre_backups(&dir);
+    assert!(pre.iter().any(|n| n.contains("-pre-bat-p")), "{pre:?}");
+    let found = backups(&dir).into_iter().any(|p| {
+        run(&mut check, json!({"cmd": "open", "path": p}));
+        faces(&mut check) == 3
+    });
+    assert!(found, "a backup of the three rectangles exists");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// R4-BRN-003: erase-heavy work does not turn every step into a forced backup.
+#[test]
+fn big_deletes_in_a_loop_are_paced_and_do_not_evict_the_timed_history() {
+    let dir = scratch("delete-loop");
+    let doc = dir.join("live.sketchcraft");
+    let mut live = Live::open(doc.clone());
+    live.exec(&json!({"cmd": "rect", "from": [500, 0, 0], "to": [504, 4, 0]}));
+    live.exec(&json!({"cmd": "rect", "from": [510, 0, 0], "to": [514, 4, 0]}));
+    // an older timed backup (an hour ago) that holds the session start
+    std::fs::create_dir_all(dir.join("Backups")).unwrap();
+    let old = dir.join("Backups").join(format!("live-{}.sketchcraft", now_secs() - 7200));
+    std::fs::copy(&doc, &old).unwrap();
+    for _ in 0..80 {
+        let mut ids = vec![];
+        for i in 0..3 {
+            ids.push(live.exec(&json!({"cmd": "rect", "from": [i * 10, 0, 0], "to": [i * 10 + 4 + (ids.len() as i64), 4, 0]}))["face"].as_u64().unwrap());
+        }
+        live.exec(&json!({"cmd": "delete", "ids": ids}));
+    }
+    let pre = pre_backups(&dir);
+    assert!(pre.len() <= 6, "{} forced backups in a few seconds", pre.len());
+    assert!(old.exists(), "the older backup is still there");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// R4-BRN-007: the person's own edit while a plugin run is open ends the run (and saves it), so a crash can't lose it;
+/// and the 150 s limit is enforced by `housekeeping` with no poll or command.
+#[test]
+fn the_persons_edit_ends_a_plugin_run_and_the_timer_closes_a_forgotten_one() {
+    let dir = scratch("batch-ui");
+    let doc = dir.join("live.sketchcraft");
+    let mut live = Live::open(doc.clone());
+    live.exec(&json!({"cmd": "begin_batch"}));
+    live.exec_as(&Caller::Plugin, &json!({"cmd": "rect", "from": [0, 0, 0], "to": [4, 4, 0]}));
+    // the person draws while the run is open: the run is closed and saved, then their rectangle is saved
+    let r = live.exec(&json!({"cmd": "rect", "from": [10, 0, 0], "to": [14, 4, 0]}));
+    assert_eq!(r["ok"], true, "{r}");
+    let mut check = Engine::new();
+    run(&mut check, json!({"cmd": "open", "path": doc}));
+    assert_eq!(faces(&mut check), 2, "both are on disk: a crash now loses nothing");
+    assert!(!live.engine.in_batch());
+    // a run nobody closes: housekeeping alone (no command, no poll) closes and saves it
+    live.exec(&json!({"cmd": "begin_batch"}));
+    live.exec_as(&Caller::Plugin, &json!({"cmd": "rect", "from": [20, 0, 0], "to": [24, 4, 0]}));
+    live.engine.expire_batch_for_test();
+    live.housekeeping();
+    assert!(!live.engine.in_batch());
+    run(&mut check, json!({"cmd": "open", "path": doc}));
+    assert_eq!(faces(&mut check), 3);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// R4-BRN-008 / R4-MBK-004: a model over the geometry limit still opens (for viewing and cutting down), can't grow, can't be saved
+/// over the file, and is never a dead end; one command can't add more than the per-command limit.
+#[test]
+fn a_model_over_the_limit_opens_and_can_be_cut_down() {
+    use sketchcraft::model::{Model, Vertex, MAX_ENTITIES};
+    let dir = scratch("oversize");
+    let doc = dir.join("live.sketchcraft");
+    let mut m = Model::default();
+    // a group holding a bit more than the limit, plus one honest rectangle's worth outside it
+    let g = m.begin_group("Too much".into());
+    for i in 0..(MAX_ENTITIES + 10) {
+        m.vertices.insert((1000 + i) as sketchcraft::Id, Vertex { p: glam::DVec3::new(i as f64, 0.0, 0.0), group: Some(g) });
+    }
+    m.next_id = (1000 + MAX_ENTITIES + 10) as sketchcraft::Id;
+    m.active_group = None;
+    std::fs::write(&doc, serde_json::to_vec(&m).unwrap()).unwrap();
+    let on_disk = std::fs::read(&doc).unwrap();
+    let mut live = Live::open(doc.clone());
+    assert!(live.engine.oversize, "opened, flagged");
+    assert!(live.notice.as_deref().is_some_and(|n| n.contains("over the limit")), "{:?}", live.notice);
+    assert!(live.scene()["notice"].is_string());
+    // growth is refused, the file on disk is untouched
+    let r = live.exec(&json!({"cmd": "rect", "from": [0, 0, 0], "to": [4, 4, 0]}));
+    assert_eq!(r["ok"], false, "{r}");
+    assert_eq!(std::fs::read(&doc).unwrap(), on_disk);
+    // cutting it down works, and saving resumes once it is under
+    let r = live.exec(&json!({"cmd": "delete", "ids": [g]}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(!live.engine.oversize);
+    let r = live.exec(&json!({"cmd": "rect", "from": [0, 0, 0], "to": [4, 4, 0]}));
+    assert_eq!(r["ok"], true, "{r}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// R4-MBK-004: one command can't add a million entities (the per-command limit), whatever it is.
+#[test]
+fn one_command_cannot_add_more_than_the_growth_limit() {
+    let mut e = Engine::new();
+    let r = e.exec_json(&json!({"cmd": "terrain_grid", "at": [0, 0, 0], "width": 600, "depth": 600, "spacing": 1}).to_string());
+    assert_eq!(r["ok"], false, "{r}");
+    let r = e.exec_json(&json!({"cmd": "terrain_grid", "at": [0, 0, 0], "width": 100, "depth": 100, "spacing": 1}).to_string());
+    assert_eq!(r["ok"], true, "{r}");
+}
+
+/// R4-MBK-005: an agent can't write a file named like the ones SketchCraft sets aside, and planted look-alikes are never pruned.
+#[test]
+fn an_agent_cannot_plant_files_that_look_like_set_aside_work() {
+    let base = scratch("side-names");
+    let a = agent(&base);
+    let mut e = Engine::new();
+    run_as(&mut e, &a, json!({"cmd": "rect", "from": [0, 0, 0], "to": [2, 2, 0]}));
+    for name in ["live.unsaved-1800000000.sketchcraft", "live.unsaved-1800000000-1.sketchcraft", "x.damaged-1800000000.sketchcraft"] {
+        let r = e.exec_json_as(&a, &json!({"cmd": "save", "path": name}).to_string());
+        assert_eq!(r["ok"], false, "{name} -> {r}");
+        assert!(!base.join(name).exists());
+    }
+    let r = e.exec_json_as(&a, &json!({"cmd": "save", "path": "fine.sketchcraft"}).to_string());
+    assert_eq!(r["ok"], true, "{r}");
     std::fs::remove_dir_all(&base).ok();
 }
