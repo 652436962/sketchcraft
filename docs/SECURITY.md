@@ -59,7 +59,15 @@ yours) and can't be steered by an OBJ's material line, the dev server's token
 endpoint is limited to its own page and user, and the release workflow keeps the
 update key away from compilation. See the red-team notes in the repository history.
 
-Checks for these live in `core/tests/hardening.rs`, `app/checks/run.mjs`
+A fourth round: backups have a quota per origin (you, an agent, a plugin), are paced and
+capped by bytes, and a plugin run that wipes the model is backed up first; reserved folders
+(`Backups`, `Plugins`) are compared folded and by identity; the "made by this agent" record is
+kept only for files really written and checked by file identity; a model holds at most 2 million
+entities (a bigger one opens for viewing and cutting down); DXF wall layers and hatches and
+`text_3d` stop at their deadline; Undo is per client (see `core/src/history.rs`); the release
+workflow's compiling job no longer names an Apple secret.
+
+Checks for these live in `core/tests/hardening.rs`, `core/tests/undo.rs`, `app/checks/run.mjs`
 (`npm run check`) and `tools/security-tests/plugin-sandbox.mjs`.
 
 Known limits: plugins are trusted with your model (not your files): install

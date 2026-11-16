@@ -5,6 +5,44 @@
 **File › Save** writes a `.sketchcraft` file. SketchCraft also keeps a live
 copy as you work, so a crash doesn't lose your model.
 
+## Restoring an earlier version
+
+SketchCraft keeps earlier copies of your model in a `Backups` folder beside it:
+one every few minutes while you work (older ones are thinned to about one an hour,
+then one a day), and an extra one just before anything that removes a lot: New,
+Open, a big delete, or a plugin run that wiped much of the model.
+
+**File › Restore from backup…** (or **Shift+S**, type "restore") lists them, newest
+first, with the time, the size and what the copy was taken before ("before New",
+"before a big shrink", "before a plugin run"). For each one:
+
+- **Restore** puts that version in place as one step. **Undo (⌘Z) takes the restore
+  back**, and the model it replaced is kept as a backup first, so you can't lose
+  anything by trying.
+- **Save a copy** leaves your model alone and puts that version in a `Restored`
+  folder beside it, so you can open it with **File › Open…** and compare.
+
+The same list shows work SketchCraft **set aside** for you: a `.unsaved-` file
+(your changes, kept when another program saved over the model while a plugin was
+running or your own save was failing) and a `.damaged-` file (a copy of a model
+file that couldn't be read). Restoring from those works the same way. SketchCraft
+never deletes these without telling you.
+
+Backups made because an AI agent or a plugin did something big are kept in their
+own small share (at most ten each), so they can't push out your own.
+
+If two programs edit the same model (for example Claude over MCP), **Undo** takes
+back only *your* last step, never the other program's work. If the other program has
+since changed or built on the same objects, Undo says so and skips that step instead
+of guessing.
+
+## Models that are too big
+
+A model can hold about two million points, edges and faces. A bigger one (an
+enormous import) still opens, for looking at and for deleting parts of it; it can't
+be saved over your file until it is under the limit, and the file on disk isn't touched
+meanwhile.
+
 ## Opening other formats
 
 **File › Open…** or **Import…** (⌘I):

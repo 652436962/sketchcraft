@@ -24,7 +24,10 @@ The live file is `~/Documents/SketchCraft/live.sketchcraft`, or the path in the
 each pick up the other's latest save before they change anything, and save the
 whole model after a change, so edits don't overwrite each other (if you both
 change the same thing at the same moment, the later one wins). Backups of the
-file are kept in `Backups/` beside it.
+file are kept in `Backups/` beside it; an agent's own destructive steps (`new`,
+`open`, big deletes) are backed up in a small separate quota (10 files, paced to one a
+minute) so they can't push out yours. Each client has its own Undo: yours takes back
+your last step and never the agent's work (and the other way round).
 
 ## What an agent may do
 
@@ -40,10 +43,11 @@ person at the keyboard:
   `Backups/` and `Plugins/` are off limits;
 - it writes files with the right extension for the command (`.obj` for
   `export_obj`, `.png` for `save_image`, and so on), and never replaces a file it
-  didn't make itself in that session: it writes new file names. `save_image`
+  didn't make itself in that session (and that is still exactly as it left it): it writes new file names, never one that looks like a `.unsaved-` or `.damaged-` file. `save_image`
   only writes images it can decode. The library an agent uses is `Library/` in
   its workspace; `save_to_library` and `library_add` take plain `collection`/`name`
-  values (no folders, dots or `Backups`/`Plugins`) and add new files only, and an
+  values (no folders, dots or `Backups`/`Plugins`; a collection is ASCII letters, digits, space, `-` and `_`)
+  and add new files only, and an
   OBJ or DAE export refuses to write beside an existing `.mtl` or `_textures`
   folder it didn't make;
 - never: installing, enabling or removing plugins, `save_text` (writing any text

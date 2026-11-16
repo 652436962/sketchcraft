@@ -62,6 +62,7 @@ Scripts, the CLI and the app run every command. Plugin code and AI agents run
 under a narrower allowlist (see [Security](../SECURITY.md)); every caller's numbers
 (within +/-1e9), strings and paths are checked.
 | History | `undo`, `redo` |
+| Backups (the app only: not plugins or agents) | `list_backups`, `restore_backup` (`kind`: `backup`/`unsaved`/`damaged`, `name`, `mode`: `replace` or `copy`) |
 
 The engine's own list (and each command's fields) lives in
 [core/src/commands.rs](../../core/src/commands.rs): every command is one

@@ -37,7 +37,30 @@ What changed in each SketchCraft release, newest first. The format follows
   instead of freezing the app. The report CSV can't carry formulas, plugin tool
   previews can't crash the window, and a long Ruby script has a time limit.
 
+- **A fourth review.** Backups can no longer be pushed out: forced backups are paced,
+  your backups, an agent's and a plugin's each have their own small quota (with a byte
+  limit too), a plugin run that wipes the model is backed up first, and the files set
+  aside next to your model are only removed with a notice. Folder names such as
+  `Backupſ` or `BACKUP~1` can't reach Backups or Plugins (they are compared by what
+  they are on disk, not by spelling), and a name an agent has made is only "its own"
+  while the file is still exactly what it wrote. A model can hold about 2 million
+  points, edges and faces (was 8 million); a bigger one opens for viewing and cutting
+  down instead of being refused. DXF wall layers and hatches, and 3D text, now stop at
+  their time limit. A plugin run is closed on time even if the app is idle, and your
+  own edits during a run are saved at once. The release workflow keeps the Apple
+  secrets out of the job that compiles, and checks the file names it signs.
+
 ### Added
+- **Restore from backup…** (File menu, or Shift+S): the model's earlier copies,
+  newest first, with their time, size and what they were taken before ("before New",
+  "before a plugin run"). Restore one as a single Undo step (the model it replaces is
+  backed up first) or save it as a copy beside the model. Work SketchCraft set aside
+  (`.unsaved-` and `.damaged-` files) is listed there too.
+- **Undo keeps your own history when another program saves.** Claude or a second
+  window saving the model no longer wipes your Undo: it takes back your last step and
+  never the other program's work. If the other program changed or built on the same
+  objects, Undo says so and skips that step instead of guessing. A plugin run is
+  still one step.
 - **Plugins window** (File › Plugins ▸ Manage plugins…, or Shift+S): every
   plugin with its version and author, turn each on or off, remove yours
   (moved aside, so it can come back), and **Install from file…** for a .zip.

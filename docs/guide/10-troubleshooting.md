@@ -26,6 +26,20 @@ face. Make each part a group so parts don't stick together.
 **The model is slow.** Turn off Shadows and ambient occlusion while you work,
 hide what you don't need (tags help), and use components for repeated things.
 
+**I lost work, or the model changed and I want the old one.** Use **File ›
+Restore from backup…** (or Shift+S, "restore"). It lists the copies SketchCraft kept
+and the work it set aside; see [Files](05-files.md#restoring-an-earlier-version).
+Restoring is one Undo step, and nothing is deleted when you do it.
+
+**A message says my changes were kept in a `.unsaved-` file.** Another program saved
+the model while your changes were waiting (a plugin run, or a save that was failing).
+Your changes are in that file: **File › Restore from backup…** lists it under "Work
+set aside". The message stays until you move or delete the file.
+
+**Undo says "this step can't be taken back".** Another program (Claude, a second
+window) changed the same objects after your step, and undoing it would also undo its
+work, so SketchCraft skips it. Your earlier steps are still there.
+
 **Where are my files?** Wherever you saved them. SketchCraft's own folder is
 `Documents/SketchCraft`: the live model, themes and plugins.
 
