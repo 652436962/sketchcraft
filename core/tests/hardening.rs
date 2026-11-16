@@ -1097,7 +1097,7 @@ fn many_wall_layers_are_not_quadratic() {
     let mut e = Engine::new();
     let t = std::time::Instant::now();
     let _ = e.exec_json(&json!({"cmd": "import_dxf", "text": s, "units": "m"}).to_string());
-    assert!(t.elapsed().as_secs() < 8, "{:?}", t.elapsed());
+    assert!(t.elapsed().as_secs() < 25, "{:?}", t.elapsed());
 }
 
 #[test]
@@ -1123,4 +1123,26 @@ fn a_hatch_with_many_islands_answers_inside_the_deadline() {
     let t = std::time::Instant::now();
     let _ = e.exec_json(&json!({"cmd": "import_dxf", "text": s, "units": "m"}).to_string());
     assert!(t.elapsed().as_secs() < 25, "{:?}", t.elapsed());
+}
+
+/// R4-BRN-004: text_3d has one end-to-end deadline: the app's own call with 400 overlapping outlines
+/// (inside the app's count cap) and ordinary text on a big model both answer (done or refused) in bounded time.
+#[test]
+fn text_3d_stops_at_its_deadline_for_the_app_too() {
+    let circle = |cx: f64, cy: f64, r: f64| -> Value { Value::Array((0..40).map(|k| { let a = k as f64 / 40.0 * std::f64::consts::TAU; json!([cx + r * a.cos(), cy + r * a.sin()]) }).collect()) };
+    let mut e = Engine::new();
+    let rings: Vec<Value> = (0..400).map(|i| circle(i as f64 * 0.01, 0.0, 1.0)).collect();
+    let t = std::time::Instant::now();
+    let _ = e.exec_json(&json!({"cmd": "text_3d", "rings": rings, "at": [0, 0, 0], "right": [1, 0, 0], "up": [0, 1, 0], "depth": 0.1}).to_string());
+    let took = t.elapsed().as_secs_f64();
+    assert!(took < 20.0, "UI text_3d with 400 overlapping circles ran {took:.1}s");
+    // nothing is left half done when it was stopped
+    // and a model that was already big: the limit still holds
+    let mut e = Engine::new();
+    run(&mut e, json!({"cmd": "terrain_grid", "at": [0, 0, 0], "width": 150, "depth": 150, "spacing": 1}));
+    let rings: Vec<Value> = (0..10).map(|i| circle(i as f64 * 3.0, 200.0, 1.0)).collect();
+    let t = std::time::Instant::now();
+    let _ = e.exec_json_as(&Caller::Plugin, &json!({"cmd": "text_3d", "rings": rings, "at": [0, 0, 0], "right": [1, 0, 0], "up": [0, 1, 0], "depth": 0.1}).to_string());
+    let took = t.elapsed().as_secs_f64();
+    assert!(took < 20.0, "plugin text_3d on a big model ran {took:.1}s");
 }

@@ -155,6 +155,19 @@ impl Model {
     /// holes (the middle of an O). Laid in the plane through `at` spanned by
     /// `right` and `up`, then pulled `depth` toward right × up (0 = flat).
     pub fn text_3d(&mut self, rings: &[Vec<[f64; 2]>], at: DVec3, right: DVec3, up: DVec3, depth: f64) -> Result<Vec<Id>> {
+        // one limit for the whole job, checked inside the drawing, nesting, cutting and pulling steps
+        let before = self.deadline;
+        self.deadline = Some(std::time::Instant::now() + TEXT_3D_SECONDS);
+        let r = self.text_3d_inner(rings, at, right, up, depth);
+        self.deadline = before;
+        r.map_err(|e| if self.over_deadline_msg(&e) { anyhow::anyhow!("that text took more than {} seconds to build, so it was stopped (use fewer or simpler outlines, or a smaller model)", TEXT_3D_SECONDS.as_secs()) } else { e })
+    }
+
+    fn over_deadline_msg(&self, e: &anyhow::Error) -> bool {
+        e.to_string().starts_with("that took too long")
+    }
+
+    fn text_3d_inner(&mut self, rings: &[Vec<[f64; 2]>], at: DVec3, right: DVec3, up: DVec3, depth: f64) -> Result<Vec<Id>> {
         let rings: Vec<Vec<DVec2>> = rings
             .iter()
             .map(|r| {
@@ -176,7 +189,6 @@ impl Model {
             bail!("right and up are parallel");
         }
         let to3 = |p: DVec2| at + right * p.x + up * p.y;
-        let started = std::time::Instant::now();
         // nesting depth: how many rings each one sits inside (a ring's box must hold the point first)
         let boxes: Vec<(DVec2, DVec2)> = rings.iter().map(|r| r.iter().fold((DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)), |(lo, hi), p| (lo.min(*p), hi.max(*p)))).collect();
         let depth_of: Vec<usize> = rings
@@ -184,15 +196,14 @@ impl Model {
             .enumerate()
             .map(|(i, r)| rings.iter().enumerate().filter(|(j, o)| *j != i && boxes[*j].0.cmple(r[0]).all() && r[0].cmple(boxes[*j].1).all() && geom::inside(r[0], o)).count())
             .collect();
+        self.check_deadline()?;
         let mut solids = vec![];
         // outers first, so holes land in them
         let mut order: Vec<usize> = (0..rings.len()).collect();
         order.sort_by_key(|&i| depth_of[i]);
         for i in order {
             // each outline is worked into the drawing so far: the time is capped, not only the count
-            if started.elapsed() > TEXT_3D_SECONDS {
-                bail!("that text took more than {} seconds to build, so it was stopped (use fewer or simpler outlines)", TEXT_3D_SECONDS.as_secs());
-            }
+            self.check_deadline()?;
             let mut r = rings[i].clone();
             if area(&r) < 0.0 {
                 r.reverse(); // counter-clockwise, facing out of the text plane
@@ -209,6 +220,7 @@ impl Model {
         // the faces may have been split or re-made by later holes: find them again
         let mut out = vec![];
         for f in solids {
+            self.check_deadline()?;
             if !self.faces.contains_key(&f) {
                 continue;
             }

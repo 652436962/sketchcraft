@@ -196,11 +196,35 @@ impl Model {
     /// Edges between nearly parallel neighbouring faces (a cylinder's sides)
     /// become soft, so curved shapes read as smooth.
     pub fn soften_smooth(&mut self, faces: &[Id]) {
-        let set: std::collections::BTreeSet<Id> = faces.iter().copied().collect();
-        let edges: Vec<(Id, Id, Id)> = self.edges.iter().map(|(&k, e)| (k, e.a, e.b)).collect();
+        use std::collections::{HashMap, HashSet};
+        let key = |a: Id, b: Id| (a.min(b), a.max(b));
+        // only the edges of the given faces can change: one pass over the model, not one per edge
+        let mut wanted: HashSet<(Id, Id)> = HashSet::new();
+        for f in faces.iter().filter_map(|f| self.faces.get(f)) {
+            for l in f.loops() {
+                for i in 0..l.len() {
+                    wanted.insert(key(l[i], l[(i + 1) % l.len()]));
+                }
+            }
+        }
+        let mut users: HashMap<(Id, Id), Vec<Id>> = HashMap::new();
+        for (&id, f) in &self.faces {
+            for l in f.loops() {
+                for i in 0..l.len() {
+                    let k = key(l[i], l[(i + 1) % l.len()]);
+                    if wanted.contains(&k) {
+                        let v = users.entry(k).or_default();
+                        if !v.contains(&id) {
+                            v.push(id);
+                        }
+                    }
+                }
+            }
+        }
+        let edges: Vec<(Id, Id, Id)> = self.edges.iter().filter(|(_, e)| wanted.contains(&key(e.a, e.b))).map(|(&k, e)| (k, e.a, e.b)).collect();
         for (k, a, b) in edges {
-            let fs = self.faces_using_edge(a, b);
-            if fs.len() == 2 && fs.iter().any(|f| set.contains(f)) {
+            let Some(fs) = users.get(&key(a, b)) else { continue };
+            if fs.len() == 2 {
                 let (n1, n2) = (self.normal(fs[0]), self.normal(fs[1]));
                 if n1.dot(n2) > 0.0f64.max((35.0f64).to_radians().cos()) && n1.dot(n2) < 1.0 - 1e-9 {
                     self.edges.get_mut(&k).unwrap().soft = true;

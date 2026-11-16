@@ -299,6 +299,10 @@ pub struct Model {
     /// (blue is red × green). None: the model's own axes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub axes: Option<[[f64; 3]; 3]>,
+    /// A time limit for the work in progress (never saved): set by a command that can be slow on a big model,
+    /// checked inside the expensive loops (`over_deadline`), so the limit holds end to end.
+    #[serde(skip)]
+    pub deadline: Option<std::time::Instant>,
 }
 
 /// A named section plane: cuts away the side its normal points from.
@@ -561,6 +565,19 @@ impl Model {
         self.faces.iter().filter(|(_, f)| f.uses_edge(a, b)).map(|(&id, _)| id).collect()
     }
 
+    /// True once the deadline set by the command in progress has passed.
+    pub fn over_deadline(&self) -> bool {
+        self.deadline.is_some_and(|d| std::time::Instant::now() >= d)
+    }
+
+    /// An error once the deadline has passed (see `deadline`).
+    pub fn check_deadline(&self) -> Result<()> {
+        if self.over_deadline() {
+            bail!("that took too long, so it was stopped (use fewer or simpler outlines, or a smaller model)");
+        }
+        Ok(())
+    }
+
     /// Insert a face as given (no checks), creating its edges.
     pub(crate) fn insert_face(&mut self, face: Face) -> Id {
         for l in face.loops().cloned().collect::<Vec<_>>() {
@@ -604,9 +621,12 @@ impl Model {
         let mid = mine.iter().copied().sum::<glam::DVec2>() / mine.len() as f64;
         let mut hole_in = None;
         let mut split = None;
-        for (&id, f) in &self.faces {
+        for (k, (&id, f)) in self.faces.iter().enumerate() {
             if f.group != group {
                 continue;
+            }
+            if k % 64 == 0 {
+                self.check_deadline()?;
             }
             let fp = self.pts(&f.outer);
             let fnorm = geom::newell(&fp);
@@ -737,6 +757,7 @@ impl Model {
     /// Push (negative) or pull (positive) a face along its normal. Returns the
     /// ids of faces created or moved; the pushed face's id is first.
     pub fn pushpull(&mut self, fid: Id, d: f64) -> Result<Vec<Id>> {
+        self.check_deadline()?;
         let f = self.face(fid)?.clone();
         if d.abs() < WELD {
             return Ok(vec![fid]);
@@ -752,6 +773,7 @@ impl Model {
                 !others.is_empty() && others.iter().all(|g| self.normal(*g).dot(n).abs() < 1e-6)
             })
         });
+        self.check_deadline()?;
         if slide {
             let verts: BTreeSet<Id> = loops.iter().flatten().copied().collect();
             for v in verts {
@@ -777,6 +799,7 @@ impl Model {
                 })
             });
         let carving = embedded && d < 0.0;
+        self.check_deadline()?;
 
         let mut map: HashMap<Id, Id> = HashMap::new();
         for &v in loops.iter().flatten() {
