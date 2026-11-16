@@ -538,8 +538,8 @@ thread_local! {
 /// The most edges and faces one import may make. Crossing lines make a face for
 /// every cell they enclose (n lines each way: n squared), so the output is capped
 /// as well as the time.
-const MAX_EDGES: usize = 1_500_000;
-const MAX_FACES: usize = 1_000_000;
+const MAX_EDGES: usize = 750_000;
+const MAX_FACES: usize = 400_000;
 /// Most places lines may be cut where they cross, in one level of one layer.
 const MAX_CUTS: usize = 2_000_000;
 

@@ -1237,8 +1237,14 @@ fn sane3(v: DVec3) -> bool {
 
 /// The most one command may add (copies of heavy groups), and the most a model may hold:
 /// past these a model can't be saved, reloaded or drawn in reasonable time or memory.
-pub const MAX_GROWTH: usize = 1_000_000;
-pub const MAX_ENTITIES: usize = 8_000_000;
+///
+/// Why 2 million: the whole model is written to one file on every change and read back by every
+/// program that shares it. About 70 bytes of JSON per point, edge or face puts 2 million at around
+/// 140 MB, which is about a second to save and a few to reload on an ordinary disk; the old 8 million
+/// meant a 470 MB file, 4 s per command and 1.2 GB of memory (measured in the round-4 tests). Real
+/// models are far below it (a 360,000-line site plan is under 1 million).
+pub const MAX_GROWTH: usize = 500_000;
+pub const MAX_ENTITIES: usize = 2_000_000;
 
 impl Model {
     /// Every number the model holds is finite and within `MAX_COORD`. A model
@@ -1246,6 +1252,12 @@ impl Model {
     /// file could never be opened again), so commands that produce one are
     /// undone.
     pub fn check_sane(&self) -> Result<()> {
+        self.check_sane_with(true)
+    }
+
+    /// `check_sane`, with or without the limit on how much geometry the model holds (a model over it
+    /// is opened for viewing and for deleting parts, never refused outright).
+    pub fn check_sane_with(&self, count: bool) -> Result<()> {
         let bad = |what: &str| -> Result<()> { bail!("that would put a non-finite or absurdly large number ({what}) in the model, so it was not done") };
         if !self.vertices.values().all(|v| sane3(v.p)) {
             return bad("a point");
@@ -1286,10 +1298,10 @@ impl Model {
             }
         }
         for d in self.definitions.values() {
-            d.model.check_sane()?;
+            d.model.check_sane_with(false)?;
         }
-        if self.entity_count() > MAX_ENTITIES {
-            bail!("the model has more than {MAX_ENTITIES} points, edges and faces, so it was not saved");
+        if count && self.entity_count() > MAX_ENTITIES {
+            bail!("the model has more than {MAX_ENTITIES} points, edges and faces ({}), so it can't be saved: delete parts of it until it is under the limit", self.entity_count());
         }
         if self.text_bytes() > MAX_TEXT_BYTES {
             bail!("the model's names and notes add up to more than {} MB, so that was not done", MAX_TEXT_BYTES >> 20);

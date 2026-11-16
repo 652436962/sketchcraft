@@ -328,6 +328,15 @@ fn path_values<'a>(cmd: &'a mut Value) -> Vec<&'a mut Value> {
     out
 }
 
+/// The files SketchCraft sets aside beside a model (`<name>.unsaved-<time>.sketchcraft`, `<name>.damaged-<time>`) are the
+/// person's recovery copies: an agent may not write a file that could be taken for one.
+fn reject_side_name(p: &Path) -> Result<(), String> {
+    match p.file_name().map(|n| n.to_string_lossy().into_owned()) {
+        Some(n) if crate::backups::looks_like_side(&n) => Err(format!("{n:?} looks like one of the files SketchCraft sets aside to protect work; an agent can't write a file with that kind of name")),
+        _ => Ok(()),
+    }
+}
+
 /// The command that was vetted has finished (`ok`: it succeeded): files it wrote are now the agent's own.
 pub fn settle(caller: &Caller, ok: bool) {
     if let Caller::Mcp(ws) = caller {
@@ -390,6 +399,9 @@ pub fn vet(caller: &Caller, cmd: &mut Value) -> Result<(), String> {
             let collection = cmd.get("collection").and_then(Value::as_str).unwrap_or("").to_string();
             let (_, plan) = crate::library::plan_add(&dir, &paths, &collection).map_err(|e| e.to_string())?;
             let dests: Vec<PathBuf> = plan.iter().map(|(_, d)| resolve(d)).collect();
+            for d in &dests {
+                reject_side_name(d)?;
+            }
             if let Some(d) = dests.iter().find(|d| d.exists() && !ws.owns(d)) {
                 return Err(format!("{} already exists and wasn't made by this agent (or has changed since): an agent adds new files to the library, it doesn't replace the person's", d.display()));
             }
@@ -403,6 +415,7 @@ pub fn vet(caller: &Caller, cmd: &mut Value) -> Result<(), String> {
                 return Err(format!("\"{c}\" writes .{} files: {path:?} has the wrong extension", exts.join(" or .")));
             }
             let resolved = resolve(p);
+            reject_side_name(&resolved)?;
             if resolved.exists() && !ws.owns(&resolved) {
                 return Err(format!("{path:?} already exists and wasn't made by this agent (or has changed since): an agent writes new file names, it doesn't replace the person's files"));
             }

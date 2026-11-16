@@ -128,6 +128,8 @@ impl Model {
         if (nx + 1) * (ny + 1) > MAX_POINTS {
             bail!("that grid is too fine: use a bigger spacing");
         }
+        // points, edges (about 3 a point) and triangles (2 a cell): refused before anything is built
+        self.check_room((nx + 1) * (ny + 1) * 4 + nx * ny * 2)?;
         let (sx, sy) = (width / nx as f64, depth / ny as f64);
         let pts: Vec<DVec3> = (0..=ny).flat_map(|j| (0..=nx).map(move |i| at + DVec3::new(i as f64 * sx, j as f64 * sy, 0.0))).collect();
         let idx = |i: usize, j: usize| j * (nx + 1) + i;
