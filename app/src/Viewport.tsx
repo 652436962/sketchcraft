@@ -1170,7 +1170,9 @@ export default function Viewport(props: Props) {
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.Float32BufferAttribute(f.positions, 3));
       const col: number[] = [];
-      for (let i = 0; i < f.colors.length; i += 3) for (let k = 0; k < 3; k++) col.push(f.colors[i], f.colors[i + 1], f.colors[i + 2]);
+      // the colors are sRGB; the renderer works in linear light
+      const lin = (c: number) => Math.pow(c, 2.2);
+      for (let i = 0; i < f.colors.length; i += 3) for (let k = 0; k < 3; k++) col.push(lin(f.colors[i]), lin(f.colors[i + 1]), lin(f.colors[i + 2]));
       g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
       g.computeVertexNormals();
       const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, clippingPlanes: clip, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
