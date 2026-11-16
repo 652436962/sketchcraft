@@ -79,5 +79,26 @@ fn install_turn_off_and_remove_a_plugin() {
     assert!(!folder.exists() && home.join("Plugins/.removed").is_dir());
     let list = run(&mut e, json!({"cmd":"plugins"}));
     assert!(!list["plugins"].as_array().unwrap().iter().any(|p| p["id"] == "stair-maker"));
+
+    // a single SketchUp Ruby script
+    let rb = "UI.menu('Plugins').add_item('Make a box') { Sketchup.active_model.entities.add_face([0,0,0],[10,0,0],[10,10,0],[0,10,0]) }";
+    let r = run(&mut e, json!({"cmd":"install_plugin","data": b64(rb.as_bytes()),"name":"make_box.rb"}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["id"], "make-box");
+    assert_eq!(r["ruby"], true);
+    // an .rbz: a loader at the top and the real code in a folder
+    let rbz = zip_of(&[("stairs_maker.rb", "Sketchup.require 'stairs_maker/main'"), ("stairs_maker/main.rb", "puts 'stairs'"), ("stairs_maker/readme.txt", "hi")]);
+    let r = run(&mut e, json!({"cmd":"install_plugin","data": b64(&rbz),"name":"stairs_maker.rbz"}));
+    assert_eq!(r["ok"], true, "{r}");
+    let list = run(&mut e, json!({"cmd":"plugins"}));
+    let sm = list["plugins"].as_array().unwrap().iter().find(|p| p["id"] == "stairs-maker").unwrap().clone();
+    assert_eq!(sm["ruby"], true);
+    assert_eq!(sm["name"], "Stairs Maker");
+    assert_eq!(sm["entry"][0], "stairs_maker.rb");
+    assert!(sm["files"]["stairs_maker/main.rb"].as_str().unwrap().contains("puts"));
+    assert!(sm["files"].get("stairs_maker/readme.txt").is_none(), "only .rb files are sent");
+    let mb = list["plugins"].as_array().unwrap().iter().find(|p| p["id"] == "make-box").unwrap().clone();
+    assert!(mb["files"]["make_box.rb"].as_str().unwrap().contains("add_face"));
+
     std::fs::remove_dir_all(&home).ok();
 }

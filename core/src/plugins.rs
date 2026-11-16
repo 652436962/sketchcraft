@@ -51,6 +51,33 @@ fn entry(id: &str, manifest: &str, code: String, builtin: bool, folder: Option<&
     Some(m)
 }
 
+/// Every .rb file in a Ruby plugin's folder, by path inside it (2 MB in all).
+fn ruby_files(folder: &Path) -> Result<BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    let mut total = 0usize;
+    let mut stack = vec![folder.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d)?.flatten() {
+            let p = e.path();
+            if p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
+                continue;
+            }
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().and_then(|x| x.to_str()).is_some_and(|x| x.eq_ignore_ascii_case("rb")) {
+                let text = std::fs::read_to_string(&p)?;
+                total += text.len();
+                if total > 2 << 20 || out.len() >= 200 {
+                    bail!("its Ruby files are over 2 MB");
+                }
+                let rel = p.strip_prefix(folder).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+                out.insert(rel, text);
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// A plugin's icon file as a data URL (SVG or PNG, up to 256 KB, inside its folder).
 fn icon_data(folder: &Path, name: &str) -> Option<String> {
     use base64::Engine as _;
@@ -104,11 +131,17 @@ const MAX_UNPACKED: u64 = 16 << 20;
 /// or in one folder inside. Only plain files with safe names are unpacked
 /// (no paths out of the folder, no hidden files, size limits). Replaces an
 /// older copy of the same plugin, which is kept in .removed.
-pub fn install(bytes: &[u8]) -> Result<Value> {
+pub fn install(bytes: &[u8], file_name: Option<&str>) -> Result<Value> {
     if bytes.len() > MAX_ZIP {
         bail!("that plugin is over 8 MB");
     }
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).context("that isn't a .zip file")?;
+    // a single SketchUp Ruby script (.rb)
+    if file_name.is_some_and(|n| n.to_ascii_lowercase().ends_with(".rb")) {
+        let name = Path::new(file_name.unwrap()).file_name().and_then(|n| n.to_str()).unwrap_or("script.rb").to_string();
+        let text = std::str::from_utf8(bytes).context("that .rb file isn't text")?;
+        return install_ruby(vec![(name, text.as_bytes().to_vec())]);
+    }
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).context("that isn't a .zip, .rbz or .rb file")?;
     if z.len() > MAX_FILES {
         bail!("that plugin has over {MAX_FILES} files");
     }
@@ -117,8 +150,13 @@ pub fn install(bytes: &[u8]) -> Result<Value> {
     for i in 0..z.len() {
         names.push(z.by_index(i)?.name()?.to_string());
     }
-    let manifest_at = names.iter().find(|n| n.trim_start_matches("./") == "plugin.json" || (n.ends_with("/plugin.json") && n.matches('/').count() == 1)).cloned().ok_or_else(|| anyhow::anyhow!("no plugin.json in it"))?;
-    let prefix = manifest_at.trim_start_matches("./").trim_end_matches("plugin.json").to_string();
+    let manifest_at = names.iter().find(|n| n.trim_start_matches("./") == "plugin.json" || (n.ends_with("/plugin.json") && n.matches('/').count() == 1)).cloned();
+    // no plugin.json but Ruby files: a SketchUp extension (.rbz)
+    let ruby = manifest_at.is_none() && names.iter().any(|n| n.to_ascii_lowercase().ends_with(".rb"));
+    if manifest_at.is_none() && !ruby {
+        bail!("no plugin.json in it (or .rb files, for a SketchUp extension)");
+    }
+    let prefix = manifest_at.as_deref().map(|m| m.trim_start_matches("./").trim_end_matches("plugin.json").to_string()).unwrap_or_default();
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     let mut total = 0u64;
     for i in 0..z.len() {
@@ -133,7 +171,7 @@ pub fn install(bytes: &[u8]) -> Result<Value> {
             bail!("unsafe file name in the plugin: {name}");
         }
         let ext = Path::new(rel).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-        if !matches!(ext.as_str(), "json" | "js" | "svg" | "png" | "md" | "txt") {
+        if !matches!(ext.as_str(), "json" | "js" | "svg" | "png" | "md" | "txt" | "rb") {
             continue; // other files aren't needed
         }
         total += f.size();
@@ -143,6 +181,9 @@ pub fn install(bytes: &[u8]) -> Result<Value> {
         let mut b = Vec::new();
         f.by_ref().take(MAX_UNPACKED).read_to_end(&mut b)?;
         files.push((rel.to_string(), b));
+    }
+    if ruby {
+        return install_ruby(files);
     }
     let manifest = files.iter().find(|(n, _)| n == "plugin.json").map(|(_, b)| b.clone()).ok_or_else(|| anyhow::anyhow!("no plugin.json"))?;
     if !files.iter().any(|(n, _)| n == "main.js") {
@@ -157,25 +198,59 @@ pub fn install(bytes: &[u8]) -> Result<Value> {
     if id.is_empty() || BUILTIN.iter().any(|(b, ..)| *b == id) {
         bail!("pick another name for this plugin");
     }
+    let replaced = write_plugin(&id, &files)?;
+    // installing it means you want it: on, even if an older copy was off
+    if disabled().contains(&id) {
+        enable(&id, true)?;
+    }
+    Ok(json!({"id": id, "name": name, "files": files.len(), "replaced": replaced}))
+}
+
+/// A SketchUp Ruby extension: its .rb files (the top-level ones load it),
+/// with a plugin.json written for it. Its commands are the menu items it adds
+/// when it loads (the app finds them by running it).
+fn install_ruby(files: Vec<(String, Vec<u8>)>) -> Result<Value> {
+    let entries: Vec<String> = files.iter().filter(|(n, _)| !n.contains('/') && n.to_ascii_lowercase().ends_with(".rb")).map(|(n, _)| n.clone()).collect();
+    let Some(first) = entries.first() else { bail!("no .rb file at the top of it (a SketchUp extension loads from one)") };
+    let stem = first.trim_end_matches(".rb").trim_end_matches(".RB");
+    let id = slug(stem);
+    if id.is_empty() || BUILTIN.iter().any(|(b, ..)| *b == id) {
+        bail!("pick another name for this script");
+    }
+    let name = stem.split(['_', '-']).filter(|w| !w.is_empty()).map(|w| {
+        let mut c = w.chars();
+        c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+    }).collect::<Vec<_>>().join(" ");
+    let mut all = files;
+    all.retain(|(n, _)| n != "plugin.json");
+    let manifest = json!({"name": name, "ruby": true, "entry": entries, "description": "A SketchUp Ruby extension", "commands": []});
+    all.push(("plugin.json".into(), serde_json::to_vec_pretty(&manifest)?));
+    let replaced = dir().join(&id).exists();
+    write_plugin(&id, &all)?;
+    if disabled().contains(&id) {
+        enable(&id, true)?;
+    }
+    Ok(json!({"id": id, "name": name, "files": all.len(), "replaced": replaced, "ruby": true}))
+}
+
+/// Write a plugin's files into Plugins/<id> (an older copy goes to .removed).
+/// Returns whether an older copy was replaced.
+fn write_plugin(id: &str, files: &[(String, Vec<u8>)]) -> Result<bool> {
     let root = dir();
     std::fs::create_dir_all(&root)?;
-    let target = root.join(&id);
+    let target = root.join(id);
     let replaced = target.exists();
     if replaced {
-        set_aside(&target, &id)?;
+        set_aside(&target, id)?;
     }
-    for (rel, b) in &files {
+    for (rel, b) in files {
         let p = target.join(rel);
         if let Some(d) = p.parent() {
             std::fs::create_dir_all(d)?;
         }
         std::fs::write(p, b)?;
     }
-    // installing it means you want it: on, even if an older copy was off
-    if disabled().contains(&id) {
-        enable(&id, true)?;
-    }
-    Ok(json!({"id": id, "name": name, "files": files.len(), "replaced": replaced}))
+    Ok(replaced)
 }
 
 fn set_aside(folder: &Path, id: &str) -> Result<PathBuf> {
@@ -219,6 +294,22 @@ pub fn list() -> Value {
             let id = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             let manifest = std::fs::read_to_string(p.join("plugin.json"));
             let code = std::fs::read_to_string(p.join("main.js"));
+            // a SketchUp Ruby extension has .rb files instead of main.js
+            let is_ruby = manifest.as_ref().ok().and_then(|m| serde_json::from_str::<Value>(m).ok()).is_some_and(|v| v["ruby"] == true);
+            if is_ruby {
+                match (manifest, ruby_files(&p)) {
+                    (Ok(m), Ok(f)) => match entry(&id, &m, String::new(), false, Some(&p)) {
+                        Some(mut v) => {
+                            v["files"] = json!(f);
+                            out.push(v);
+                        }
+                        None => problems.push(json!({"id": id, "error": "plugin.json isn't valid JSON"})),
+                    },
+                    (_, Err(e)) => problems.push(json!({"id": id, "error": e.to_string()})),
+                    _ => problems.push(json!({"id": id, "error": "needs plugin.json"})),
+                }
+                continue;
+            }
             match (manifest, code) {
                 (Ok(m), Ok(c)) if c.len() <= 1 << 20 => match entry(&id, &m, c, false, Some(&p)) {
                     Some(v) => out.push(v),

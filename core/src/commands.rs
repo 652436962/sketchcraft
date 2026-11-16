@@ -157,6 +157,9 @@ pub enum Command {
         path: Option<String>,
         #[serde(default)]
         data: Option<String>,
+        /// the file's name, when sending `data` (a .rb script is told apart by it)
+        #[serde(default)]
+        name: Option<String>,
     },
     /// Remove a plugin you installed (moved aside to Plugins/.removed, not deleted).
     RemovePlugin { id: String },
@@ -1765,7 +1768,8 @@ impl Engine {
             Command::Parts { ids } => json!({"parts": crate::plugins::parts(m, &ids), "units": m.units}),
             Command::Plugins => crate::plugins::list(),
             Command::PluginEnable { id, on } => crate::plugins::enable(&id, on)?,
-            Command::InstallPlugin { path, data } => {
+            Command::InstallPlugin { path, data, name } => {
+                let name = name.or_else(|| path.clone());
                 let bytes = match (path, data) {
                     (Some(p), _) => std::fs::read(&p)?,
                     (None, Some(d)) => {
@@ -1774,7 +1778,7 @@ impl Engine {
                     }
                     _ => bail!("install_plugin needs a path or data"),
                 };
-                crate::plugins::install(&bytes)?
+                crate::plugins::install(&bytes, name.as_deref())?
             }
             Command::RemovePlugin { id } => crate::plugins::remove(&id)?,
             Command::SaveText { path, text } => {
