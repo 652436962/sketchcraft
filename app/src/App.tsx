@@ -279,6 +279,8 @@ export default function App() {
   const [plugins, setPlugins] = useState<PluginList>({ dir: "", plugins: [], problems: [] });
   const [pluginShown, setPluginShown] = useState<{ result: PluginResult; plugin: Plugin } | null>(null);
   const [showPlugins, setShowPlugins] = useState(false);
+  // plugin commands run this session (the plugins lesson watches it)
+  const [pluginRuns, setPluginRuns] = useState(0);
   const [pluginForm, setPluginForm] = useState<{ form: PluginForm; plugin: Plugin; done: (a: Record<string, unknown> | null) => void } | null>(null);
   const reloadPlugins = () => loadPlugins().then(setPlugins, () => {});
   // plugins that are on
@@ -632,6 +634,7 @@ export default function App() {
 
   const runPluginCommand = (plugin: Plugin, commandId: string) =>
     runPlugin(plugin, commandId, {
+      onDone: () => setPluginRuns((n) => n + 1),
       selection: { faces: sel.faces, edges: sel.edges, groups: sel.groups, instances: sel.instances },
       units: scene?.units || "m",
       run: (cmd) => run(cmd),
@@ -810,7 +813,7 @@ export default function App() {
   const fileRef2 = useRef(file);
   fileRef2.current = file;
 
-  const learnCtx = useLearnCtx(scene, wsId, section, !!styles.byTag);
+  const learnCtx = useLearnCtx(scene, wsId, section, !!styles.byTag, { theme: skin.id, layout, pluginRuns, figure });
   const docName = currentFile ? currentFile.split("/").pop()!.replace(/\.sketchcraft$/, "") : "Untitled";
   const selCount = selIds(sel).length;
 

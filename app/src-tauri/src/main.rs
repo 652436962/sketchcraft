@@ -59,6 +59,22 @@ fn portable() -> bool {
     std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("PORTABLE.txt").is_file())).unwrap_or(false)
 }
 
+/// Open the guide in the browser. The address is fixed, never from the page.
+#[tauri::command]
+fn open_guide() -> bool {
+    open_url("https://github.com/jasonsutter87/sketchcraft/blob/main/docs/guide/README.md")
+}
+
+fn open_url(url: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let r = std::process::Command::new("explorer").arg(url).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let r = std::process::Command::new("xdg-open").arg(url).spawn();
+    r.is_ok()
+}
+
 /// Open the download page in the browser (for installs the updater can't
 /// replace, like a .deb or .rpm). The address is fixed, never from the page.
 #[tauri::command]
@@ -80,7 +96,7 @@ fn main() {
         // signed self-updates from GitHub Releases (see app/src/updater.tsx)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(App(Mutex::new(Live::open(default_doc()))))
-        .invoke_handler(tauri::generate_handler![exec, scene, sync, open_releases, portable])
+        .invoke_handler(tauri::generate_handler![exec, scene, sync, open_releases, portable, open_guide])
         .run(tauri::generate_context!())
         .expect("error while running SketchCraft");
 }

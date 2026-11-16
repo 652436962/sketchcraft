@@ -4,6 +4,7 @@
 // capture-demos skill). Progress stays in this browser.
 
 import { useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { type Scene } from "./engine";
 import { store } from "./skins";
 
@@ -13,6 +14,11 @@ export interface LearnCtx {
   workspace: string;
   section: boolean;
   byTag: boolean;
+  /** the theme worn, the layout, plugin commands run so far, the scale figure for new models */
+  theme: string;
+  layout: string;
+  pluginRuns: number;
+  figure: string;
 }
 
 /** The model's numbers when a lesson starts, so steps measure what you did. */
@@ -26,10 +32,18 @@ interface Base {
   views: number;
   photos: number;
   placed: number;
+  pluginRuns: number;
+  theme: string;
+  layout: string;
+  figure: string;
 }
 
-function measure(s: Scene): Base {
+function measure(s: Scene, c?: LearnCtx): Base {
   return {
+    pluginRuns: c?.pluginRuns ?? 0,
+    theme: c?.theme ?? "",
+    layout: c?.layout ?? "",
+    figure: c?.figure ?? "",
     faces: s.faces.length,
     groups: s.groups.length,
     painted: s.faces.filter((f) => f.material).length,
@@ -66,6 +80,7 @@ export const LESSONS: Lesson[] = [
     title: "Your first box",
     about: "Draw an outline, pull it up: the move everything else is built from.",
     minutes: 2,
+    demo: "first-model",
     steps: [
       { do: "Draw a rectangle on the ground", how: "Press R, click one corner, click the opposite corner.", done: (c, b) => c.scene.faces.length > b.faces },
       { do: "Pull it up into a box", how: "Press P, click the face, move up, click.", done: (c, b) => c.scene.faces.length >= b.faces + 6 },
@@ -113,6 +128,40 @@ export const LESSONS: Lesson[] = [
     ],
   },
   {
+    id: "corner",
+    title: "Move a single corner",
+    about: "Grab one point and the faces around it follow: roofs, ramps, tapers.",
+    minutes: 2,
+    demo: "move-corner",
+    steps: [
+      { do: "Make a box", how: "R for a rectangle, then P to pull it up.", done: (c, b) => c.scene.faces.length >= b.faces + 6 },
+      { do: "Raise one top corner", how: "Press Space then Esc so nothing is selected, M for Move, click a top corner, move up, click (or type a height).", done: (c, b) => c.scene.faces.length >= b.faces + 7 },
+    ],
+  },
+  {
+    id: "plugins",
+    title: "Plugins: shelves and a cut list",
+    about: "Build a bookcase from a few sizes, then list the boards to cut and what to buy.",
+    minutes: 2,
+    demo: "shelves-cut-list",
+    steps: [
+      { do: "Build a shelf unit", how: "File › Plugins ▸ Shelf unit…, then Build.", done: (c, b) => c.scene.groups.length >= b.groups + 4 },
+      { do: "Make its cut list", how: "File › Plugins ▸ Cut list… (or Shift+S, type cut list).", done: (c, b) => c.pluginRuns >= b.pluginRuns + 2 },
+    ],
+  },
+  {
+    id: "looks",
+    title: "Make it look your way",
+    about: "Themes, docked or floating tool bars, and who stands in for scale.",
+    minutes: 1,
+    demo: "themes-layouts",
+    steps: [
+      { do: "Try another theme", how: "Themes (top right), then click one.", done: (c, b) => c.theme !== b.theme },
+      { do: "Switch the layout", how: "In Themes: Classic docks the tool bars, Floating floats them.", done: (c, b) => c.layout !== b.layout },
+      { do: "Pick a scale figure for new models", how: "Right panel › Document › Scale figure (try the beaver).", done: (c, b) => c.figure !== b.figure },
+    ],
+  },
+  {
     id: "plans",
     title: "Floor plans",
     about: "See each floor from above, the way a drawing does.",
@@ -151,6 +200,13 @@ export const lessonsDone = (): string[] => {
     return [];
   }
 };
+
+/** The guide (docs/guide on GitHub), in the browser. */
+function openGuide() {
+  if ("__TAURI_INTERNALS__" in window) void invoke("open_guide");
+  else window.open(GUIDE, "_blank", "noopener");
+}
+const GUIDE = "https://github.com/jasonsutter87/sketchcraft/blob/main/docs/guide/README.md";
 
 /** The Learn center: lessons to do, demos to watch. */
 export function LearnCenter({ onStart, onClose }: { onStart: (id: string) => void; onClose: () => void }) {
@@ -235,7 +291,10 @@ export function LearnCenter({ onStart, onClose }: { onStart: (id: string) => voi
           </div>
         )}
         <div className="row gap" style={{ marginTop: 12 }}>
-          <span className="muted small">Press ? any time for every keyboard shortcut.</span>
+          <span className="muted small">Press ? any time for every keyboard shortcut, and Shift+S to find any command.</span>
+          <button className="btn small ghost" onClick={openGuide} title="The SketchCraft guide, in your browser">
+            Read the guide
+          </button>
           <span style={{ flex: 1 }} />
           <button className="btn small ghost" onClick={onClose}>
             Close
@@ -250,7 +309,7 @@ export function LearnCenter({ onStart, onClose }: { onStart: (id: string) => voi
 export function LessonCard({ id, ctx, onClose, onToast }: { id: string; ctx: LearnCtx; onClose: () => void; onToast: (t: string) => void }) {
   const lesson = LESSONS.find((l) => l.id === id)!;
   const demos = useDemos();
-  const [base] = useState<Base>(() => measure(ctx.scene));
+  const [base] = useState<Base>(() => measure(ctx.scene, ctx));
   const [ticked, setTicked] = useState<boolean[]>(() => lesson.steps.map(() => false));
   const [show, setShow] = useState(false);
   // steps tick in order, and once ticked they stay ticked
@@ -318,6 +377,7 @@ export function LessonCard({ id, ctx, onClose, onToast }: { id: string; ctx: Lea
 }
 
 /** Memoized context so lesson checks only rerun when something they read changes. */
-export function useLearnCtx(scene: Scene | null, workspace: string, section: boolean, byTag: boolean): LearnCtx | null {
-  return useMemo(() => (scene ? { scene, workspace, section, byTag } : null), [scene, workspace, section, byTag]);
+export function useLearnCtx(scene: Scene | null, workspace: string, section: boolean, byTag: boolean, more: { theme: string; layout: string; pluginRuns: number; figure: string }): LearnCtx | null {
+  const { theme, layout, pluginRuns, figure } = more;
+  return useMemo(() => (scene ? { scene, workspace, section, byTag, theme, layout, pluginRuns, figure } : null), [scene, workspace, section, byTag, theme, layout, pluginRuns, figure]);
 }

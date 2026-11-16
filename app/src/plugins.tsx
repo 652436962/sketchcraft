@@ -130,6 +130,8 @@ export function runPlugin(
     toast: (text: string, bad?: boolean) => void;
     /** show a form; the answers, or null if cancelled */
     ask: (form: PluginForm, plugin: Plugin) => Promise<Record<string, unknown> | null>;
+    /** the command finished without an error */
+    onDone?: () => void;
   },
 ): Promise<void> {
   return new Promise((resolve) => {
@@ -177,7 +179,10 @@ export function runPlugin(
       else if (m.type === "error") {
         env.toast(`${plugin.name}: ${m.error}`, true);
         finish();
-      } else if (m.type === "done") finish();
+      } else if (m.type === "done") {
+        env.onDone?.();
+        finish();
+      }
     };
     worker.postMessage({ type: "invoke", id: commandId, selection: env.selection, units: env.units });
   });

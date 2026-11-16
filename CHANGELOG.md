@@ -14,6 +14,12 @@ What changed in each SketchCraft release, newest first. The format follows
 - **Plugin forms.** `ctx.ask()` shows a form (lengths in the model's units,
   numbers, text, choices, checkboxes) and returns the answers; time spent
   filling it in doesn't count toward the one-minute limit.
+- **More help in the app.** Learn has three new lessons (move a single
+  corner, plugins, making it look your way), every lesson can play its demo
+  first, eleven demos to watch (recorded from the app in the Classic look), and
+  **Read the guide** opens the new user guide.
+- **A user guide** in ten chapters (docs/guide), and developer docs
+  (docs/dev: scripting and every command, MCP, building, architecture).
 - **Shelves** (a built-in example plugin): a shelf unit from width, depth,
   height and shelf count, every board its own group, ready for Cut list.
 
