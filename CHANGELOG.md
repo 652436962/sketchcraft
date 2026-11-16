@@ -23,6 +23,13 @@ What changed in each SketchCraft release, newest first. The format follows
   edge above the model, outside it, like SketchUp, and the Value box sits in
   the corner. Shift+S › **Classic layout**, or per workspace under Customize ›
   Toolbar. The floating layout stays the default.
+- **Plugins.** Small JavaScript plugins add commands (File › Plugins ▸, and
+  Shift+S). They run sandboxed: no network, no files, only engine commands,
+  and what they change can be undone. Drop a folder in
+  ~/Documents/SketchCraft/Plugins; see [docs/PLUGINS.md](docs/PLUGINS.md).
+- **Cut list** (the first plugin). Lists the parts to cut, grouped by size and
+  material, and roughly how many 4×8 sheets and 8 ft boards to buy. Copy the
+  table or save it as CSV.
 
 ## [0.3.4] - 2026-11-15
 

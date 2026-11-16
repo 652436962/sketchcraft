@@ -16,6 +16,7 @@ import { TOOL_INFO, WORKSPACES, withEdits, type WorkspaceEdits, type WorkspaceId
 import { AppearanceDialog, WorkspaceDialog } from "./appearance";
 import { WorkspaceStrip } from "./wsstrip";
 import { Toolbar } from "./toolbar";
+import { loadPlugins, PluginResultDialog, runPlugin, type Plugin, type PluginList, type PluginResult } from "./plugins";
 import { PhotoModeler } from "./photomodel";
 import { RefImageDialog } from "./refimage";
 import { Text3dDialog } from "./text3d";
@@ -257,6 +258,12 @@ export default function App() {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [fileMenu, setFileMenu] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [pluginsOpen, setPluginsOpen] = useState(false);
+  const [plugins, setPlugins] = useState<PluginList>({ dir: "", plugins: [], problems: [] });
+  const [pluginShown, setPluginShown] = useState<{ result: PluginResult; plugin: Plugin } | null>(null);
+  useEffect(() => {
+    loadPlugins().then(setPlugins, () => {});
+  }, []);
   // who stands at the origin of a new model, for scale
   const [figure, setFigureRaw] = useState<FigureChoice>(() => readFigure());
   const setFigure = (f: FigureChoice) => {
@@ -601,6 +608,15 @@ export default function App() {
     return r.ok;
   };
 
+  const runPluginCommand = (plugin: Plugin, commandId: string) =>
+    runPlugin(plugin, commandId, {
+      selection: { faces: sel.faces, edges: sel.edges, groups: sel.groups, instances: sel.instances },
+      units: scene?.units || "m",
+      run: (cmd) => run(cmd),
+      show: (result, pl) => setPluginShown({ result, plugin: pl }),
+      toast: (t, bad) => say(t, bad),
+    });
+
   const file = {
     new: async () => {
       await run({ cmd: "new", figure: figureToday(figure) });
@@ -712,6 +728,7 @@ export default function App() {
       { label: "3D Text…", hint: "File", run: () => setShowText3d(true) },
       { label: "Generate report (CSV)…", hint: "File", run: file.report },
       { label: "Skins…", hint: "How SketchCraft looks", run: () => setShowSkins(true) },
+      ...plugins.plugins.flatMap((pl) => pl.commands.map((c) => ({ label: c.label, hint: `Plugin · ${c.hint ?? pl.name}`, run: () => void runPluginCommand(pl, c.id) }))),
       {
         label: ws.dock === "classic" ? "Floating layout" : "Classic layout",
         hint: ws.dock === "classic" ? "Tool bar floating over the model again" : "Tool bars docked above the model, like SketchUp",
@@ -813,6 +830,34 @@ export default function App() {
                           <button onClick={() => file.section("dxf")}>Section cut (DXF)…</button>
                         </>
                       )}
+                    </div>
+                  )}
+                  <button
+                    className="submenu-btn"
+                    aria-expanded={pluginsOpen}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (!pluginsOpen) loadPlugins().then(setPlugins, () => {});
+                      setPluginsOpen((o) => !o);
+                    }}
+                  >
+                    Plugins <span className="caret">{pluginsOpen ? "▾" : "▸"}</span>
+                  </button>
+                  {pluginsOpen && (
+                    <div className="submenu">
+                      {plugins.plugins.flatMap((pl) =>
+                        pl.commands.map((c) => (
+                          <button key={`${pl.id}:${c.id}`} title={c.hint ?? pl.description} onClick={() => void runPluginCommand(pl, c.id)}>
+                            {c.label}
+                          </button>
+                        )),
+                      )}
+                      {plugins.problems.map((p) => (
+                        <button key={`x${p.id}`} disabled title={p.error}>
+                          {p.id}: {p.error}
+                        </button>
+                      ))}
+                      {plugins.dir && <button onClick={() => exec({ cmd: "reveal", path: plugins.dir })}>Open plugins folder…</button>}
                     </div>
                   )}
                   <hr />
@@ -1076,6 +1121,7 @@ export default function App() {
         {showRef && scene && <RefImageDialog scene={scene} run={run} onClose={() => setShowRef(false)} onToast={say} />}
         {showPhotoModel && scene && <PhotoModeler scene={scene} run={run} onClose={() => setShowPhotoModel(false)} onToast={say} />}
         {showSkins && <AppearanceDialog current={skin} onPick={wearSkin} onClose={() => setShowSkins(false)} onToast={say} />}
+        {pluginShown && <PluginResultDialog result={pluginShown.result} plugin={pluginShown.plugin} onClose={() => setPluginShown(null)} onToast={say} />}
         {showWs && <WorkspaceDialog ws={ws} onChange={editWs} onReset={() => editWs(null)} onClose={() => setShowWs(false)} />}
         {toast && <div className={`toast ${toast.bad ? "bad" : ""}`}>{toast.text}</div>}
         <AskHost />

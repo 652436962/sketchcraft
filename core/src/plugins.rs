@@ -33,6 +33,7 @@ pub fn list() -> Value {
     let mut out: Vec<Value> = BUILTIN.iter().filter_map(|(id, m, c)| entry(id, m, c.to_string(), true)).collect();
     let mut problems = Vec::new();
     let d = dir();
+    std::fs::create_dir_all(&d).ok(); // so "Open plugins folder" has somewhere to go
     if let Ok(rd) = std::fs::read_dir(&d) {
         let mut dirs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
         dirs.sort();
