@@ -27,11 +27,12 @@ concurrency:
 #     with a --config override.
 #   - Installer jobs install npm packages with --ignore-scripts, so no
 #     package install script runs there.
-#   - Apple signing secrets are given to the one build step that signs, never
-#     written to the job environment.
+#   - Apple signing secrets are given only to steps of the `sign-macos` job, which
+#     compiles nothing and checks out no code (Apple's own tools sign and notarize
+#     the app the `build` job made).
 #   - Compiling is separate from signing. The `build` job compiles with
 #     `cargo build --locked` semantics (`-- --locked`) and holds no secrets and
-#     a read-only token (the Apple secrets, once added, go to one step). The
+#     a read-only token. The
 #     `publish` job signs the update packages with the real key and makes the
 #     draft release; it compiles nothing, so no dependency build script or
 #     proc-macro ever runs next to the key. Only the pinned Tauri CLI
@@ -111,10 +112,14 @@ jobs:
             args: ""
     runs-on: ${{ matrix.platform }}
     env:
-      # set once the Apple secrets are added (see docs/SIGNING.md); only says
-      # whether they exist, the values are never put in the environment
+      # whether the Apple secrets exist (see docs/SIGNING.md); only the yes/no, never a value
       HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+    outputs:
+      has_apple: ${{ steps.apple.outputs.has_apple }}
     steps:
+      - id: apple
+        shell: bash
+        run: echo "has_apple=${HAS_APPLE}" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -151,26 +156,10 @@ jobs:
         working-directory: app
         run: npx --no-install tauri signer generate --ci -p "" -w "$RUNNER_TEMP/throwaway.key"
 
-      # macOS with Apple signing + notarization: the Apple secrets go to this one step.
-      - name: Build, sign and notarize (macOS)
-        if: matrix.platform == 'macos-latest' && env.HAS_APPLE == 'true'
-        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ runner.temp }}/throwaway.key
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        with:
-          projectPath: app
-          args: ${{ matrix.args }} --config ${{ runner.temp }}/tauri-release.json -- --locked
-
-      # Everything else (and macOS before the Apple secrets exist): no secrets at all.
+      # Every platform builds here with no secrets, macOS included: the Apple certificate is
+      # never in a job that compiles. With Apple signing on, the `sign-macos` job below signs
+      # and notarizes what this builds, and compiles nothing.
       - name: Build
-        if: matrix.platform != 'macos-latest' || env.HAS_APPLE != 'true'
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ runner.temp }}/throwaway.key
@@ -209,10 +198,81 @@ jobs:
           find target -path '*/release/bundle/*' -type f \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*-setup.exe' -o -name '*.msi' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -exec cp {} bundles/ \;
           ls -la bundles
           [ -n "$(ls bundles)" ] || { echo "::error::no installers were built"; exit 1; }
+      # With Apple signing on, the macOS build waits for `sign-macos` (its signed copy is `bundles-macos-latest`).
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: bundles-${{ matrix.platform }}
+          name: ${{ matrix.platform == 'macos-latest' && env.HAS_APPLE == 'true' && 'unsigned-macos' || format('bundles-{0}', matrix.platform) }}
           path: bundles/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Apple signing and notarization (only when the Apple secrets exist). It compiles nothing and
+  # checks out no code: it takes the unsigned macOS build from the `build` job, and only Apple's
+  # own tools (security, codesign, notarytool, stapler, hdiutil) run next to the certificate.
+  # The Apple values are given to the steps that use them, one by one, never to the job.
+  # NOT YET RUN: watch the first tag with the Apple secrets set (docs/SIGNING.md).
+  sign-macos:
+    needs: [build]
+    if: ${{ needs.build.outputs.has_apple == 'true' }}
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: unsigned-macos
+          path: in
+      - name: Unpack the app
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work out
+          tarball=$(ls in/*.app.tar.gz)
+          tar -xzf "$tarball" -C work
+          [ -d work/*.app ] || { echo "::error::no .app in the macOS update package"; exit 1; }
+          echo "TARBALL_NAME=$(basename "$tarball")" >> "$GITHUB_ENV"
+          echo "DMG_NAME=$(basename "$(ls in/*.dmg | head -n1)")" >> "$GITHUB_ENV"
+      - name: Import the certificate into a temporary keychain
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          pw=$(uuidgen)
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$pw" "$kc"
+          security set-keychain-settings -lut 3600 "$kc"
+          security unlock-keychain -p "$pw" "$kc"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$pw" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" login.keychain-db
+          rm -f "$RUNNER_TEMP/cert.p12"
+      - name: Sign, notarize and staple the app
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          app=$(ls -d work/*.app)
+          codesign --force --deep --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app"
+          ditto -c -k --keepParent "$app" work/notarize.zip
+          xcrun notarytool submit work/notarize.zip --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$app"
+          # the update package (signed with the update key later, by `publish`) and a disk image of the stapled app
+          tar -czf "out/$TARBALL_NAME" -C work "$(basename "$app")"
+          hdiutil create -volname "$(basename "$app" .app)" -srcfolder "$app" -ov -format UDZO "out/$DMG_NAME"
+          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "out/$DMG_NAME"
+          xcrun notarytool submit "out/$DMG_NAME" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "out/$DMG_NAME"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bundles-macos-latest
+          path: out/*
           if-no-files-found: error
           retention-days: 1
 
@@ -222,7 +282,9 @@ jobs:
   # below. Put the key in the `release` Environment with required reviewers
   # (docs/SIGNING.md), so a tag alone can't start this job.
   publish:
-    needs: [build]
+    needs: [build, sign-macos]
+    # sign-macos is skipped when there are no Apple secrets; a failed or cancelled one stops the release
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.sign-macos.result == 'success' || needs.sign-macos.result == 'skipped') }}
     environment: release
     runs-on: ubuntu-latest
     permissions:

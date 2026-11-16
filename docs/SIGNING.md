@@ -70,8 +70,12 @@ signing. The `build` job compiles with `--locked`, holds no update key and only 
 read-only token (so no dependency's build script or proc-macro can read the key);
 it signs its update packages with a throwaway key made for that run. The `publish`
 job, which compiles nothing, signs them for real with the key from the `release`
-environment and creates the draft release. The Apple secrets (once added) go to
-the one macOS build step only.
+environment and creates the draft release. The Apple secrets (once added) go only to
+steps of the `sign-macos` job, which compiles nothing and checks out no code: it
+takes the unsigned macOS app the `build` job made (built with no secrets, like every
+platform), signs and notarizes it with Apple's own tools, and hands it to `publish`.
+That job has never run, so watch the first tag after adding the Apple secrets (it
+rebuilds the disk image with `hdiutil`, so the dmg's window layout is plain).
 
 What only the repository owner can switch on (GitHub settings):
 
