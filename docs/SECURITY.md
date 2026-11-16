@@ -51,6 +51,14 @@ protection, see [Signing](SIGNING.md)). In short:
   boundary, skin value grammar, hashed Ruby cache, resource budgets (render,
   photoreal, DXF blocks, undo memory), updater and release-workflow hardening.
 
+A second round of review (Black Team round 2) found more, all fixed or recorded for the
+owner: reloads and Undo no longer lose another client's work, backups can't be
+flushed, a plugin run is one Undo step, a DXF that multiplies a block is refused
+quickly, agents write only the right kind of file under new names (never over
+yours) and can't be steered by an OBJ's material line, the dev server's token
+endpoint is limited to its own page and user, and the release workflow keeps the
+update key away from compilation. See the red-team notes in the repository history.
+
 Checks for these live in `core/tests/hardening.rs`, `app/checks/run.mjs`
 (`npm run check`) and `tools/security-tests/plugin-sandbox.mjs`.
 
