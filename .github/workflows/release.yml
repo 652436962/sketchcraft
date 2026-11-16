@@ -91,13 +91,28 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # Says whether the Apple secrets exist, and nothing else. It checks out no code and runs
+  # nothing but one `echo`, so the (compiling) `build` job never names an Apple secret at all.
+  apple-check:
+    runs-on: ubuntu-latest
+    permissions: {}
+    env:
+      # only the yes/no is kept; the value goes nowhere
+      HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+    outputs:
+      has_apple: ${{ steps.apple.outputs.has_apple }}
+    steps:
+      - id: apple
+        shell: bash
+        run: echo "has_apple=${HAS_APPLE}" >> "$GITHUB_OUTPUT"
+
   # Compiles and bundles the installers. This job has NO secrets: every Rust
   # build script, proc-macro and npm package runs here without the update-signing
   # key and without a token that can write to the repository. (The update
   # packages it makes are signed with a throwaway key made fresh for the run;
   # the `publish` job signs them for real.)
   build:
-    needs: [frontend]
+    needs: [frontend, apple-check]
     permissions:
       contents: read
     strategy:
@@ -112,14 +127,9 @@ jobs:
             args: ""
     runs-on: ${{ matrix.platform }}
     env:
-      # whether the Apple secrets exist (see docs/SIGNING.md); only the yes/no, never a value
-      HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' }}
-    outputs:
-      has_apple: ${{ steps.apple.outputs.has_apple }}
+      # yes/no from the `apple-check` job (see docs/SIGNING.md); this job never names a secret
+      HAS_APPLE: ${{ needs.apple-check.outputs.has_apple }}
     steps:
-      - id: apple
-        shell: bash
-        run: echo "has_apple=${HAS_APPLE}" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -212,8 +222,8 @@ jobs:
   # The Apple values are given to the steps that use them, one by one, never to the job.
   # NOT YET RUN: watch the first tag with the Apple secrets set (docs/SIGNING.md).
   sign-macos:
-    needs: [build]
-    if: ${{ needs.build.outputs.has_apple == 'true' }}
+    needs: [build, apple-check]
+    if: ${{ needs.apple-check.outputs.has_apple == 'true' }}
     runs-on: macos-latest
     permissions:
       contents: read
@@ -223,15 +233,26 @@ jobs:
           name: unsigned-macos
           path: in
       - name: Unpack the app
+        id: unpack
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p work out
-          tarball=$(ls in/*.app.tar.gz)
-          tar -xzf "$tarball" -C work
-          [ -d work/*.app ] || { echo "::error::no .app in the macOS update package"; exit 1; }
-          echo "TARBALL_NAME=$(basename "$tarball")" >> "$GITHUB_ENV"
-          echo "DMG_NAME=$(basename "$(ls in/*.dmg | head -n1)")" >> "$GITHUB_ENV"
+          # exactly one update package and one disk image, with plain names: anything else is refused.
+          # The names go to later steps as step outputs (never into $GITHUB_ENV or an expression).
+          shopt -s nullglob
+          tarballs=(in/*.app.tar.gz)
+          dmgs=(in/*.dmg)
+          [ "${#tarballs[@]}" -eq 1 ] && [ "${#dmgs[@]}" -eq 1 ] || { echo "::error::expected one .app.tar.gz and one .dmg"; exit 1; }
+          tarball=$(basename "${tarballs[0]}")
+          dmg=$(basename "${dmgs[0]}")
+          re='^[A-Za-z0-9._-]+$'
+          [[ $tarball =~ $re ]] && [[ $dmg =~ $re ]] || { echo "::error::unexpected characters in an artifact file name"; exit 1; }
+          tar -xzf "in/$tarball" -C work
+          apps=(work/*.app)
+          [ "${#apps[@]}" -eq 1 ] || { echo "::error::expected one .app in the macOS update package"; exit 1; }
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+          echo "dmg=$dmg" >> "$GITHUB_OUTPUT"
       - name: Import the certificate into a temporary keychain
         shell: bash
         env:
@@ -256,6 +277,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # file names checked in the unpack step (plain characters only), passed as data
+          TARBALL_NAME: ${{ steps.unpack.outputs.tarball }}
+          DMG_NAME: ${{ steps.unpack.outputs.dmg }}
         run: |
           set -euo pipefail
           app=$(ls -d work/*.app)
@@ -269,6 +293,8 @@ jobs:
           codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "out/$DMG_NAME"
           xcrun notarytool submit "out/$DMG_NAME" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
           xcrun stapler staple "out/$DMG_NAME"
+          codesign --verify --deep --strict "$app"
+          spctl --assess --type execute "$app"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bundles-macos-latest

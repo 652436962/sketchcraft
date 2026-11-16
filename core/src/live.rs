@@ -70,17 +70,15 @@ fn epoch(t: SystemTime) -> u64 {
     t.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// True when this process is a Rust test program (a unit test, or an integration test built by
-/// `cargo test`): cargo puts those in `target/<profile>/deps/`. The shipped programs run from
-/// `target/<profile>/` or an install folder, never from `deps/`.
+/// True when this process is a Rust test program: a unit test (`cfg!(test)`), a program cargo put in
+/// a `deps/` folder (every test program is built there, whatever the target folder is called: a
+/// custom `CARGO_TARGET_DIR` works), or one that sets `SKETCHCRAFT_TESTING`. The shipped programs
+/// run from a `release/` folder or an install folder, never from `deps/`.
 pub fn running_as_cargo_test() -> bool {
-    if cfg!(test) {
+    if cfg!(test) || std::env::var_os("SKETCHCRAFT_TESTING").is_some_and(|v| !v.is_empty() && v != "0") {
         return true;
     }
-    std::env::current_exe().ok().is_some_and(|p| {
-        let mut up = p.ancestors().skip(1);
-        up.next().is_some_and(|d| d.file_name().is_some_and(|n| n == "deps")) && p.ancestors().any(|a| a.file_name().is_some_and(|n| n == "target"))
-    })
+    std::env::current_exe().ok().is_some_and(|p| p.parent().and_then(|d| d.file_name()).is_some_and(|n| n == "deps"))
 }
 
 /// Where the person's model folder is. `SKETCHCRAFT_DOC` always wins (and scopes every folder
