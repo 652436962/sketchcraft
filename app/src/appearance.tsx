@@ -28,7 +28,45 @@ function Mini({ s }: { s: Skin }) {
   );
 }
 
-export function AppearanceDialog({ current, onPick, onClose, onToast }: { current: Skin; onPick: (s: Skin, useBackdrop: boolean) => void; onClose: () => void; onToast: (t: string, bad?: boolean) => void }) {
+/** A tiny drawing of a layout: where the tool bars sit around the model. */
+function LayoutMini({ kind }: { kind: "classic" | "floating" }) {
+  return (
+    <svg className="layout-mini" viewBox="0 0 120 72" aria-hidden="true">
+      <rect x="0.5" y="0.5" width="119" height="71" rx="5" className="lm-frame" />
+      <rect x="1" y="1" width="20" height="70" className="lm-panel" />
+      <rect x="99" y="1" width="20" height="70" className="lm-panel" />
+      {kind === "classic" ? (
+        <>
+          <rect x="21" y="1" width="78" height="8" className="lm-bar" />
+          <rect x="21" y="9" width="78" height="5" className="lm-bar2" />
+          <rect x="21" y="14" width="78" height="57" className="lm-model" />
+        </>
+      ) : (
+        <>
+          <rect x="21" y="1" width="78" height="70" className="lm-model" />
+          <rect x="33" y="5" width="54" height="6" rx="3" className="lm-float" />
+          <rect x="35" y="60" width="50" height="7" rx="3.5" className="lm-float" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+export function AppearanceDialog({
+  current,
+  onPick,
+  onClose,
+  onToast,
+  layout,
+  onLayout,
+}: {
+  current: Skin;
+  onPick: (s: Skin, useBackdrop: boolean) => void;
+  onClose: () => void;
+  onToast: (t: string, bad?: boolean) => void;
+  layout: "classic" | "floating";
+  onLayout: (l: "classic" | "floating") => void;
+}) {
   const [mine, setMine] = useState<Skin[]>([]);
   const [dir, setDir] = useState("");
   const [editing, setEditing] = useState<Skin | null>(null);
@@ -59,8 +97,9 @@ export function AppearanceDialog({ current, onPick, onClose, onToast }: { curren
   const iconInput = useRef<HTMLInputElement>(null);
   const [showNames, setShowNames] = useState(false);
   const loadIcons = async (files: FileList | null) => {
-    if (!editing || !files?.length) return;
-    const icons: Record<string, string> = { ...(editing.icons ?? {}) };
+    const base = editing ?? current;
+    if (!files?.length) return;
+    const icons: Record<string, string> = { ...(base.icons ?? {}) };
     const skipped: string[] = [];
     for (const f of Array.from(files)) {
       const tool = f.name.replace(/\.[^.]+$/, "").toLowerCase();
@@ -73,30 +112,30 @@ export function AppearanceDialog({ current, onPick, onClose, onToast }: { curren
       if (TOOL_NAMES.includes(tool) && iconOk(url)) icons[tool] = url;
       else skipped.push(f.name);
     }
-    const next = { ...editing, id: "custom", icons };
-    setEditing(next);
+    const next = { ...base, id: "custom", icons };
+    if (editing) setEditing(next);
     onPick(next, false);
     const n = Object.keys(icons).length;
-    onToast(`${n} tool icon${n === 1 ? "" : "s"} in this skin${skipped.length ? `. Skipped ${skipped.slice(0, 4).join(", ")}${skipped.length > 4 ? "…" : ""}: name each file after a tool (SVG, PNG, JPEG or WebP, up to 256 KB)` : ""}.`, skipped.length > 0);
+    onToast(`${n} tool icon${n === 1 ? "" : "s"} in this theme${skipped.length ? `. Skipped ${skipped.slice(0, 4).join(", ")}${skipped.length > 4 ? "…" : ""}: name each file after a tool (SVG, PNG, JPEG or WebP, up to 256 KB)` : ""}.`, skipped.length > 0);
   };
   const clearIcons = () => {
-    if (!editing) return;
-    const next = { ...editing, id: "custom", icons: undefined };
-    setEditing(next);
+    const base = editing ?? current;
+    const next = { ...base, id: "custom", icons: undefined };
+    if (editing) setEditing(next);
     onPick(next, false);
   };
   const save = async () => {
     if (!editing) return;
-    const name = await ask("Name this skin", origin.startsWith("file:") ? editing.name : `My ${editing.name}`);
+    const name = await ask("Name this theme", origin.startsWith("file:") ? editing.name : `My ${editing.name}`);
     if (!name) return;
     const skin = { name, blurb: "Made in SketchCraft", dark: editing.dark, backdrop: editing.backdrop, tokens: editing.tokens, ...(editing.icons ? { icons: editing.icons } : {}) };
     const r = await exec({ cmd: "save_skin", name, skin });
-    if (!r.ok) return onToast(r.error ?? "Couldn't save the skin", true);
+    if (!r.ok) return onToast(r.error ?? "Couldn't save the theme", true);
     const saved = readSkin(skin, name)!;
     onPick(saved, false);
     setEditing(null);
     load();
-    onToast(`Saved ${name}: share the .sketchskin file from your Skins folder`);
+    onToast(`Saved ${name}: share the .sketchskin file from your themes folder`);
   };
   const all = [...SKINS, ...mine];
   return (
@@ -106,9 +145,10 @@ export function AppearanceDialog({ current, onPick, onClose, onToast }: { curren
     >
       <div className="sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Appearance">
         <div className="sheet-head">
-          <b>Skins</b>
-          <span className="muted">{editing ? `Editing ${editing.name}: changes show as you make them.` : "Click one to wear it. Edit any of them to make your own."}</span>
+          <b>Themes</b>
+          <span className="muted">{editing ? `Editing ${editing.name}: changes show as you make them.` : "How SketchCraft looks: its colors, layout and icons."}</span>
         </div>
+        {!editing && <div className="theme-h">Theme <span className="muted small">Click one to wear it (it brings its layout). Edit any to make your own.</span></div>}
         {!editing && (
           <div className="skin-grid">
             {all.map((s) => (
@@ -131,6 +171,25 @@ export function AppearanceDialog({ current, onPick, onClose, onToast }: { curren
               </div>
             ))}
           </div>
+        )}
+        {!editing && (
+          <>
+            <div className="theme-h">Layout</div>
+            <div className="layout-pick" role="radiogroup" aria-label="Layout">
+              {(
+                [
+                  ["classic", "Classic", "Tool bars docked above the model, like SketchUp"],
+                  ["floating", "Floating", "SketchCraft's own: tool bars float over the model"],
+                ] as const
+              ).map(([id, name, about]) => (
+                <button key={id} role="radio" aria-checked={layout === id} className={`layout-card${layout === id ? " on" : ""}`} onClick={() => onLayout(id)}>
+                  <LayoutMini kind={id} />
+                  <b>{name}</b>
+                  <span className="muted small">{about}</span>
+                </button>
+              ))}
+            </div>
+          </>
         )}
         {editing && (
           <div className="skin-edit">
@@ -163,15 +222,18 @@ export function AppearanceDialog({ current, onPick, onClose, onToast }: { curren
                 </label>
               )
             )}
-            <div className="skin-icons">
+          </div>
+        )}
+        <div className="theme-h">Icons</div>
+        <div className="skin-icons">
               <span>
-                Tool icons{editing.icons ? `: ${Object.keys(editing.icons).length} of ${TOOL_NAMES.length} swapped` : ": built in"}
+                Tool icons{(editing ?? current).icons ? `: ${Object.keys((editing ?? current).icons ?? {}).length} of ${TOOL_NAMES.length} swapped` : ": built in"}
               </span>
               <input ref={iconInput} type="file" multiple accept="image/svg+xml,image/png,image/jpeg,image/webp" hidden onChange={(e) => (loadIcons(e.target.files), (e.target.value = ""))} />
               <button className="btn small ghost" onClick={() => iconInput.current?.click()} title="Pick image files named after the tools: line.svg, push.png, ...">
                 Load icons…
               </button>
-              {editing.icons && (
+              {(editing ?? current).icons && (
                 <button className="btn small ghost" onClick={clearIcons}>
                   Clear icons
                 </button>
@@ -181,13 +243,11 @@ export function AppearanceDialog({ current, onPick, onClose, onToast }: { curren
               </button>
               {showNames && <p className="muted small skin-icon-names">Name each image after its tool: {TOOL_NAMES.map((t) => `${t}.svg`).join(", ")}. Any you leave out keep the built-in icon.</p>}
             </div>
-          </div>
-        )}
         <div className="row gap" style={{ marginTop: 14 }}>
           {editing ? (
             <>
               <button className="btn small" onClick={save}>
-                Save as my skin…
+                Save as my theme…
               </button>
               <button
                 className="btn small ghost"
@@ -207,12 +267,12 @@ export function AppearanceDialog({ current, onPick, onClose, onToast }: { curren
           ) : (
             <>
               <button className="btn small ghost" onClick={() => exec({ cmd: "reveal", path: dir })} disabled={!dir}>
-                Open Skins folder
+                Open themes folder
               </button>
               <button className="btn small ghost" onClick={load}>
                 Reload
               </button>
-              <span className="muted small">Got a .sketchskin from someone? Drop it in the Skins folder, then Reload.</span>
+              <span className="muted small">Got a theme file (.sketchskin) from someone? Drop it in the themes folder, then Reload.</span>
               <span style={{ flex: 1 }} />
               <button className="btn small" onClick={onClose}>
                 Done

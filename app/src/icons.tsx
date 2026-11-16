@@ -165,6 +165,15 @@ export const Icons = {
       <path d="M7 4h10M7 20h10M9 4v16M15 4v16" />
     </Svg>
   ),
+  /** Themes: a palette */
+  theme: () => (
+    <Svg>
+      <path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.7-.8 1.7-1.6 0-.9-.7-1.3-.7-2.1 0-.9.7-1.6 1.6-1.6H17a4 4 0 0 0 4-4C21 7 17 3 12 3z" />
+      <circle cx="7.6" cy="11.2" r="1" />
+      <circle cx="10.2" cy="7.4" r="1" />
+      <circle cx="14.6" cy="7.6" r="1" />
+    </Svg>
+  ),
   paint: () => (
     <Svg>
       <path d="M14.5 4.5 19.5 9.5 11 18l-5-5z" />

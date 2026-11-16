@@ -744,7 +744,7 @@ export default function App() {
       { label: "Add location…", hint: "Terrain and map imagery", run: () => setShowLocation(true) },
       { label: "3D Text…", hint: "File", run: () => setShowText3d(true) },
       { label: "Generate report (CSV)…", hint: "File", run: file.report },
-      { label: "Skins…", hint: "How SketchCraft looks", run: () => setShowSkins(true) },
+      { label: "Themes…", hint: "Colors, layout and icons (skins)", run: () => setShowSkins(true) },
       ...plugins.plugins.flatMap((pl) => pl.commands.map((c) => ({ label: c.label, hint: `Plugin · ${c.hint ?? pl.name}`, run: () => void runPluginCommand(pl, c.id) }))),
       {
         label: ws.dock === "classic" ? "Floating layout" : "Classic layout",
@@ -921,9 +921,9 @@ export default function App() {
           <button className="btn small ghost learn-btn" title="Lessons and demos: learn SketchCraft by doing" onClick={() => setShowLearn(true)}>
             Learn{lessonsDone().length === 0 && <i className="learn-dot" aria-label="(new)" />}
           </button>
-          <button className="btn small ghost skin-btn" title="Skins: change how SketchCraft looks" onClick={() => setShowSkins(true)}>
-            <Icons.paint />
-            Skins
+          <button className="btn small ghost skin-btn" title="Themes: SketchCraft's colors, layout and icons" onClick={() => setShowSkins(true)}>
+            <Icons.theme />
+            Themes
           </button>
           <button className="icon-btn" title="Undo (⌘Z)" onClick={() => run({ cmd: "undo" })}>
             <Icons.undo />
@@ -1138,7 +1138,7 @@ export default function App() {
         {showText3d && scene && <Text3dDialog scene={scene} run={run} camera={() => api.current!.camera()} onClose={() => setShowText3d(false)} onToast={say} />}
         {showRef && scene && <RefImageDialog scene={scene} run={run} onClose={() => setShowRef(false)} onToast={say} />}
         {showPhotoModel && scene && <PhotoModeler scene={scene} run={run} onClose={() => setShowPhotoModel(false)} onToast={say} />}
-        {showSkins && <AppearanceDialog current={skin} onPick={wearSkin} onClose={() => setShowSkins(false)} onToast={say} />}
+        {showSkins && <AppearanceDialog current={skin} onPick={wearSkin} onClose={() => setShowSkins(false)} onToast={say} layout={layout} onLayout={setLayout} />}
         {pluginShown && <PluginResultDialog result={pluginShown.result} plugin={pluginShown.plugin} onClose={() => setPluginShown(null)} onToast={say} />}
         {showWs && <WorkspaceDialog ws={ws} onChange={editWs} onReset={() => editWs(null)} onClose={() => setShowWs(false)} />}
         {toast && <div className={`toast ${toast.bad ? "bad" : ""}`}>{toast.text}</div>}

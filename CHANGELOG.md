@@ -41,8 +41,10 @@ What changed in each SketchCraft release, newest first. The format follows
   at home for SketchUp users. SketchCraft's own Workshop look and floating
   tool bars, and every other skin, are in the skin gallery; picking a skin
   brings its layout. Your current skin is kept.
-- The Skins button at the top right says **Skins** (the brush alone looked
-  like a pencil).
+- **Skins are now Themes.** The **Themes** button (top right, with a palette)
+  opens one window for the look: **Theme** (the gallery), **Layout** (Classic
+  or Floating, with a picture of each) and **Icons** (built in, or load your
+  own). Theme files are still .sketchskin, so shared ones keep working.
 
 ## [0.3.4] - 2026-11-15
 

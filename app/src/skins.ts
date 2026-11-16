@@ -167,7 +167,7 @@ export function readSkin(raw: unknown, fallbackName: string): Skin | null {
   return {
     id: `file:${name}`,
     name,
-    blurb: typeof r.blurb === "string" ? r.blurb.slice(0, 120) : "Your skin",
+    blurb: typeof r.blurb === "string" ? r.blurb.slice(0, 120) : "Your theme",
     dark: typeof r.dark === "boolean" ? r.dark : isDark(tokens.panel),
     tokens,
     backdrop: ["default", "paper", "blueprint", "night"].includes(r.backdrop as string) ? r.backdrop : undefined,

@@ -19,7 +19,7 @@ Status: `todo` · `in progress` · `done` · `later` · `won't do`
 | 6 | **Cut list plugin**: plan plywood and lumber cuts from the model (the first plugin) | SoCaFroal (Reddit) | 2026-11-16 | done | 2026-11-16 |
 | 7 | **Icons in skins**: a skin can swap the tool icons (a SketchUp-style icon set) | Fenrir (Discord) | 2026-11-16 | done | 2026-11-16 |
 | 4b | **SketchUp-style look as the default**: a Classic skin with the docked layout for new installs; Workshop and the rest move to the gallery | Jason | 2026-11-16 | done | 2026-11-16 |
-| 8 | **A clearer Skins button**: the paintbrush reads as a pencil; label it | Jason | 2026-11-16 | done | 2026-11-16 |
+| 8 | **A clearer Skins button**: now **Themes**, one window for theme, layout and icons | Jason | 2026-11-16 | done | 2026-11-16 |
 
 ## Later
 
