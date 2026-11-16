@@ -1057,3 +1057,70 @@ fn the_test_guard_does_not_need_a_folder_called_target() {
     assert_eq!(exe.parent().unwrap().file_name().unwrap(), "deps");
     assert!(sketchcraft::live::running_as_cargo_test());
 }
+
+/// R4-BRN-001: the wall-layer "borrowed lines" pass is bounded: the same drawing with the long
+/// polyline on a wall layer takes about as long as with it on a plain one (it was quadratic).
+#[test]
+fn a_wall_layer_with_many_borrowed_lines_is_bounded() {
+    let n = 100_000;
+    let make = |layer: &str| {
+        let mut s = format!("0\nSECTION\n2\nENTITIES\n0\nLWPOLYLINE\n8\n{layer}\n90\n{n}\n70\n0\n");
+        for i in 0..n {
+            s += &format!("10\n{}\n20\n0\n", i as f64 * 0.5);
+        }
+        for i in 0..n - 1 {
+            s += &format!("0\nLINE\n8\nOTHER\n10\n{}\n20\n0\n30\n0\n11\n{}\n21\n0\n31\n0\n", i as f64 * 0.5, (i + 1) as f64 * 0.5);
+        }
+        s + "0\nENDSEC\n0\nEOF\n"
+    };
+    let time = |layer: &str| {
+        let mut e = Engine::new();
+        let t = std::time::Instant::now();
+        let _ = e.exec_json(&json!({"cmd": "import_dxf", "text": make(layer), "units": "m"}).to_string());
+        t.elapsed().as_secs_f64()
+    };
+    let (plain, wall) = (time("ZZZ"), time("WALLS"));
+    assert!(wall < plain * 1.5 + 2.0, "wall layer {wall:.1}s vs plain {plain:.1}s");
+}
+
+#[test]
+fn many_wall_layers_are_not_quadratic() {
+    // 6,000 layers named WALL<n> with one line each, and 60,000 lines on a plain layer
+    let mut s = String::from("0\nSECTION\n2\nENTITIES\n");
+    for i in 0..6000 {
+        s += &format!("0\nLINE\n8\nWALL{i}\n10\n{i}\n20\n0\n30\n0\n11\n{i}\n21\n1\n31\n0\n");
+    }
+    for i in 0..60_000 {
+        s += &format!("0\nLINE\n8\nPLAIN\n10\n{}\n20\n5\n30\n0\n11\n{}\n21\n6\n31\n0\n", i as f64 * 0.01, i as f64 * 0.01);
+    }
+    s += "0\nENDSEC\n0\nEOF\n";
+    let mut e = Engine::new();
+    let t = std::time::Instant::now();
+    let _ = e.exec_json(&json!({"cmd": "import_dxf", "text": s, "units": "m"}).to_string());
+    assert!(t.elapsed().as_secs() < 8, "{:?}", t.elapsed());
+}
+
+#[test]
+fn a_hatch_with_many_islands_answers_inside_the_deadline() {
+    // one big outline and 3,000 small islands, each a hatch loop
+    let mut s = String::from("0\nSECTION\n2\nENTITIES\n0\nHATCH\n8\n0\n91\n");
+    let loops = 3001;
+    s += &format!("{loops}\n");
+    let ring = |x0: f64, y0: f64, w: f64, n: usize| {
+        let mut r = format!("92\n3\n93\n{n}\n");
+        for k in 0..n {
+            let a = k as f64 / n as f64 * std::f64::consts::TAU;
+            r += &format!("10\n{}\n20\n{}\n", x0 + w * a.cos(), y0 + w * a.sin());
+        }
+        r
+    };
+    s += &ring(0.0, 0.0, 5000.0, 2000);
+    for i in 0..loops - 1 {
+        s += &ring((i % 60) as f64 * 40.0 - 1200.0, (i / 60) as f64 * 40.0 - 1000.0, 5.0, 12);
+    }
+    s += "0\nENDSEC\n0\nEOF\n";
+    let mut e = Engine::new();
+    let t = std::time::Instant::now();
+    let _ = e.exec_json(&json!({"cmd": "import_dxf", "text": s, "units": "m"}).to_string());
+    assert!(t.elapsed().as_secs() < 25, "{:?}", t.elapsed());
+}

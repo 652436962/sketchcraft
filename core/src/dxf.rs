@@ -1026,7 +1026,11 @@ fn import_inner(m: &mut Model, text: &str, name: &str, units: Option<&str>, at: 
             }
         }
         if b.walls {
-            let borrowed: Vec<(DVec3, DVec3)> = lines.iter().filter(|(l, p, q)| *l != layer && b.has(*p) && b.has(*q)).map(|(_, p, q)| (*p, *q)).collect();
+            // at most MAX_BORROWED (a real wall has hundreds): the pairing below is quadratic in them
+            let mut borrowed: Vec<(DVec3, DVec3)> = vec![];
+            if !tick(lines.len()) {
+                borrowed = lines.iter().filter(|(l, p, q)| *l != layer && b.has(*p) && b.has(*q)).map(|(_, p, q)| (*p, *q)).take(MAX_BORROWED).collect();
+            }
             for (p, q) in &borrowed {
                 b.path(m, &[*p, *q]);
             }
@@ -1059,6 +1063,9 @@ fn import_inner(m: &mut Model, text: &str, name: &str, units: Option<&str>, at: 
     Ok(DxfResult { group: outer, layers, faces, edges, units: unit.into(), skipped, labels, dimensions, focus })
 }
 
+/// Most lines a wall layer may borrow from other layers (window detection is quadratic in them).
+const MAX_BORROWED: usize = 5_000;
+
 /// The material that marks a window's piece of a wall band on a plan.
 pub const WINDOW: &str = "Window opening";
 
@@ -1068,6 +1075,9 @@ pub const WINDOW: &str = "Window opening";
 fn window_pairs(lines: &[(DVec3, DVec3)]) -> Vec<[DVec3; 4]> {
     let mut cands = vec![];
     for i in 0..lines.len() {
+        if tick(lines.len() - i) {
+            return vec![];
+        }
         for j in i + 1..lines.len() {
             let (p, q) = lines[i];
             let (mut r, mut t) = lines[j];
@@ -1174,7 +1184,19 @@ fn add_hatches(m: &mut Model, bulks: &mut [Bulk], hatches: Vec<(usize, Vec<Vec<D
         let mut regions: Vec<(Vec<DVec3>, Vec<Vec<DVec3>>)> = vec![];
         for l in loops {
             let probe = l[0].truncate();
-            match regions.iter_mut().find(|(o, hs)| inside(probe, o) && !hs.iter().any(|h| inside(probe, h))) {
+            // every region tested costs its outline and islands: counted against the deadline
+            let mut over = false;
+            let found = regions.iter_mut().find(|(o, hs)| {
+                if over || tick(o.len() + hs.iter().map(|h| h.len()).sum::<usize>() + 1) {
+                    over = true;
+                    return false;
+                }
+                inside(probe, o) && !hs.iter().any(|h| inside(probe, h))
+            });
+            if over {
+                return made;
+            }
+            match found {
                 Some((_, hs)) => hs.push(l),
                 None => regions.push((l, vec![])),
             }
@@ -1238,9 +1260,15 @@ fn cut_across_layers(m: &mut Model, bulks: &mut [Bulk]) -> usize {
         area: f64,
     }
     let mut flats: Vec<Flat> = vec![];
-    for (li, b) in bulks.iter().enumerate() {
+    // one pass over the faces (not one per layer: a drawing can have tens of thousands of layers)
+    let layer_of: std::collections::HashMap<Id, usize> = bulks.iter().enumerate().map(|(li, b)| (b.group, li)).collect();
+    {
         for (id, f) in m.faces.iter() {
-            if f.group != Some(b.group) || f.outer.len() < 3 {
+            if tick(1) {
+                return 0;
+            }
+            let Some(li) = f.group.and_then(|g| layer_of.get(&g).copied()) else { continue };
+            if f.outer.len() < 3 {
                 continue;
             }
             let pts: Vec<DVec3> = f.outer.iter().map(|v| m.p(*v)).collect();
@@ -1255,6 +1283,7 @@ fn cut_across_layers(m: &mut Model, bulks: &mut [Bulk]) -> usize {
             flats.push(Flat { id: *id, layer: li, z, ring, lo, hi, area });
         }
     }
+    flats.sort_by_key(|f| (f.layer, f.id));
     if flats.len() < 2 || flats.len() > 20_000 {
         return 0;
     }
