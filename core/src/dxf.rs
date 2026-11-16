@@ -516,13 +516,15 @@ fn bulged(pts: &[(DVec3, f64)], closed: bool, tol: f64) -> Vec<DVec3> {
 /// visited and seconds spent. Past any of them the import is refused whole
 /// (and the expansion stops at once), because the model builder is far slower
 /// than the expansion and a half-drawn plan is worse than an error.
-const MAX_SHAPES: usize = 100_000;
-const MAX_VISITS: usize = 1_000_000;
+const MAX_SHAPES: usize = 400_000;
+const MAX_VISITS: usize = 2_000_000;
 const MAX_SECONDS: u64 = 10;
 
 thread_local! {
     static VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static OVER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// a block reference was expanded (so a refusal can say whether that was the cause)
+    static EXPANDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static STARTED: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
 }
 
@@ -533,9 +535,49 @@ thread_local! {
     static IMPORT_STARTED: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
 }
 
-/// Has the import used up its time? Checked in the loops that grow with the drawing.
+/// The most edges and faces one import may make. Crossing lines make a face for
+/// every cell they enclose (n lines each way: n squared), so the output is capped
+/// as well as the time.
+const MAX_EDGES: usize = 1_500_000;
+const MAX_FACES: usize = 1_000_000;
+/// Most places lines may be cut where they cross, in one level of one layer.
+const MAX_CUTS: usize = 2_000_000;
+
+thread_local! {
+    static STOPPED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Has the import used up its time (or its output budget)? Once true it stays true, so every
+/// loop that grows with the drawing can bail and the build ends at once.
 fn late() -> bool {
-    IMPORT_STARTED.with(|s| s.get().is_some_and(|t| t.elapsed().as_secs() >= MAX_IMPORT_SECONDS))
+    if STOPPED.with(|s| s.get()) {
+        return true;
+    }
+    if IMPORT_STARTED.with(|s| s.get().is_some_and(|t| t.elapsed().as_secs() >= MAX_IMPORT_SECONDS)) {
+        STOPPED.with(|s| s.set(true));
+        return true;
+    }
+    false
+}
+
+/// Count `n` units of work; the clock is read about every 2,000 units (cheap enough for the innermost
+/// loops). True when the import must stop.
+fn tick(n: usize) -> bool {
+    let w = WORK.with(|w| {
+        let v = w.get() + n;
+        w.set(v);
+        v
+    });
+    if w >> 11 != (w - n.min(w)) >> 11 || n >= 2048 {
+        return late();
+    }
+    STOPPED.with(|s| s.get())
+}
+
+/// Stop the import now (an output budget was passed).
+fn stop() {
+    STOPPED.with(|s| s.set(true));
 }
 
 /// Count one visit; true (and flagged) when the budget is spent.
@@ -553,6 +595,9 @@ fn spent(n: usize, shapes_so_far: usize) -> bool {
 
 /// The shapes one entity draws (in its own coordinates; INSERTs are expanded).
 fn shapes(e: &Ent, blocks: &HashMap<String, (DVec3, Vec<Ent>)>, t: DMat4, layer: &str, depth: usize, out: &mut Vec<(String, Shape)>, skipped: &mut usize) {
+    if depth > 0 {
+        EXPANDED.with(|e| e.set(true));
+    }
     if spent(1, out.len()) {
         return;
     }
@@ -790,6 +835,15 @@ pub fn named_units(u: &str) -> Option<(f64, &'static str)> {
 
 /// Import DXF text into its own group (a group per layer inside it).
 pub fn import(m: &mut Model, text: &str, name: &str, units: Option<&str>, at: DVec3) -> Result<DxfResult> {
+    let r = import_inner(m, text, name, units, at);
+    // never leave the clock or the stop flag set for other callers of the builders
+    IMPORT_STARTED.with(|s| s.set(None));
+    STOPPED.with(|s| s.set(false));
+    STARTED.with(|s| s.set(None));
+    r
+}
+
+fn import_inner(m: &mut Model, text: &str, name: &str, units: Option<&str>, at: DVec3) -> Result<DxfResult> {
     let ps = pairs(text)?;
     // sections
     let mut header: Vec<(i32, String)> = vec![];
@@ -858,8 +912,11 @@ pub fn import(m: &mut Model, text: &str, name: &str, units: Option<&str>, at: DV
     let mut skipped = 0;
     VISITS.with(|v| v.set(0));
     OVER.with(|o| o.set(false));
+    EXPANDED.with(|e| e.set(false));
     STARTED.with(|s| s.set(Some(std::time::Instant::now())));
     IMPORT_STARTED.with(|s| s.set(Some(std::time::Instant::now())));
+    STOPPED.with(|s| s.set(false));
+    WORK.with(|w| w.set(0));
     for e in entities(&ents_raw) {
         shapes(&e, &blocks, t, "0", 0, &mut shapes_out, &mut skipped);
         if OVER.with(|o| o.get()) {
@@ -868,7 +925,10 @@ pub fn import(m: &mut Model, text: &str, name: &str, units: Option<&str>, at: DV
     }
     STARTED.with(|s| s.set(None));
     if OVER.with(|o| o.replace(false)) {
-        bail!("that DXF draws more than {MAX_SHAPES} shapes once its block references are expanded (or took over {MAX_SECONDS} seconds to expand), so none of it was imported. Explode or simplify the repeated blocks and try again");
+        if EXPANDED.with(|e| e.get()) {
+            bail!("that DXF's block references expand to more than {MAX_SHAPES} shapes (or took over {MAX_SECONDS} seconds to expand), so none of it was imported. Explode or simplify the repeated blocks and try again");
+        }
+        bail!("that DXF has more than {MAX_SHAPES} drawn entities, so none of it was imported. Import a smaller part of the drawing");
     }
     if shapes_out.is_empty() {
         bail!("nothing SketchCraft can draw in that DXF ({skipped} text, hatch or other items skipped)");
@@ -992,7 +1052,8 @@ pub fn import(m: &mut Model, text: &str, name: &str, units: Option<&str>, at: DV
     m.active_group = m.groups.get(&outer).and_then(|g| g.parent);
     if late() {
         IMPORT_STARTED.with(|s| s.set(None));
-        bail!("that DXF took more than {MAX_IMPORT_SECONDS} seconds to build, so none of it was imported. Try a smaller part of the drawing");
+        STOPPED.with(|s| s.set(false));
+        bail!("that DXF took more than {MAX_IMPORT_SECONDS} seconds to build, or would make more than {MAX_EDGES} edges or {MAX_FACES} faces (crossing lines make a face for every cell), so none of it was imported. Try a smaller part of the drawing");
     }
     IMPORT_STARTED.with(|s| s.set(None));
     Ok(DxfResult { group: outer, layers, faces, edges, units: unit.into(), skipped, labels, dimensions, focus })
@@ -1223,10 +1284,32 @@ fn cut_across_layers(m: &mut Model, bulks: &mut [Bulk]) -> usize {
             }
     };
     let mut added = 0;
+    // by left edge: a face inside another starts no further left, so a sweep looks only at those
+    let mut by_x: Vec<usize> = (0..flats.len()).collect();
+    by_x.sort_by(|a, b| flats[*a].lo.x.total_cmp(&flats[*b].lo.x));
     for oi in 0..flats.len() {
+        if tick(8) {
+            return added;
+        }
         let outer = &flats[oi];
         // faces from other layers inside this one
-        let cands: Vec<usize> = (0..flats.len()).filter(|&gi| flats[gi].layer != outer.layer && within(&flats[gi], outer)).collect();
+        let first = by_x.partition_point(|&g| flats[g].lo.x < outer.lo.x - 1e-9);
+        let mut cands: Vec<usize> = vec![];
+        for &gi in &by_x[first..] {
+            if flats[gi].lo.x > outer.hi.x + 1e-9 {
+                break;
+            }
+            if tick(1) {
+                return added;
+            }
+            if flats[gi].layer != outer.layer && within(&flats[gi], outer) {
+                cands.push(gi);
+            }
+        }
+        cands.sort_unstable();
+        if tick(cands.len() * cands.len().min(4096)) {
+            return added;
+        }
         // only the outermost of them, and not ones already inside a hole of this face
         let holes_now: Vec<Vec<glam::DVec2>> = m.faces[&outer.id].holes.iter().map(|h| h.iter().map(|v| m.p(*v).truncate()).collect()).collect();
         let top: Vec<usize> = cands
@@ -1314,6 +1397,9 @@ impl Bulk {
         let id = m.new_id();
         m.edges.insert(id, crate::model::Edge { a, b, group: Some(self.group), ..Default::default() });
         self.ids.insert((a.min(b), a.max(b)), id);
+        if m.edges.len() > MAX_EDGES {
+            stop();
+        }
         true
     }
 
@@ -1397,16 +1483,33 @@ impl Bulk {
         let z = m.p(es[0].0).z;
         let lo = seg.iter().fold(DVec2::splat(f64::MAX), |l, (a, b)| l.min(*a).min(*b));
         let hi = seg.iter().fold(DVec2::splat(f64::MIN), |h, (a, b)| h.max(*a).max(*b));
-        let g = ((n as f64).sqrt().ceil() as usize).clamp(1, 512);
-        let cell = ((hi - lo) / g as f64).max(DVec2::splat(1e-9));
+        // cells about as big as a typical segment is long, on each axis (long thin drawings, such as a
+        // long zigzag, would otherwise put every segment in a whole column of cells)
+        let (mut sx, mut sy) = (0.0, 0.0);
+        for (a, b) in &seg {
+            sx += (a.x - b.x).abs();
+            sy += (a.y - b.y).abs();
+        }
+        let span = (hi - lo).max(DVec2::splat(1e-9));
+        let mut g2 = DVec2::new((span.x / (sx / n as f64).max(span.x / 512.0)).ceil().clamp(1.0, 512.0), (span.y / (sy / n as f64).max(span.y / 512.0)).ceil().clamp(1.0, 512.0));
+        let budget = (4 * n).max(16) as f64;
+        if g2.x * g2.y > budget {
+            g2 *= (budget / (g2.x * g2.y)).sqrt();
+            g2 = g2.floor().max(DVec2::ONE);
+        }
+        let (gx, gy) = (g2.x as usize, g2.y as usize);
+        let cell = (span / g2).max(DVec2::splat(1e-9));
         let at = |p: DVec2| -> (usize, usize) {
             let c = ((p - lo) / cell).floor();
-            ((c.x.max(0.0) as usize).min(g - 1), (c.y.max(0.0) as usize).min(g - 1))
+            ((c.x.max(0.0) as usize).min(gx - 1), (c.y.max(0.0) as usize).min(gy - 1))
         };
         let mut grid: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
         for (i, (a, b)) in seg.iter().enumerate() {
             let (c0, c1) = (at(a.min(*b) - TOL), at(a.max(*b) + TOL));
             // a long diagonal would fill a big block of cells; that's still bounded by g²
+            if tick((c1.0 - c0.0 + 1) * (c1.1 - c0.1 + 1)) {
+                return es.to_vec();
+            }
             for x in c0.0..=c1.0 {
                 for y in c0.1..=c1.1 {
                     grid.entry((x, y)).or_default().push(i);
@@ -1415,12 +1518,17 @@ impl Bulk {
         }
         // split points per segment, as parameters along it
         let mut cuts: Vec<Vec<f64>> = vec![vec![]; n];
+        let mut ncuts = 0usize;
         let bbox: Vec<(DVec2, DVec2)> = seg.iter().map(|(a, b)| (a.min(*b) - DVec2::splat(TOL), a.max(*b) + DVec2::splat(TOL))).collect();
         for (&cellkey, list) in grid.iter() {
-            if late() {
-                break;
+            if tick(list.len()) {
+                // out of time: leave the lines as they were (the build is being abandoned)
+                return es.to_vec();
             }
             for (k, &i) in list.iter().enumerate() {
+                if tick(list.len() - k) {
+                    return es.to_vec();
+                }
                 for &j in &list[k + 1..] {
                     // boxes apart: they can't meet; and a pair is looked at once, in the
                     // cell holding the corner of the boxes' overlap
@@ -1461,6 +1569,14 @@ impl Bulk {
                     }
                     if u > eu && u < 1.0 - eu {
                         cuts[j].push(u);
+                    }
+                    ncuts += 2;
+                    if ncuts > MAX_CUTS {
+                        stop();
+                        return es.to_vec();
+                    }
+                    if tick(8) {
+                        return es.to_vec();
                     }
                 }
             }
@@ -1542,7 +1658,13 @@ impl Bulk {
         }
         let mut made = 0;
         for (_, es) in levels {
+            if late() {
+                break;
+            }
             let mut es = self.node(m, &es);
+            if late() {
+                break;
+            }
             if self.walls {
                 let j = self.jambs(m, &es);
                 es.extend(j);
@@ -1560,16 +1682,15 @@ fn faces_in_plan(m: &mut Model, es: &[(Id, Id)], group: Id) -> usize {
         nb.entry(a).or_default().push(b);
         nb.entry(b).or_default().push(a);
     }
-    loop {
-        let ends: Vec<Id> = nb.iter().filter(|(_, v)| v.len() < 2).map(|(k, _)| *k).collect();
-        if ends.is_empty() {
-            break;
-        }
-        for v in ends {
-            if let Some(ns) = nb.remove(&v) {
-                for n in ns {
-                    if let Some(l) = nb.get_mut(&n) {
-                        l.retain(|x| *x != v);
+    // peel the dangling ends with a work list (rescanning every vertex per round made a long open chain quadratic)
+    let mut work: Vec<Id> = nb.iter().filter(|(_, v)| v.len() < 2).map(|(k, _)| *k).collect();
+    while let Some(v) = work.pop() {
+        if let Some(ns) = nb.remove(&v) {
+            for n in ns {
+                if let Some(l) = nb.get_mut(&n) {
+                    l.retain(|x| *x != v);
+                    if l.len() < 2 {
+                        work.push(n);
                     }
                 }
             }
@@ -1595,6 +1716,9 @@ fn faces_in_plan(m: &mut Model, es: &[(Id, Id)], group: Id) -> usize {
         if used.contains(&(a0, b0)) {
             continue;
         }
+        if late() {
+            return 0;
+        }
         let mut cyc = vec![a0];
         let (mut u, mut v) = (a0, b0);
         let mut ok = true;
@@ -1604,7 +1728,7 @@ fn faces_in_plan(m: &mut Model, es: &[(Id, Id)], group: Id) -> usize {
                 break;
             }
             cyc.push(v);
-            if cyc.len() > 100_000 {
+            if cyc.len() > 100_000 || tick(1) {
                 ok = false;
                 break;
             }
@@ -1638,26 +1762,52 @@ fn faces_in_plan(m: &mut Model, es: &[(Id, Id)], group: Id) -> usize {
             (pts, lo, hi)
         })
         .collect();
-    for h in neg {
-        if late() {
-            break;
+    // a grid over the faces' boxes, so an island looks only at faces near it (not at all of them)
+    let (glo, ghi) = polys.iter().fold((glam::DVec2::splat(f64::MAX), glam::DVec2::splat(f64::MIN)), |(l, h), (_, lo, hi)| (l.min(*lo), h.max(*hi)));
+    let g = ((polys.len() as f64).sqrt().ceil() as usize).clamp(1, 256);
+    let cell = ((ghi - glo) / g as f64).max(glam::DVec2::splat(1e-9));
+    let cell_of = |p: glam::DVec2| -> (usize, usize) {
+        let c = ((p - glo) / cell).floor();
+        ((c.x.max(0.0) as usize).min(g - 1), (c.y.max(0.0) as usize).min(g - 1))
+    };
+    let mut grid: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+    if !neg.is_empty() {
+        for (i, (_, lo, hi)) in polys.iter().enumerate() {
+            let (c0, c1) = (cell_of(*lo), cell_of(*hi));
+            if tick((c1.0 - c0.0 + 1) * (c1.1 - c0.1 + 1)) {
+                return 0;
+            }
+            for x in c0.0..=c1.0 {
+                for y in c0.1..=c1.1 {
+                    grid.entry((x, y)).or_default().push(i);
+                }
+            }
         }
+    }
+    for h in neg {
         let p = xy(h[0]);
         // a point just inside the island's outline isn't needed: any outline point is
         // outside every face of its own island, so only faces around it contain it
-        let around = pos
+        let cands = grid.get(&cell_of(p)).map(Vec::as_slice).unwrap_or(&[]);
+        if tick(cands.len() + 1) {
+            return 0;
+        }
+        let around = cands
             .iter()
-            .enumerate()
-            .filter(|(i, (c, _))| {
-                let (pts, lo, hi) = &polys[*i];
-                p.cmpge(*lo).all() && p.cmple(*hi).all() && !c.contains(&h[0]) && crate::geom::inside(p, pts)
+            .filter(|&&i| {
+                let (pts, lo, hi) = &polys[i];
+                p.cmpge(*lo).all() && p.cmple(*hi).all() && !pos[i].0.contains(&h[0]) && crate::geom::inside(p, pts)
             })
-            .min_by(|a, b| a.1 .1.partial_cmp(&b.1 .1).unwrap());
-        if let Some((i, _)) = around {
+            .min_by(|&&a, &&b| pos[a].1.partial_cmp(&pos[b].1).unwrap());
+        if let Some(&i) = around {
             holes.entry(i).or_default().push(h);
         }
     }
     let n = pos.len();
+    if m.faces.len() + n > MAX_FACES {
+        stop();
+        return 0;
+    }
     for (i, (outer, _)) in pos.into_iter().enumerate() {
         let id = m.new_id();
         m.faces.insert(id, crate::model::Face { outer, holes: holes.remove(&i).unwrap_or_default(), group: Some(group), ..Default::default() });

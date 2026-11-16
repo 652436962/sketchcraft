@@ -979,15 +979,25 @@ impl Model {
                     }
                 }
             }
+            // one lookup of the edges by their ends (a linear search per edge made this quadratic)
+            let key = |a: Id, b: Id| (a.min(b), a.max(b));
+            let mut by_ends: HashMap<(Id, Id), Id> = HashMap::new();
+            for (k, e) in &self.edges {
+                by_ends.entry(key(e.a, e.b)).or_insert(*k);
+            }
             for (a, b) in used {
-                let Some((eid, e)) = self.edges.iter().find(|(_, e)| (e.a == a && e.b == b) || (e.a == b && e.b == a)).map(|(k, e)| (*k, e.clone())) else { continue };
+                let Some((eid, e)) = by_ends.get(&key(a, b)).and_then(|k| self.edges.get(k).map(|e| (*k, e.clone()))) else { continue };
                 let (na, nb) = (remap.get(&e.a).copied().unwrap_or(e.a), remap.get(&e.b).copied().unwrap_or(e.b));
-                if self.find_edge(na, nb).is_none() {
+                if !by_ends.contains_key(&key(na, nb)) {
                     let id = self.new_id();
                     self.edges.insert(id, Edge { a: na, b: nb, group: Some(gid), ..e });
+                    by_ends.insert(key(na, nb), id);
                 }
                 if !outside_edges.contains(&(a, b)) && (remap.contains_key(&e.a) || remap.contains_key(&e.b)) {
                     self.edges.remove(&eid);
+                    if by_ends.get(&key(a, b)) == Some(&eid) {
+                        by_ends.remove(&key(a, b));
+                    }
                 }
             }
             verts = verts.iter().map(|v| remap.get(v).copied().unwrap_or(*v)).collect();

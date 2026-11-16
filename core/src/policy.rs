@@ -30,6 +30,9 @@ const PATH_KEYS: [&str; 5] = ["path", "out", "dir", "file", "folder"];
 /// these cost far more than linear time, so a long one would freeze the app.
 const MAX_POINTS_UI: usize = 10_000;
 const MAX_POINTS_UNTRUSTED: usize = 2_000;
+/// Most outlines one `text_3d` takes: each is worked into the drawing so far, so cost grows with the square or worse.
+const MAX_RINGS_UI: usize = 400;
+const MAX_RINGS_UNTRUSTED: usize = 120;
 /// Longest list of anything else (ids, faces, cage points), and the total
 /// number of values one command from a plugin or agent may carry.
 const MAX_LIST_UI: usize = 5_000_000;
@@ -239,6 +242,10 @@ fn walk(v: &Value, cmd: &str, w: &mut Walk, depth: usize, key: &str) -> Result<(
             if key == "rings" && a.first().and_then(Value::as_array).is_some_and(|r| r.first().is_some_and(Value::is_array)) {
                 // outlines: count the points of every ring against one budget
                 let n: usize = a.iter().map(|r| r.as_array().map_or(0, Vec::len)).sum(); // all rings together
+                let max_rings = if w.trusted { MAX_RINGS_UI } else { MAX_RINGS_UNTRUSTED };
+                if a.len() > max_rings {
+                    return Err(format!("{key:?} has too many outlines ({}, limit {max_rings})", a.len()));
+                }
                 let cap = if w.trusted { MAX_POINTS_UI * 2 } else { MAX_POINTS_UNTRUSTED * 2 };
                 if n > cap {
                     return Err(format!("{key:?} has too many points ({n}, limit {cap})"));

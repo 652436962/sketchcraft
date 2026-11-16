@@ -176,13 +176,23 @@ impl Model {
             bail!("right and up are parallel");
         }
         let to3 = |p: DVec2| at + right * p.x + up * p.y;
-        // nesting depth: how many rings each one sits inside
-        let depth_of: Vec<usize> = rings.iter().enumerate().map(|(i, r)| rings.iter().enumerate().filter(|(j, o)| *j != i && geom::inside(r[0], o)).count()).collect();
+        let started = std::time::Instant::now();
+        // nesting depth: how many rings each one sits inside (a ring's box must hold the point first)
+        let boxes: Vec<(DVec2, DVec2)> = rings.iter().map(|r| r.iter().fold((DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)), |(lo, hi), p| (lo.min(*p), hi.max(*p)))).collect();
+        let depth_of: Vec<usize> = rings
+            .iter()
+            .enumerate()
+            .map(|(i, r)| rings.iter().enumerate().filter(|(j, o)| *j != i && boxes[*j].0.cmple(r[0]).all() && r[0].cmple(boxes[*j].1).all() && geom::inside(r[0], o)).count())
+            .collect();
         let mut solids = vec![];
         // outers first, so holes land in them
         let mut order: Vec<usize> = (0..rings.len()).collect();
         order.sort_by_key(|&i| depth_of[i]);
         for i in order {
+            // each outline is worked into the drawing so far: the time is capped, not only the count
+            if started.elapsed() > TEXT_3D_SECONDS {
+                bail!("that text took more than {} seconds to build, so it was stopped (use fewer or simpler outlines)", TEXT_3D_SECONDS.as_secs());
+            }
             let mut r = rings[i].clone();
             if area(&r) < 0.0 {
                 r.reverse(); // counter-clockwise, facing out of the text plane
@@ -214,6 +224,9 @@ impl Model {
         Ok(out)
     }
 }
+
+/// Longest the outlines of one `text_3d` may take to build.
+const TEXT_3D_SECONDS: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Signed area (counter-clockwise positive).
 fn area(r: &[DVec2]) -> f64 {
