@@ -1328,9 +1328,21 @@ impl Engine {
         self.end_batch();
     }
 
-    /// Steps added after the history had `depth` of them are forgotten (their change was thrown away).
+    /// Take back, without a trace in the history, whatever steps were added after the history had `depth` of them
+    /// (their change is being thrown away, for instance because another program saved first): the model goes back
+    /// to what it was before them.
     pub fn drop_steps_after(&mut self, depth: usize) {
-        self.undo.truncate(depth);
+        let mut before = None;
+        while self.undo.len() > depth {
+            if let Some(Step::Snap(m)) = self.undo.pop() {
+                before = Some(*m);
+            }
+        }
+        if let Some(m) = before {
+            let next = self.model.next_id;
+            self.model = m;
+            self.model.next_id = self.model.next_id.max(next);
+        }
     }
 
     /// The undo and redo lists in a form that survives the reload of a model somebody else saved

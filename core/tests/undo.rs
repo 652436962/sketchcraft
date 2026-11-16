@@ -265,3 +265,18 @@ fn restore_from_a_backup_is_one_undoable_step_and_keeps_what_it_replaced() {
     assert_eq!(r["ok"], false);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn a_command_whose_result_is_thrown_away_leaves_no_step_and_no_trace() {
+    let mut e = Engine::new();
+    let run = |e: &mut Engine, v: Value| {
+        let r = e.exec_json(&v.to_string());
+        assert_eq!(r["ok"], true, "{r}");
+    };
+    run(&mut e, json!({"cmd": "rect", "from": [0, 0, 0], "to": [4, 4, 0]}));
+    let depth = e.undo_depth();
+    run(&mut e, json!({"cmd": "rect", "from": [10, 0, 0], "to": [14, 4, 0]}));
+    assert_eq!(e.model.faces.len(), 2);
+    e.drop_steps_after(depth);
+    assert_eq!((e.model.faces.len(), e.undo_depth()), (1, depth), "back to before that command, with no step for it");
+}

@@ -1114,27 +1114,28 @@ fn many_wall_layers_are_not_quadratic() {
 
 #[test]
 fn a_hatch_with_many_islands_answers_inside_the_deadline() {
-    // one big outline and 3,000 small islands, each a hatch loop
-    let mut s = String::from("0\nSECTION\n2\nENTITIES\n0\nHATCH\n8\n0\n91\n");
+    // one big outline and 3,000 small islands, each a hatch loop (the hatch format the importer reads)
     let loops = 3001;
-    s += &format!("{loops}\n");
+    let mut s = format!("0\nSECTION\n2\nENTITIES\n0\nHATCH\n8\n0\n10\n0\n20\n0\n30\n0\n2\nSOLID\n70\n1\n71\n0\n91\n{loops}\n");
     let ring = |x0: f64, y0: f64, w: f64, n: usize| {
-        let mut r = format!("92\n3\n93\n{n}\n");
+        let mut r = format!("92\n3\n72\n0\n73\n1\n93\n{n}\n");
         for k in 0..n {
             let a = k as f64 / n as f64 * std::f64::consts::TAU;
             r += &format!("10\n{}\n20\n{}\n", x0 + w * a.cos(), y0 + w * a.sin());
         }
-        r
+        r + "97\n0\n"
     };
     s += &ring(0.0, 0.0, 5000.0, 2000);
     for i in 0..loops - 1 {
         s += &ring((i % 60) as f64 * 40.0 - 1200.0, (i / 60) as f64 * 40.0 - 1000.0, 5.0, 12);
     }
-    s += "0\nENDSEC\n0\nEOF\n";
+    s += "75\n0\n76\n1\n0\nENDSEC\n0\nEOF\n";
     let mut e = Engine::new();
     let t = std::time::Instant::now();
-    let _ = e.exec_json(&json!({"cmd": "import_dxf", "text": s, "units": "m"}).to_string());
+    let r = e.exec_json(&json!({"cmd": "import_dxf", "text": s, "units": "m"}).to_string());
     assert!(t.elapsed().as_secs() < 25, "{:?}", t.elapsed());
+    // it was really read as a hatch: either made, or refused for time, not "nothing to draw"
+    assert!(r["ok"] == true || !r["error"].as_str().unwrap_or("").contains("nothing SketchCraft can draw"), "{r}");
 }
 
 /// R4-BRN-004: text_3d has one end-to-end deadline: the app's own call with 400 overlapping outlines
