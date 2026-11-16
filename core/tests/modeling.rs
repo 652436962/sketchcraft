@@ -1234,6 +1234,48 @@ fn photoreal_settings_backdrop_ground_sky_warmth() {
 }
 
 #[test]
+fn scale_figures_face_the_camera() {
+    let mut e = Engine::new();
+    box_group(&mut e, [3.0, 0.0, 0.0], [5.0, 2.0, 2.0], "Block");
+    for key in ["person", "beaver"] {
+        let r = run(&mut e, json!({"cmd":"insert","asset":key,"at":[0,0,0]}));
+        assert!(r["instance"].as_u64().is_some(), "{key}: {r}");
+    }
+    let s = sketchcraft::scene::build(&e.model, None);
+    let figs = s["figures"].as_array().unwrap();
+    assert_eq!(figs.len(), 2, "both figures come separately");
+    for f in figs {
+        assert!(f["positions"].as_array().unwrap().len() >= 9 * 10, "{}", f["id"]);
+        assert!(!f["edges"].as_array().unwrap().is_empty());
+        // around their own point, about 1.5-1.75 m tall
+        let zmax = f["positions"].as_array().unwrap().chunks(3).map(|p| p[2].as_f64().unwrap()).fold(0.0, f64::max);
+        assert!((1.45..=1.8).contains(&zmax), "height {zmax}");
+        // drawn facing -y
+        assert!((f["facing"].as_f64().unwrap() + std::f64::consts::FRAC_PI_2).abs() < 1e-6);
+    }
+    // and they're not in the main mesh (only the block's 12 triangles are)
+    let owners: std::collections::BTreeSet<u64> = s["triFace"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+    for f in figs {
+        assert!(!owners.contains(&f["id"].as_u64().unwrap()));
+    }
+    let inst = s["instances"].as_array().unwrap();
+    assert!(inst.iter().filter(|i| i["faceMe"] == true).count() == 2);
+    // a render from the side turns them toward the camera, and still works
+    let r = run(&mut e, json!({"cmd":"render","out": std::env::temp_dir().join("sc_figs.png").to_str().unwrap(),"camera":{"eye":[10,0,1.6],"target":[0,0,1],"fov":40}}));
+    assert!(r["out"].is_string());
+    let m = e.model.facing(DVec3::new(10.0, 0.0, 1.6)).unwrap();
+    for f in figs {
+        let i = &m.instances[&(f["id"].as_u64().unwrap() as u32)];
+        let d = i.transform.transform_vector3(DVec3::NEG_Y);
+        assert!(d.x > 0.99, "faces +x now: {d:?}");
+    }
+    // any component can be switched
+    let id = inst[0]["id"].as_u64().unwrap();
+    run(&mut e, json!({"cmd":"component_face_me","id":id,"on":false}));
+    assert_eq!(sketchcraft::scene::build(&e.model, None)["figures"].as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn groups_nest_move_copy_delete_and_lock_together() {
     let mut e = Engine::new();
     let wall = box_group(&mut e, [0.0, 0.0, 0.0], [4.0, 0.2, 3.0], "Wall") as u32;

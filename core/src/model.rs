@@ -94,6 +94,10 @@ pub struct Definition {
     /// placed on a face, it cuts an opening there (doors, windows)
     #[serde(default, skip_serializing_if = "is_false")]
     pub cuts: bool,
+    /// always turns to face the camera, around its own blue axis (flat
+    /// people and trees, like SketchUp's scale figure). Drawn facing -y.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub face_me: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

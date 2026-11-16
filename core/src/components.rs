@@ -39,6 +39,41 @@ impl Model {
         self.ancestors(g).iter().all(|g| self.groups.get(g).map_or(true, |g| !g.hidden && self.tag_visible(&g.tag)))
     }
 
+    /// Top-level placements of face-me components (flat figures), with the
+    /// way each faces now (radians in the ground plane, of its -y axis).
+    pub fn face_me_placements(&self) -> Vec<(Id, DVec3, f64)> {
+        self.instances
+            .iter()
+            .filter(|(_, i)| !i.hidden && self.definitions.get(&i.def).is_some_and(|d| d.face_me))
+            .map(|(id, i)| {
+                let f = i.transform.transform_vector3(DVec3::NEG_Y);
+                (*id, i.transform.w_axis.truncate(), f.y.atan2(f.x))
+            })
+            .collect()
+    }
+
+    /// A copy with every face-me figure turned to face `eye` (for renders).
+    /// None when there are none.
+    pub fn facing(&self, eye: DVec3) -> Option<Model> {
+        let figs = self.face_me_placements();
+        if figs.is_empty() {
+            return None;
+        }
+        let mut m = self.clone();
+        for (id, pivot, now) in figs {
+            let to = eye - pivot;
+            if to.x.hypot(to.y) < 1e-9 {
+                continue;
+            }
+            let turn = to.y.atan2(to.x) - now;
+            let r = DMat4::from_translation(pivot) * DMat4::from_rotation_z(turn) * DMat4::from_translation(-pivot);
+            if let Some(i) = m.instances.get_mut(&id) {
+                i.transform = r * i.transform;
+            }
+        }
+        Some(m)
+    }
+
     pub fn world_faces(&self) -> Vec<WFace> {
         let mut out = Vec::new();
         self.collect_faces(self, DMat4::IDENTITY, None, None, &Default::default(), &mut out);
@@ -208,7 +243,7 @@ impl Model {
         self.edges.retain(|_, e| !(verts.contains(&e.a) && verts.contains(&e.b)) || self.faces.values().any(|f| f.uses_edge(e.a, e.b)));
         self.gc();
         let did = self.new_id();
-        self.definitions.insert(did, Definition { name: name.clone(), model: std::sync::Arc::new(def), attrs: Default::default(), source: None, cuts: false });
+        self.definitions.insert(did, Definition { name: name.clone(), model: std::sync::Arc::new(def), attrs: Default::default(), source: None, cuts: false, face_me: false });
         self.place(did, lo, 0.0, None)
     }
 

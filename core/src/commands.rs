@@ -153,6 +153,8 @@ pub enum Command {
     },
     /// Whether a component cuts an opening in the face it's placed on.
     ComponentCuts { id: Id, cuts: bool },
+    /// Whether a component always turns to face the camera (flat figures).
+    ComponentFaceMe { id: Id, on: bool },
     /// Open a group, or a component's definition through one of its placements; `close` to finish.
     Edit { id: Id },
     Close,
@@ -1529,6 +1531,12 @@ impl Engine {
                 let opening = place_cut(m, instance, host);
                 json!({"instance": instance, "opening": opening})
             }
+            Command::ComponentFaceMe { id, on } => {
+                let def = m.instances.get(&id).map(|i| i.def).unwrap_or(id);
+                let d = m.definitions.get_mut(&def).ok_or_else(|| anyhow::anyhow!("{id} is not a component"))?;
+                d.face_me = on;
+                json!({"component": def, "face_me": on})
+            }
             Command::ComponentCuts { id, cuts } => {
                 let def = m.instances.get(&id).map(|i| i.def).unwrap_or(id);
                 let d = m.definitions.get_mut(&def).ok_or_else(|| anyhow::anyhow!("{id} is not a component"))?;
@@ -1754,6 +1762,9 @@ impl Engine {
                     sun_note = Some(serde_json::to_value(&s)?);
                 }
                 let camera = crate::pt::camera(model, &opts);
+                // flat figures turn to face this camera
+                let turned = model.facing(glam::DVec3::from(camera.eye));
+                let model = turned.as_ref().unwrap_or(model);
                 let po = crate::pt::PtOpts {
                     width: opts.width.min(4096),
                     height: opts.height.min(4096),
@@ -1813,7 +1824,10 @@ impl Engine {
                     if let Some(dir) = std::path::Path::new(path).parent() {
                         std::fs::create_dir_all(dir).ok();
                     }
-                    render::render(whole, &opts).save(path)?;
+                    // flat figures turn to face this camera
+                    let turned = whole.facing(glam::DVec3::from(cam.eye));
+                    let fixed = render::RenderOpts { camera: Some(cam.clone()), ..opts.clone() };
+                    render::render(turned.as_ref().unwrap_or(whole), &fixed).save(path)?;
                 }
                 json!({"out": out, "camera": {"eye": cam.eye, "target": cam.target, "fov": cam.fov}})
             }

@@ -22,6 +22,8 @@ pub const ASSETS: &[Asset] = &[
     Asset { key: "car", name: "Car", about: "Compact car 4.4 m", script: include_str!("../assets/car.jsonl") },
     Asset { key: "streetlight", name: "Streetlight", about: "6 m pole with arm", script: include_str!("../assets/streetlight.jsonl") },
     Asset { key: "bench", name: "Bench", about: "Park bench 1.8 m", script: include_str!("../assets/bench.jsonl") },
+    Asset { key: "person", name: "Person", about: "Scale figure 1.75 m, always faces you", script: include_str!("../assets/person.jsonl") },
+    Asset { key: "beaver", name: "Beaver", about: "The SketchCraft beaver with a clipboard, 1.5 m, always faces you", script: include_str!("../assets/beaver.jsonl") },
     Asset { key: "hydrant", name: "Hydrant", about: "Fire hydrant", script: include_str!("../assets/hydrant.jsonl") },
 ];
 
@@ -56,6 +58,8 @@ pub fn definition(m: &mut Model, key: &str) -> Result<Id> {
     let id = m.new_id();
     // doors and windows cut their opening in the wall they're placed on
     let cuts = matches!(asset.key, "door" | "window" | "garage_door");
-    m.definitions.insert(id, Definition { name: asset.name.to_string(), model: std::sync::Arc::new(model), attrs: Default::default(), source: None, cuts });
+    // a flat figure turns to face you
+    let face_me = matches!(asset.key, "person" | "beaver");
+    m.definitions.insert(id, Definition { name: asset.name.to_string(), model: std::sync::Arc::new(model), attrs: Default::default(), source: None, cuts, face_me });
     Ok(id)
 }

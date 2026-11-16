@@ -24,7 +24,22 @@ pub fn build(root: &Model, ctx: Option<u32>) -> Value {
     let mut pbr: Vec<f32> = Vec::new();
     let mut textures: Vec<Value> = Vec::new();
     let mut tex_index: std::collections::HashMap<String, i32> = std::collections::HashMap::new();
+    // face-me figures are drawn on their own (the viewer turns them to the camera)
+    let figs: std::collections::BTreeMap<u32, (glam::DVec3, f64)> = root.face_me_placements().into_iter().map(|(id, p, a)| (id, (p, a))).collect();
+    let mut fig_tris: std::collections::BTreeMap<u32, (Vec<f32>, Vec<f32>, Vec<f32>)> = Default::default();
     for f in root.world_faces() {
+        if let Some((pivot, _)) = figs.get(&f.owner) {
+            let e = fig_tris.entry(f.owner).or_default();
+            let color = f.color.unwrap_or(DEFAULT_COLOR);
+            for t in geom::triangulate(&f.outer, &f.holes, f.normal) {
+                e.1.extend(color);
+                for p in t {
+                    let q = p - *pivot;
+                    e.0.extend([q.x as f32, q.y as f32, q.z as f32]);
+                }
+            }
+            continue;
+        }
         let tex = f.material.as_ref().and_then(|name| root.find_material(name).and_then(|m| m.texture.as_ref()).map(|t| (name.clone(), t)));
         let ti = match &tex {
             Some((name, t)) => *tex_index.entry(name.clone()).or_insert_with(|| {
@@ -56,6 +71,13 @@ pub fn build(root: &Model, ctx: Option<u32>) -> Value {
     }
     let (mut edges, mut edge_ids, mut soft_edges) = (Vec::<f32>::new(), Vec::<u32>::new(), Vec::<f32>::new());
     for e in root.world_edges() {
+        if let Some((pivot, _)) = figs.get(&e.owner) {
+            if !e.soft {
+                let (a, b) = (e.a - *pivot, e.b - *pivot);
+                fig_tris.entry(e.owner).or_default().2.extend([a.x as f32, a.y as f32, a.z as f32, b.x as f32, b.y as f32, b.z as f32]);
+            }
+            continue;
+        }
         let seg = [e.a.x as f32, e.a.y as f32, e.a.z as f32, e.b.x as f32, e.b.y as f32, e.b.z as f32];
         if e.soft {
             soft_edges.extend(seg);
@@ -119,7 +141,7 @@ pub fn build(root: &Model, ctx: Option<u32>) -> Value {
     let instances: Vec<Value> = root
         .instances
         .iter()
-        .map(|(id, i)| json!({"id": id, "name": i.name, "component": i.def, "tag": i.tag, "hidden": i.hidden, "parent": i.parent, "transform": i.transform.to_cols_array(), "attrs": i.attrs}))
+        .map(|(id, i)| json!({"id": id, "name": i.name, "component": i.def, "tag": i.tag, "hidden": i.hidden, "parent": i.parent, "transform": i.transform.to_cols_array(), "attrs": i.attrs, "faceMe": root.definitions.get(&i.def).is_some_and(|d| d.face_me)}))
         .collect();
     let components: Vec<Value> = root
         .definitions
@@ -167,6 +189,12 @@ pub fn build(root: &Model, ctx: Option<u32>) -> Value {
             "emission": m.emission,
         })).collect::<Vec<_>>(),
         "triFace": tri_face,
+        // face-me figures: triangles and edges around their own point, and the
+        // way they face now (radians, of their -y axis); turn them to the camera
+        "figures": fig_tris.iter().map(|(id, (pos, col, edges))| {
+            let (p, a) = figs[id];
+            json!({"id": id, "pivot": p.to_array(), "facing": a, "positions": pos, "colors": col, "edges": edges})
+        }).collect::<Vec<_>>(),
         "faces": faces,
         "edgeList": edge_list,
         "edges": q(&edges, 1e-5),
