@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 pub const EXTS: [&str; 4] = ["sketchcraft", "skp", "fbx", "obj"];
 
 pub fn default_dir() -> PathBuf {
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-    home.join("Documents").join("SketchCraft").join("Library")
+    // beside the live document, so one folder (or SKETCHCRAFT_DOC) scopes everything
+    crate::live::default_doc().parent().map(|p| p.join("Library")).unwrap_or_else(|| PathBuf::from("Library"))
 }
 
 #[derive(serde::Serialize, Clone, Debug)]
@@ -193,7 +193,7 @@ pub fn thumbnail_of_file(path: &str, px: u32) -> Result<Vec<u8>> {
     let meta = std::fs::metadata(path)?;
     let stamp = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
     let key: String = format!("{path}-{stamp}-{px}").chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
-    let cache = std::env::temp_dir().join("sketchcraft-thumbs");
+    let cache = crate::safety::cache_dir("thumbs");
     std::fs::create_dir_all(&cache).ok();
     let file = cache.join(format!("{}.png", &key[key.len().saturating_sub(120)..]));
     if let Ok(b) = std::fs::read(&file) {

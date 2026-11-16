@@ -16,7 +16,7 @@ const MAP: &str = "https://tile.openstreetmap.org";
 /// Fetch a URL (cached on disk).
 pub fn fetch(url: &str) -> Result<Vec<u8>> {
     let key: String = url.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
-    let dir = std::env::temp_dir().join("sketchcraft-tiles");
+    let dir = crate::safety::cache_dir("tiles");
     std::fs::create_dir_all(&dir).ok();
     let file = dir.join(key);
     if let Ok(b) = std::fs::read(&file) {

@@ -511,6 +511,16 @@ fn bulged(pts: &[(DVec3, f64)], closed: bool, tol: f64) -> Vec<DVec3> {
     out
 }
 
+/// Block references can nest and multiply (a small file can ask for billions
+/// of shapes), so the whole expansion has a budget: shapes drawn, and entities
+/// visited. Past it, the rest is skipped and counted.
+const MAX_SHAPES: usize = 2_000_000;
+const MAX_VISITS: usize = 20_000_000;
+
+thread_local! {
+    static VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The shapes one entity draws (in its own coordinates; INSERTs are expanded).
 fn shapes(e: &Ent, blocks: &HashMap<String, (DVec3, Vec<Ent>)>, t: DMat4, layer: &str, depth: usize, out: &mut Vec<(String, Shape)>, skipped: &mut usize) {
     // entities on layer 0 inside a block take the block reference's layer
@@ -592,7 +602,7 @@ fn shapes(e: &Ent, blocks: &HashMap<String, (DVec3, Vec<Ent>)>, t: DMat4, layer:
                 *skipped += 1;
                 return;
             };
-            if depth > 8 {
+            if depth > 8 || out.len() >= MAX_SHAPES {
                 *skipped += 1;
                 return;
             }
@@ -605,6 +615,14 @@ fn shapes(e: &Ent, blocks: &HashMap<String, (DVec3, Vec<Ent>)>, t: DMat4, layer:
             for r in 0..rows.min(100) {
                 for c in 0..cols.min(100) {
                     let place = o * DMat4::from_translation(at) * DMat4::from_rotation_z(rot) * DMat4::from_translation(DVec3::new(c as f64 * dx, r as f64 * dy, 0.0)) * DMat4::from_scale(s) * DMat4::from_translation(-*base);
+                    let visits = VISITS.with(|v| {
+                        v.set(v.get() + ents.len() + 1);
+                        v.get()
+                    });
+                    if visits > MAX_VISITS || out.len() >= MAX_SHAPES {
+                        *skipped += 1;
+                        return;
+                    }
                     for be in ents {
                         shapes(be, blocks, t * place, &lay, depth + 1, out, skipped);
                     }
@@ -810,6 +828,7 @@ pub fn import(m: &mut Model, text: &str, name: &str, units: Option<&str>, at: DV
     let t = DMat4::from_translation(at) * DMat4::from_scale(DVec3::splat(scale));
     let mut shapes_out = vec![];
     let mut skipped = 0;
+    VISITS.with(|v| v.set(0));
     for e in entities(&ents_raw) {
         shapes(&e, &blocks, t, "0", 0, &mut shapes_out, &mut skipped);
     }

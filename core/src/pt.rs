@@ -295,6 +295,7 @@ impl Bvh {
 
 // ----- the scene ---------------------------------------------------------------------
 
+#[derive(Clone)]
 pub struct PtOpts {
     pub width: u32,
     pub height: u32,
@@ -750,8 +751,29 @@ fn denoise(color: &[Vec3], albedo: &[Vec3], normal: &[Vec3], w: usize, h: usize)
     light.iter().zip(albedo).map(|(l, a)| *l * (*a + eps)).collect()
 }
 
+/// The most work one render may ask for: pixels x samples x bounces.
+const BUDGET: u64 = 2_500_000_000;
+
+impl PtOpts {
+    /// The same options held to what one call may cost (about a minute at
+    /// most): size, samples and bounces are capped, and samples come down
+    /// further if the three together are still too much.
+    pub fn limited(&self) -> PtOpts {
+        let mut o = self.clone();
+        o.width = o.width.clamp(16, 4096);
+        o.height = o.height.clamp(16, 4096);
+        o.bounces = o.bounces.clamp(1, 12);
+        o.samples = o.samples.clamp(1, 2048);
+        let per_sample = (o.width as u64 * o.height as u64 * o.bounces as u64).max(1);
+        o.samples = o.samples.min((BUDGET / per_sample).max(1) as u32);
+        o
+    }
+}
+
 /// Render a photoreal image of the model.
 pub fn render(m: &Model, o: &PtOpts) -> RgbImage {
+    let limited = o.limited();
+    let o = &limited;
     let scene = build_scene(m, o);
     let (w, h) = (o.width.max(16) as usize, o.height.max(16) as usize);
     let (c, a, n, sky) = pass(&scene, o, w, h, 0, o.samples.max(1));
@@ -780,6 +802,8 @@ pub struct Progress {
 /// thing, `key`), or start over. Returns the progress and the denoised
 /// picture so far.
 pub fn progressive(prev: Option<Progress>, key: String, m: &Model, o: &PtOpts) -> (Progress, RgbImage) {
+    let limited = o.limited();
+    let o = &limited;
     let (w, h) = (o.width.max(16) as usize, o.height.max(16) as usize);
     let mut p = match prev {
         Some(p) if p.key == key && p.w == w && p.h == h => p,

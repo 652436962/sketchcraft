@@ -416,7 +416,29 @@ fn shade(base: [f32; 3], n: DVec3) -> [f32; 3] {
     [base[0] * k + sky, base[1] * k + sky, base[2] * k + sky]
 }
 
+/// Largest picture one render makes (a side, and pixels in all).
+pub const MAX_SIDE: u32 = 8192;
+pub const MAX_PIXELS: u64 = 25_000_000;
+
+impl RenderOpts {
+    /// The same options with a size one call can afford (about a 5000 x 5000 picture).
+    pub fn limited(&self) -> RenderOpts {
+        let mut o = self.clone();
+        o.width = o.width.clamp(16, MAX_SIDE);
+        o.height = o.height.clamp(16, MAX_SIDE);
+        let px = o.width as u64 * o.height as u64;
+        if px > MAX_PIXELS {
+            let k = (MAX_PIXELS as f64 / px as f64).sqrt();
+            o.width = ((o.width as f64 * k) as u32).max(16);
+            o.height = ((o.height as f64 * k) as u32).max(16);
+        }
+        o
+    }
+}
+
 pub fn render(model: &Model, opts: &RenderOpts) -> RgbImage {
+    let limited = opts.limited();
+    let opts = &limited;
     let (w, h) = (opts.width.max(16) as usize * SS, opts.height.max(16) as usize * SS);
     let cam = camera_for(model, opts);
     let eye = DVec3::from(cam.eye);

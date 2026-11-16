@@ -81,7 +81,11 @@ pub fn animate(m: &Model, path: &str, a: &Anim, base: &RenderOpts) -> Result<usi
 /// Render these cameras to `path` (frames folder, or .mp4/.mov).
 pub fn animate_cams(m: &Model, path: &str, cams: &[CameraSpec], fps: f64, base: &RenderOpts) -> Result<usize> {
     let video = matches!(Path::new(path).extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(), Some("mp4" | "mov"));
-    let dir: PathBuf = if video { std::env::temp_dir().join(format!("sketchcraft-frames-{}", std::process::id())) } else { PathBuf::from(path) };
+    if cams.len() > crate::timeline::MAX_FRAMES {
+        bail!("that's {} frames; the limit is {} (shorten it or lower the frame rate)", cams.len(), crate::timeline::MAX_FRAMES);
+    }
+    let scratch = if video { Some(crate::safety::TempDir::new("sketchcraft-frames")?) } else { None };
+    let dir: PathBuf = scratch.as_ref().map(|t| t.path().to_path_buf()).unwrap_or_else(|| PathBuf::from(path));
     std::fs::create_dir_all(&dir)?;
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8);
     let next = std::sync::atomic::AtomicUsize::new(0);
@@ -114,7 +118,6 @@ pub fn animate_cams(m: &Model, path: &str, cams: &[CameraSpec], fps: f64, base: 
             .args(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"])
             .arg(crate::safety::path_arg(path))
             .output();
-        std::fs::remove_dir_all(&dir).ok();
         match out {
             Ok(o) if o.status.success() => {}
             Ok(o) => bail!("ffmpeg couldn't make the video: {}", String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("")),

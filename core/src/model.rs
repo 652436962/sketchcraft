@@ -1150,3 +1150,70 @@ impl Model {
         Some(it.fold((first, first), |(lo, hi), p| (lo.min(p), hi.max(p))))
     }
 }
+
+/// Largest coordinate (meters) the model accepts anywhere.
+pub const MAX_COORD: f64 = 1e9;
+
+fn sane(v: f64) -> bool {
+    v.is_finite() && v.abs() <= MAX_COORD
+}
+
+fn sane3(v: DVec3) -> bool {
+    sane(v.x) && sane(v.y) && sane(v.z)
+}
+
+impl Model {
+    /// Every number the model holds is finite and within `MAX_COORD`. A model
+    /// that fails this can't be saved (NaN would be written as `null` and the
+    /// file could never be opened again), so commands that produce one are
+    /// undone.
+    pub fn check_sane(&self) -> Result<()> {
+        let bad = |what: &str| -> Result<()> { bail!("that would put a non-finite or absurdly large number ({what}) in the model, so it was not done") };
+        if !self.vertices.values().all(|v| sane3(v.p)) {
+            return bad("a point");
+        }
+        if !self.guides.iter().all(|g| sane3(g.p) && g.dir.is_none_or(sane3)) {
+            return bad("a guide");
+        }
+        for a in &self.annotations {
+            let ok = match a {
+                Annotation::Dimension { a, b, offset, .. } => sane3(*a) && sane3(*b) && sane3(*offset),
+                Annotation::Text { at, leader, .. } => sane3(*at) && leader.is_none_or(sane3),
+                Annotation::Swing { hinge, from, to, .. } => sane3(*hinge) && sane3(*from) && sane3(*to),
+            };
+            if !ok {
+                return bad("an annotation");
+            }
+        }
+        if !self.instances.values().all(|i| i.transform.to_cols_array().iter().all(|&x| sane(x))) {
+            return bad("a placement");
+        }
+        if !self.views.iter().all(|v| v.eye.iter().chain(v.target.iter()).all(|&x| sane(x)) && sane(v.fov)) {
+            return bad("a view");
+        }
+        if !self.sections.iter().all(|s| s.origin.iter().chain(s.normal.iter()).all(|&x| sane(x))) {
+            return bad("a section plane");
+        }
+        if let Some(ax) = &self.axes {
+            if !ax.iter().flatten().all(|&x| sane(x)) {
+                return bad("the axes");
+            }
+        }
+        if !self.cages.values().all(|c| c.points.iter().flatten().all(|&x| sane(x))) {
+            return bad("a cage");
+        }
+        for d in self.definitions.values() {
+            d.model.check_sane()?;
+        }
+        Ok(())
+    }
+
+    /// A rough size in bytes, for budgeting undo history (not exact; shared
+    /// component geometry isn't counted, since undo steps share it).
+    pub fn approx_bytes(&self) -> usize {
+        let tex: usize = self.materials.values().map(|m| 64 + m.texture.as_ref().map_or(0, |t| t.data.len())).sum();
+        let faces: usize = self.faces.values().map(|f| 96 + 4 * (f.outer.len() + f.holes.iter().map(Vec::len).sum::<usize>())).sum();
+        let photos: usize = self.views.iter().map(|v| 160 + v.photo.as_ref().map_or(0, String::len)).sum();
+        self.vertices.len() * 64 + self.edges.len() * 72 + faces + self.groups.len() * 96 + self.instances.len() * 200 + self.definitions.len() * 128 + tex + photos + self.annotations.len() * 120 + self.guides.len() * 80
+    }
+}

@@ -1,0 +1,289 @@
+//! Who may run what. Every command comes from someone:
+//!
+//!  - `Ui`: the app's own interface (and the CLI, the bridge with its token):
+//!    the person at the keyboard, choosing paths in native dialogs. Everything.
+//!  - `Plugin`: code from a plugin (JavaScript, or SketchUp Ruby replayed as
+//!    commands). Only modeling and inspection commands: no files, no other
+//!    programs, no network, no plugin management.
+//!  - `Mcp`: an AI agent. Modeling plus file import/export, but only inside a
+//!    workspace folder, and never plugin management, raw file writes, or
+//!    anything that launches things.
+//!
+//! The lists below are allowlists: a command nobody classified is refused for
+//! plugins and agents. Every caller also gets the same sanity checks on the
+//! command's numbers, strings and paths (see `vet`).
+
+use serde_json::Value;
+use std::path::{Component, Path, PathBuf};
+
+/// Largest number accepted anywhere in a command (meters, counts, angles...).
+pub const MAX_NUMBER: f64 = 1e9;
+/// Longest string accepted, unless the key carries data (below).
+pub const MAX_STRING: usize = 64 * 1024;
+/// Data a command may carry (an imported file, a texture), by caller.
+const MAX_DATA_UI: usize = 256 << 20;
+const MAX_DATA_UNTRUSTED: usize = 16 << 20;
+/// Keys whose values are file paths (checked for URLs, pipes and confinement).
+const PATH_KEYS: [&str; 5] = ["path", "out", "dir", "file", "folder"];
+/// Keys whose values may be long (files, images, text bodies).
+const DATA_KEYS: [&str; 7] = ["data", "photo", "text", "skin", "background", "style", "rings"];
+
+#[derive(Clone, Debug)]
+pub enum Caller {
+    Ui,
+    Plugin,
+    Mcp(Workspace),
+}
+
+/// The folder an agent may read and write in. `None` root: anywhere (the
+/// person widened it with `--any-path`).
+#[derive(Clone, Debug)]
+pub struct Workspace {
+    pub root: Option<PathBuf>,
+}
+
+impl Workspace {
+    pub fn at(dir: impl AsRef<Path>) -> Self {
+        let d = dir.as_ref();
+        Workspace { root: Some(std::fs::canonicalize(d).unwrap_or_else(|_| lexical(d))) }
+    }
+    pub fn anywhere() -> Self {
+        Workspace { root: None }
+    }
+}
+
+/// Commands that only change or inspect the model: safe for plugins.
+const MODEL: &[&str] = &[
+    "rect", "polygon", "line", "circle", "arc", "offset", "follow_me", "pushpull", "push_pull", "move", "rotate", "scale", "duplicate", "array", "delete", "reverse", "paint", "texture", "begin_group", "end_group", "group", "faces", "pick", "copy", "info", "parts", "make_component", "place", "component_cuts", "component_face_me", "edit", "close", "explode", "components", "hide", "unhide", "tag", "tag_visible", "tag_color", "rename_tag", "set_parent", "ungroup", "lock", "soften", "rename", "guide", "clear_guides", "units", "dimension", "text", "save_view", "show_view", "delete_view", "undo", "redo", "render", "door_swing", "levels", "solid", "intersect", "flip", "section", "terrain_from_contours", "terrain_grid", "smoove", "stamp", "drape", "flip_edge", "match_photo", "set_attrs", "cloud_data", "cloud", "connected", "same_as", "resize", "section_plane", "section_edit", "section_off", "set_axes", "finish", "options", "report", "classify", "bevel", "divide", "slice", "material", "subd", "cage_edit", "subdivide", "timeline", "timeline_frames", "weld", "explode_curve", "make_unique", "orient_faces", "text_3d", "text3d", "opacity", "environment", "sun", "volume", "wall", "stairs", "roof", "column", "insert", "assets", "raise_walls", "project_photo", "photo_solve", "purge",
+];
+
+/// Commands that read or write files (or run converters on them): agents get
+/// these inside their workspace; plugins never do.
+const FILES: &[&str] = &[
+    "save", "open", "new", "export_obj", "export_glb", "export_stl", "export_dae", "export_dxf", "export_pdf", "export_ifc", "export_dwg", "import_obj", "import_skp", "import_cloud", "import_ifc", "import_dxf", "import_dwg", "import_fbx", "animate", "sheets", "blueprint", "photoreal", "thumbnail", "insert_file", "save_to_library", "library_add", "library", "save_image", "add_location",
+];
+
+// Everything else (plugins, plugin_enable, install_plugin, remove_plugin,
+// save_text, reveal, skins, save_skin, video_frame, video_finish) is for the
+// person at the keyboard only.
+
+/// Is `cmd` something this caller may run at all?
+pub fn permits(caller: &Caller, cmd: &str) -> bool {
+    match caller {
+        Caller::Ui => true,
+        Caller::Plugin => MODEL.contains(&cmd),
+        Caller::Mcp(_) => MODEL.contains(&cmd) || FILES.contains(&cmd),
+    }
+}
+
+/// A path that names something other than a file on disk: a URL (ffmpeg and
+/// curl take them), a pipe, a device.
+pub fn looks_remote(s: &str) -> bool {
+    let t = s.trim();
+    if t.starts_with('|') || t.starts_with("\\\\.\\") || t.starts_with("\\\\?\\") {
+        return true;
+    }
+    match t.find(':') {
+        // "C:\dir" is a drive; "http:", "pipe:", "file:", "concat:" are not files
+        Some(i) if i > 1 => {
+            let scheme = &t[..i];
+            scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && scheme.chars().all(|c| c.is_ascii_alphanumeric() || "+.-_".contains(c))
+        }
+        _ => false,
+    }
+}
+
+/// `..` and `.` resolved without touching the disk.
+fn lexical(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Resolve symlinks in the part of the path that exists, keep the rest.
+fn resolve(p: &Path) -> PathBuf {
+    let p = lexical(p);
+    let mut tail = Vec::new();
+    let mut cur = p.clone();
+    loop {
+        if let Ok(c) = std::fs::canonicalize(&cur) {
+            let mut r = c;
+            for t in tail.iter().rev() {
+                r.push(t);
+            }
+            return r;
+        }
+        match (cur.file_name().map(|n| n.to_os_string()), cur.parent().map(Path::to_path_buf)) {
+            (Some(n), Some(parent)) => {
+                tail.push(n);
+                cur = parent;
+            }
+            _ => return p,
+        }
+    }
+}
+
+/// An agent's path, made absolute inside its workspace (relative paths start
+/// there). Refuses anything outside, hidden files and folders, and the
+/// Plugins folder (a file written there is code the app would run).
+fn confine(raw: &str, ws: &Workspace) -> Result<String, String> {
+    let Some(root) = &ws.root else { return Ok(raw.to_string()) };
+    let p = Path::new(raw);
+    let joined = if p.is_absolute() { p.to_path_buf() } else { root.join(p) };
+    let full = resolve(&joined);
+    let Ok(rel) = full.strip_prefix(root) else {
+        return Err(format!("{raw:?} is outside the workspace ({}); an agent may only use files there (start the server with --workspace DIR, or --any-path)", root.display()));
+    };
+    for c in rel.components() {
+        let name = c.as_os_str().to_string_lossy();
+        if name.starts_with('.') || name.eq_ignore_ascii_case("plugins") || name.eq_ignore_ascii_case("backups") {
+            return Err(format!("{raw:?}: agents can't use hidden files, Backups or the Plugins folder"));
+        }
+    }
+    Ok(full.to_string_lossy().into_owned())
+}
+
+fn walk(v: &Value, cmd: &str, data_max: usize, depth: usize, key: &str) -> Result<(), String> {
+    if depth > 64 {
+        return Err("command nested too deeply".into());
+    }
+    match v {
+        Value::Number(n) => {
+            if n.as_f64().is_none_or(|x| !x.is_finite() || x.abs() > MAX_NUMBER) {
+                return Err(format!("{key:?}: that number is out of range (limit {MAX_NUMBER:e})"));
+            }
+        }
+        Value::String(s) => {
+            let limit = if DATA_KEYS.contains(&key) && !(key == "text" && cmd == "text") { data_max } else { MAX_STRING };
+            let limit = if key == "text" && cmd == "text" { 10_000 } else { limit };
+            if s.len() > limit {
+                return Err(format!("{key:?} is too long ({} bytes, limit {limit})", s.len()));
+            }
+        }
+        Value::Array(a) => a.iter().try_for_each(|x| walk(x, cmd, data_max, depth + 1, key))?,
+        Value::Object(o) => o.iter().try_for_each(|(k, x)| walk(x, cmd, data_max, depth + 1, k))?,
+        _ => {}
+    }
+    Ok(())
+}
+
+fn path_values<'a>(cmd: &'a mut Value) -> Vec<&'a mut Value> {
+    let mut out = Vec::new();
+    if let Some(o) = cmd.as_object_mut() {
+        for (k, v) in o.iter_mut() {
+            if PATH_KEYS.contains(&k.as_str()) {
+                if v.is_string() {
+                    out.push(v);
+                }
+            } else if k == "paths" {
+                if let Some(a) = v.as_array_mut() {
+                    out.extend(a.iter_mut().filter(|x| x.is_string()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Check one command before it runs: numbers finite and in range, strings a
+/// sane length, paths real files (never URLs or pipes), and, for plugins and
+/// agents, only what their allowlist and workspace permit. Agent paths are
+/// rewritten to their confined absolute form.
+pub fn vet(caller: &Caller, cmd: &mut Value) -> Result<(), String> {
+    let Some(name) = cmd.get("cmd").and_then(Value::as_str).map(str::to_string) else { return Err("a command needs a \"cmd\"".into()) };
+    if !permits(caller, &name) {
+        return Err(match caller {
+            Caller::Plugin => format!("plugins can't use \"{name}\""),
+            _ => format!("\"{name}\" isn't available to agents"),
+        });
+    }
+    let data_max = if matches!(caller, Caller::Ui) { MAX_DATA_UI } else { MAX_DATA_UNTRUSTED };
+    walk(cmd, &name, data_max, 0, "")?;
+    if matches!(caller, Caller::Plugin) {
+        if let Some(o) = cmd.as_object() {
+            if let Some(k) = o.keys().find(|k| PATH_KEYS.contains(&k.as_str()) || *k == "paths") {
+                return Err(format!("plugins can't pass file paths (\"{name}\" {k})"));
+            }
+        }
+    }
+    for v in path_values(cmd) {
+        let s = v.as_str().unwrap_or("");
+        if s.contains('\0') || looks_remote(s) {
+            return Err(format!("{s:?} isn't a file path (no URLs, pipes or devices)"));
+        }
+        if let Caller::Mcp(ws) = caller {
+            *v = Value::String(confine(s, ws)?);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn remote_paths() {
+        for s in ["http://x/y.ts", "pipe:1", "concat:a|b", "file:///etc/passwd", "|cat", "tcp://1.2.3.4:5", "rtmp://a/b"] {
+            assert!(looks_remote(s), "{s}");
+        }
+        for s in ["/tmp/a.mp4", "C:\\Users\\a\\b.mp4", "rel/dir/x.obj", "a-b.mp4", "./x:y"] {
+            assert!(!looks_remote(s), "{s}");
+        }
+    }
+
+    #[test]
+    fn plugins_get_modeling_only() {
+        let c = Caller::Plugin;
+        for ok in ["rect", "pushpull", "move", "info", "render"] {
+            assert!(permits(&c, ok), "{ok}");
+        }
+        for no in ["save_text", "install_plugin", "plugin_enable", "remove_plugin", "reveal", "skins", "save_skin", "add_location", "photoreal", "video_finish", "save", "open", "import_obj", "export_obj", "new", "animate", "plugins", "made_up"] {
+            assert!(!permits(&c, no), "{no}");
+        }
+        assert!(vet(&c, &mut json!({"cmd": "render", "out": "/tmp/x.png"})).is_err());
+        assert!(vet(&c, &mut json!({"cmd": "rect", "from": [0, 0, 0], "to": [1, 1, 0]})).is_ok());
+    }
+
+    #[test]
+    fn numbers_and_strings_are_bounded() {
+        let c = Caller::Ui;
+        assert!(vet(&c, &mut json!({"cmd": "scale", "ids": [1], "center": [0, 0, 0], "factor": 1.7e308})).is_err());
+        assert!(vet(&c, &mut json!({"cmd": "rename", "id": 1, "name": "x".repeat(MAX_STRING + 1)})).is_err());
+        assert!(vet(&c, &mut json!({"cmd": "rename", "id": 1, "name": "ok"})).is_ok());
+        assert!(vet(&c, &mut json!({"cmd": "video_finish", "session": "a", "path": "http://127.0.0.1/x.ts"})).is_err());
+    }
+
+    #[test]
+    fn agents_stay_in_their_workspace() {
+        let base = std::env::temp_dir().join(format!("sc-policy-{}", std::process::id()));
+        std::fs::create_dir_all(base.join("ws")).unwrap();
+        let ws = Workspace::at(base.join("ws"));
+        let c = Caller::Mcp(ws);
+        let mut ok = json!({"cmd": "export_obj", "path": "out.obj"});
+        assert!(vet(&c, &mut ok).is_ok());
+        assert!(ok["path"].as_str().unwrap().ends_with("ws/out.obj"));
+        for bad in [json!("../x.obj"), json!("/etc/x.obj"), json!(".hidden/x.obj"), json!("Plugins/p/main.js"), json!("sub/../../x.obj")] {
+            assert!(vet(&c, &mut json!({"cmd": "export_obj", "path": bad})).is_err());
+        }
+        assert!(vet(&c, &mut json!({"cmd": "save_text", "path": "a.txt", "text": "x"})).is_err());
+        assert!(vet(&c, &mut json!({"cmd": "install_plugin", "data": "AAAA"})).is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("/tmp", base.join("ws/link")).ok();
+            assert!(vet(&c, &mut json!({"cmd": "export_obj", "path": "link/x.obj"})).is_err());
+        }
+        std::fs::remove_dir_all(&base).ok();
+    }
+}

@@ -44,6 +44,7 @@ pub mod sandbox;
 pub mod safety;
 pub mod scene;
 pub mod plugins;
+pub mod policy;
 pub mod section;
 pub mod shapes;
 pub mod skp;

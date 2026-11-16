@@ -91,8 +91,8 @@ pub fn import(m: &mut Model, path: &Path) -> Result<IfcResult> {
         bail!("no file at {}", path.display());
     }
     let py = python().with_context(|| HELP.to_string())?;
-    let tmp = std::env::temp_dir().join(format!("sketchcraft-ifc-{}-{}", std::process::id(), m.next_id));
-    std::fs::create_dir_all(&tmp)?;
+    let scratch = crate::safety::TempDir::new("sketchcraft-ifc")?;
+    let tmp = scratch.path().to_path_buf();
     let script = tmp.join("ifc_mesh.py");
     let out = tmp.join("out.json");
     std::fs::write(&script, SCRIPT)?;
@@ -108,7 +108,6 @@ pub fn import(m: &mut Model, path: &Path) -> Result<IfcResult> {
         let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "IFC model".into());
         build(m, data, &name)
     })();
-    std::fs::remove_dir_all(&tmp).ok();
     result
 }
 

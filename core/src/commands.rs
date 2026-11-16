@@ -9,6 +9,7 @@
 
 use crate::export;
 use crate::model::{Id, Model};
+use crate::policy::Caller;
 use crate::render::{self, RenderOpts};
 use anyhow::{bail, Result};
 use glam::DVec3;
@@ -1178,9 +1179,13 @@ pub struct Engine {
     revision: u64,
     /// a photoreal render in progress
     pt: Option<crate::pt::Progress>,
+    /// memory undo history may use (estimated bytes); 0: the default
+    pub undo_budget: usize,
 }
 
 const UNDO_LIMIT: usize = 200;
+/// Undo history never holds more than about this much (per-step sizes are estimates).
+const UNDO_BYTES: usize = 768 << 20;
 
 fn v3(a: [f64; 3]) -> DVec3 {
     DVec3::from(a)
@@ -1203,13 +1208,33 @@ impl Engine {
         Self::default()
     }
 
-    /// Run one JSON command line and return a JSON reply (never panics on bad input).
+    /// Run one JSON command line as the person using the app (no limits on
+    /// which command, beyond the sanity checks) and return a JSON reply.
     pub fn exec_json(&mut self, line: &str) -> Value {
-        let mut v: Value = match serde_json::from_str(line) {
+        self.exec_json_as(&Caller::Ui, line)
+    }
+
+    /// Run one JSON command line for `caller` (see `policy`). Never panics:
+    /// bad input is an error reply, and a bug inside a command is an error
+    /// reply with the model put back as it was.
+    pub fn exec_json_as(&mut self, caller: &Caller, line: &str) -> Value {
+        let v: Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(e) => return json!({"ok": false, "error": format!("bad JSON: {e}")}),
         };
+        self.exec_value_as(caller, v)
+    }
+
+    pub fn exec_value_as(&mut self, caller: &Caller, v: Value) -> Value {
+        // a panic anywhere (not only inside a command) is an error reply
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.exec_value_inner(caller, v))).unwrap_or_else(|_| json!({"ok": false, "error": "SketchCraft hit a bug running that."}))
+    }
+
+    fn exec_value_inner(&mut self, caller: &Caller, mut v: Value) -> Value {
         let name = v.as_object_mut().and_then(|o| o.remove("as")).and_then(|n| n.as_str().map(String::from));
+        if let Err(e) = crate::policy::vet(caller, &mut v) {
+            return json!({"ok": false, "error": e});
+        }
         if let Err(e) = self.resolve(&mut v) {
             return json!({"ok": false, "error": e.to_string()});
         }
@@ -1228,6 +1253,17 @@ impl Engine {
             }
         }
         r
+    }
+
+    /// How many steps Undo can go back.
+    pub fn undo_depth(&self) -> usize {
+        self.undo.len()
+    }
+
+    /// Bumps on every change to the model (and undo/redo); a client can tell
+    /// whether a command changed anything.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Build (or replace, or remove) the environment around the model: one
@@ -1303,40 +1339,74 @@ impl Engine {
         Ok(())
     }
 
+    /// Run a command. A command that fails, panics, or leaves a non-finite
+    /// or absurd number in the model changes nothing (and costs no undo step).
     pub fn exec(&mut self, cmd: Command) -> Value {
-        if let Command::Environment { kind } = &cmd {
-            self.revision += 1;
-            return match self.environment(kind) {
-                Ok(mut v) => {
-                    v["ok"] = json!(true);
-                    v
-                }
-                Err(e) => json!({"ok": false, "error": e.to_string()}),
-            };
-        }
-        let mutates = cmd.mutates();
+        let is_env = matches!(cmd, Command::Environment { .. });
+        let mutates = cmd.mutates() || is_env;
         if mutates || matches!(cmd, Command::Undo | Command::Redo) {
             self.revision += 1;
         }
-        let before = if mutates { Some(self.model.clone()) } else { None };
-        match self.run(cmd) {
-            Ok(mut v) => {
-                if let Some(b) = before {
-                    self.undo.push(b);
-                    if self.undo.len() > UNDO_LIMIT {
-                        self.undo.remove(0);
+        // everything needed to put things back as they were
+        let saved = mutates.then(|| (self.model.clone(), self.ctx, self.names.clone(), self.undo.len()));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Command::Environment { kind } = &cmd {
+                // pushes its own (single) undo step
+                return self.environment(kind).map(|mut v| {
+                    v["ok"] = json!(true);
+                    (v, false)
+                });
+            }
+            self.run(cmd).map(|mut v| {
+                v["ok"] = json!(true);
+                (v, mutates)
+            })
+        }));
+        let restore = |e: &mut Engine, saved: Option<(Model, Option<Id>, HashMap<String, Id>, usize)>| {
+            if let Some((model, ctx, names, depth)) = saved {
+                e.model = model;
+                e.ctx = ctx;
+                e.names = names;
+                e.undo.truncate(depth);
+            }
+        };
+        match outcome {
+            Ok(Ok((v, push_undo))) => {
+                if mutates {
+                    if let Err(e) = self.model.check_sane() {
+                        restore(self, saved);
+                        return json!({"ok": false, "error": e.to_string()});
+                    }
+                    if push_undo {
+                        if let Some((before, ..)) = saved {
+                            self.undo.push(before);
+                        }
                     }
                     self.redo.clear();
+                    self.trim_undo();
                 }
-                v["ok"] = json!(true);
                 v
             }
-            Err(e) => {
-                if let Some(b) = before {
-                    self.model = b; // a failed command leaves no half-done edits
-                }
+            Ok(Err(e)) => {
+                restore(self, saved);
                 json!({"ok": false, "error": e.to_string()})
             }
+            Err(panic) => {
+                let msg = panic.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| panic.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown".into());
+                eprintln!("sketchcraft: a command panicked: {msg}");
+                restore(self, saved);
+                json!({"ok": false, "error": "SketchCraft hit a bug running that. Nothing was changed."})
+            }
+        }
+    }
+
+    /// Keep undo history within `UNDO_LIMIT` steps and `UNDO_BYTES` of memory
+    /// (the newest step is always kept).
+    fn trim_undo(&mut self) {
+        let mut total: usize = self.undo.iter().map(Model::approx_bytes).sum();
+        while self.undo.len() > UNDO_LIMIT || (self.undo.len() > 1 && total > if self.undo_budget == 0 { UNDO_BYTES } else { self.undo_budget }) {
+            total = total.saturating_sub(self.undo[0].approx_bytes());
+            self.undo.remove(0);
         }
     }
 
@@ -1782,7 +1852,7 @@ impl Engine {
             }
             Command::RemovePlugin { id } => crate::plugins::remove(&id)?,
             Command::SaveText { path, text } => {
-                std::fs::write(&path, text)?;
+                crate::safety::write_atomic(&path, text.as_bytes())?;
                 json!({"path": path})
             }
             Command::Info => {
@@ -1828,8 +1898,8 @@ impl Engine {
                 let turned = model.facing(glam::DVec3::from(camera.eye));
                 let model = turned.as_ref().unwrap_or(model);
                 let po = crate::pt::PtOpts {
-                    width: opts.width.min(4096),
-                    height: opts.height.min(4096),
+                    width: opts.width,
+                    height: opts.height,
                     samples: samples.clamp(1, 4096),
                     bounces: bounces.clamp(1, 16),
                     camera: camera.clone(),
@@ -1851,7 +1921,8 @@ impl Engine {
                     ground,
                     ground_color: ground_color.as_deref().map(hex_rgb).transpose()?,
                     warmth: warmth.clamp(-1.0, 1.0),
-                };
+                }
+                .limited();
                 let t0 = std::time::Instant::now();
                 let mut spp = po.samples;
                 let img = if progressive {
@@ -1894,16 +1965,23 @@ impl Engine {
                 json!({"out": out, "camera": {"eye": cam.eye, "target": cam.target, "fov": cam.fov}})
             }
             Command::Save { path } => {
-                std::fs::write(&path, serde_json::to_string(&*m)?)?;
+                // never write a model with NaN or absurd numbers: it couldn't be opened again
+                self.model.check_sane()?;
+                crate::safety::write_atomic(&path, serde_json::to_string(&self.model)?.as_bytes())?;
                 json!({"path": path})
             }
             Command::Open { path } => {
-                *m = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
-                json!({"path": path, "faces": m.faces.len()})
+                let opened: Model = serde_json::from_str(&std::fs::read_to_string(&path)?).map_err(|e| anyhow::anyhow!("{path} isn't a model SketchCraft can read: {e}"))?;
+                opened.check_sane()?;
+                self.model = opened;
+                self.ctx = None;
+                self.names.clear();
+                json!({"path": path, "faces": self.model.faces.len()})
             }
             Command::ExportGlb { path } => json!({"path": path, "triangles": export::write_glb(&self.model, &path)?}),
             Command::ExportStl { path, scale } => json!({"path": path, "triangles": export::write_stl(&self.model, &path, scale)?}),
             Command::Animate { path, fps, transition, delay, views, turntable, timeline, opts } => {
+                let fps = fps.clamp(1.0, 60.0);
                 if timeline {
                     let model = &self.model;
                     let fs = crate::timeline::frames(model, &model.timeline, fps, &|d, t| timeline_sun(model, d, t))?;
@@ -1929,6 +2007,7 @@ impl Engine {
                 json!({"clips": m.timeline.clips.len(), "seconds": m.timeline.clips.iter().map(|c| c.seconds).sum::<f64>(), "frames_at_10fps": n})
             }
             Command::TimelineFrames { fps } => {
+                let fps = fps.clamp(1.0, 60.0);
                 let model = &self.model;
                 let fs = crate::timeline::frames(model, &model.timeline, fps, &|d, t| timeline_sun(model, d, t))?;
                 json!({"fps": fps, "frames": fs})
@@ -1976,15 +2055,14 @@ impl Engine {
                 json!({"group": r.group, "layers": r.layers, "faces": r.faces, "edges": r.edges, "units": r.units, "skipped": r.skipped, "labels": r.labels, "dimensions": r.dimensions, "focus": [r.focus[0].to_array(), r.focus[1].to_array()]})
             }
             Command::ImportDwg { path, units, at } => {
-                let tmp = std::env::temp_dir().join(format!("sketchcraft-dwg-{}", std::process::id()));
-                std::fs::create_dir_all(&tmp)?;
+                let scratch = crate::safety::TempDir::new("sketchcraft-dwg")?;
+                let tmp = scratch.path().to_path_buf();
                 let dxf = crate::dwg::to_dxf(std::path::Path::new(&path), &tmp);
                 let r = dxf.and_then(|d| {
                     let text = String::from_utf8_lossy(&std::fs::read(&d)?).into_owned();
                     let label = std::path::Path::new(&path).file_stem().map(|s| tidy_name(&s.to_string_lossy())).unwrap_or_else(|| "DWG drawing".into());
                     crate::dxf::import(m, &text, &label, units.as_deref(), v3(at))
                 });
-                std::fs::remove_dir_all(&tmp).ok();
                 let r = r?;
                 json!({"group": r.group, "layers": r.layers, "faces": r.faces, "edges": r.edges, "units": r.units, "skipped": r.skipped, "labels": r.labels, "dimensions": r.dimensions, "focus": [r.focus[0].to_array(), r.focus[1].to_array()]})
             }
@@ -1993,12 +2071,11 @@ impl Engine {
                 json!({"walls": r.walls, "windows": r.windows, "layers": r.layers})
             }
             Command::ExportDwg { path } => {
-                let tmp = std::env::temp_dir().join(format!("sketchcraft-dwgout-{}", std::process::id()));
-                std::fs::create_dir_all(&tmp)?;
+                let scratch = crate::safety::TempDir::new("sketchcraft-dwgout")?;
+                let tmp = scratch.path().to_path_buf();
                 let stem = std::path::Path::new(&path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "model".into());
                 let dxf = tmp.join(format!("{stem}.dxf"));
                 let r = crate::export2::write_dxf(&self.model, dxf.to_str().unwrap()).and_then(|n| crate::dwg::from_dxf(&dxf, std::path::Path::new(&path)).map(|_| n));
-                std::fs::remove_dir_all(&tmp).ok();
                 json!({"path": path, "triangles": r?})
             }
             Command::ProjectPhoto { view, ids, size } => {
@@ -2704,7 +2781,7 @@ fn video_dir(session: &str) -> Result<std::path::PathBuf> {
     if session.is_empty() || session.len() > 40 || !session.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         bail!("bad video session name");
     }
-    Ok(std::env::temp_dir().join(format!("sketchcraft-video-{session}")))
+    Ok(crate::safety::cache_dir("video").join(session))
 }
 
 /// Where app skins live: ~/Documents/SketchCraft/Skins.
