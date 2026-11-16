@@ -16,7 +16,7 @@ import { TOOL_INFO, WORKSPACES, withEdits, type WorkspaceEdits, type WorkspaceId
 import { AppearanceDialog, WorkspaceDialog } from "./appearance";
 import { WorkspaceStrip } from "./wsstrip";
 import { Toolbar } from "./toolbar";
-import { loadPlugins, PluginFormDialog, PluginResultDialog, PluginsDialog, runPlugin, type Plugin, type PluginForm, type PluginList, type PluginResult } from "./plugins";
+import { loadPlugins, PluginFormDialog, PluginResultDialog, PluginsDialog, runPlugin, startPluginTool, type Plugin, type PluginForm, type PluginList, type PluginResult, type ToolSession } from "./plugins";
 import { PhotoModeler } from "./photomodel";
 import { RefImageDialog } from "./refimage";
 import { Text3dDialog } from "./text3d";
@@ -281,6 +281,9 @@ export default function App() {
   const [showPlugins, setShowPlugins] = useState(false);
   // plugin commands run this session (the plugins lesson watches it)
   const [pluginRuns, setPluginRuns] = useState(0);
+  // a plugin's tool in use: its session, and what it shows
+  const toolSession = useRef<ToolSession | null>(null);
+  const [pluginTool, setPluginTool] = useState<{ name: string; hint: string; preview: [number, number, number][][]; anchor: [number, number, number] | null } | null>(null);
   const [pluginForm, setPluginForm] = useState<{ form: PluginForm; plugin: Plugin; done: (a: Record<string, unknown> | null) => void } | null>(null);
   const reloadPlugins = () => loadPlugins().then(setPlugins, () => {});
   // plugins that are on
@@ -640,8 +643,47 @@ export default function App() {
 
   // the tool bar's buttons call the latest runner (it reads the current selection)
   const runPluginCommandRef = useRef<(p: Plugin, c: string) => Promise<void>>(async () => {});
-  const runPluginCommand = (plugin: Plugin, commandId: string) =>
-    runPlugin(plugin, commandId, {
+  // a command marked "tool" starts the plugin's tool instead of running once
+  const startTool = (plugin: Plugin, toolId: string, label: string) => {
+    toolSession.current?.stop();
+    const name = label.replace(/…$/, "");
+    setPluginTool({ name, hint: "", preview: [], anchor: null });
+    const session = startPluginTool(plugin, toolId, {
+      selection: { faces: sel.faces, edges: sel.edges, groups: sel.groups, instances: sel.instances },
+      units: scene?.units || "m",
+      run: (cmd) => run(cmd),
+      show: (result, pl) => setPluginShown({ result, plugin: pl }),
+      toast: (t, bad) => say(t, bad),
+      ask: (form, pl) => new Promise((resolve) => setPluginForm({ form, plugin: pl, done: (a) => (setPluginForm(null), resolve(a)) })),
+      preview: (lines) => setPluginTool((p) => (p ? { ...p, preview: lines } : p)),
+      hint: (text) => setPluginTool((p) => (p ? { ...p, hint: text } : p)),
+      anchor: (pt) => setPluginTool((p) => (p ? { ...p, anchor: pt } : p)),
+      ended: () => {
+        if (toolSession.current === session) {
+          toolSession.current = null;
+          setPluginTool(null);
+          setTool((t) => (t === "plugin" ? "select" : t));
+          setPluginRuns((n) => n + 1);
+        }
+      },
+    });
+    toolSession.current = session;
+    setTool("plugin");
+  };
+  // picking another tool (or Esc) leaves the plugin's tool
+  useEffect(() => {
+    if (tool !== "plugin" && toolSession.current) {
+      const s = toolSession.current;
+      toolSession.current = null;
+      setPluginTool(null);
+      s.stop();
+    }
+  }, [tool]);
+
+  const runPluginCommand = (plugin: Plugin, commandId: string) => {
+    const c = plugin.commands.find((x) => x.id === commandId);
+    if (c?.tool) return Promise.resolve(startTool(plugin, commandId, c.label));
+    return runPlugin(plugin, commandId, {
       onDone: () => setPluginRuns((n) => n + 1),
       selection: { faces: sel.faces, edges: sel.edges, groups: sel.groups, instances: sel.instances },
       units: scene?.units || "m",
@@ -660,6 +702,7 @@ export default function App() {
           }),
         ),
     });
+  };
 
   runPluginCommandRef.current = runPluginCommand;
 
@@ -1039,6 +1082,11 @@ export default function App() {
             setSectionTick((t) => t + 1);
           }}
           api={api}
+          pluginTool={
+            tool === "plugin" && pluginTool
+              ? { ...pluginTool, move: (at) => toolSession.current?.move(at), click: (at) => toolSession.current?.click(at) }
+              : null
+          }
         />
         {matching && <MatchPhoto src={matching.src} width={matching.width} height={matching.height} defaultName={`Photo ${(scene?.views.filter((v) => v.photo).length ?? 0) + 1}`} onDone={finishMatch} onCancel={() => setMatching(null)} />}
 

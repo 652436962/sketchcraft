@@ -28,7 +28,8 @@ export type Tool =
   | "tape" | "dimension" | "text" | "paint" | "erase" | "orbit" | "pan" | "zoom" | "section" | "place"
   | "position" | "lookaround" | "walk" | "zoomwindow" | "protractor"
   | "wall" | "stairs" | "roof" | "column"
-  | "smoove" | "stamp" | "drape" | "flipedge";
+  | "smoove" | "stamp" | "drape" | "flipedge"
+  | "plugin";
 
 /** Settings for the building-block tools (lengths in meters). */
 export interface BuildSettings {
@@ -155,6 +156,26 @@ interface Props {
   /** the coach's × */
   onHideHelp?: () => void;
   api: React.MutableRefObject<ViewportApi | null>;
+  /** a plugin's tool in use (tool "plugin"): where its moves and clicks go,
+   * what it draws, its hint, and the point its rubber band starts from */
+  pluginTool?: {
+    name: string;
+    hint: string;
+    preview: [number, number, number][][];
+    anchor: [number, number, number] | null;
+    move: (at: PluginPoint) => void;
+    click: (at: PluginPoint) => void;
+  } | null;
+}
+
+/** A snapped point for a plugin tool (see plugins.tsx ToolPoint). */
+export interface PluginPoint {
+  point: [number, number, number];
+  snap: string;
+  face: number | null;
+  normal: [number, number, number];
+  shift: boolean;
+  alt: boolean;
 }
 
 const ACCENT = 0x6b5cff;
@@ -1236,6 +1257,17 @@ export default function Viewport(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scene]);
 
+  // a plugin tool's preview arrives after the move that asked for it: draw it then
+  useEffect(() => {
+    const P = props.pluginTool;
+    if (props.tool !== "plugin" || !P || !t.current) return;
+    clearPreview();
+    drawPluginPreview(P.preview);
+    const at = st.current.snap?.p;
+    if (P.anchor && at) t.current.preview.add(polyline([V(P.anchor), at], 0x1d1e24));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.pluginTool?.preview, props.pluginTool?.anchor, props.tool]);
+
   useEffect(() => {
     st.current.selOverride = null;
     drawOverlay();
@@ -1584,7 +1616,10 @@ export default function Viewport(props: Props) {
     const L = live.current;
     const op = st.current.op;
     const stage = op?.t === "axes" ? (op.x ? 2 : 1) : op?.t === "arc" ? (op.b ? 2 : 1) : op?.t === "carc" ? (op.a ? 2 : 1) : op?.t === "arc3" ? (op.m ? 2 : 1) : op?.t === "rrect" ? (op.b ? 2 : 1) : op?.t === "rotate" ? (op.ref ? 2 : 1) : op?.t === "dim" ? (op.b ? 2 : 1) : undefined;
-    const g = guide(L.tool, { op: op?.t ?? null, stage, selected: selIds(selNow()).length, placing: L.placeAsset });
+    const g =
+      L.tool === "plugin" && L.pluginTool
+        ? { title: L.pluginTool.name, step: L.pluginTool.hint || "Click in the model.", keys: [["Esc", "leave the tool"]] as [string, string][] }
+        : guide(L.tool, { op: op?.t ?? null, stage, selected: selIds(selNow()).length, placing: L.placeAsset });
     const key = `${g.title}|${g.step}|${g.keys.length}`;
     if (key !== coachKey.current) {
       coachKey.current = key;
@@ -1613,6 +1648,21 @@ export default function Viewport(props: Props) {
     if (g != null) return { kind: "groups", id: g };
     return { kind: "faces", id: p.owner };
   }
+
+  /** A snapped point, as a plugin tool gets it. */
+  function pluginPoint(sn: Snap, e: { shiftKey: boolean; altKey: boolean }): PluginPoint {
+    return { point: arr(sn.p) as [number, number, number], snap: sn.kind, face: sn.face?.id ?? null, normal: arr(sn.normal) as [number, number, number], shift: e.shiftKey, alt: e.altKey };
+  }
+
+  /** Lines a plugin tool asked to show. */
+  function drawPluginPreview(segs: [number, number, number][][]) {
+    const T = t.current;
+    if (!T || !segs.length) return;
+    const seg: number[] = [];
+    for (const l of segs) if (Array.isArray(l) && l.length === 2) seg.push(...l[0], ...l[1]);
+    if (seg.length) T.preview.add(lines(seg, ACCENT, false));
+  }
+  const T0 = () => t.current!;
 
   function clearPreview() {
     const T = t.current;
@@ -2430,6 +2480,18 @@ export default function Viewport(props: Props) {
       const E = env();
       clearPreview();
 
+      // a plugin's tool: snap, draw what it asked for, and tell it where we are
+      if (L.tool === "plugin" && L.pluginTool) {
+        const P = L.pluginTool;
+        const sn = infer(E, e, { anchor: P.anchor ? V(P.anchor) : null, lock });
+        drawPluginPreview(P.preview);
+        if (P.anchor) T0().preview.add(polyline([V(P.anchor), sn.p], axisColor(sn)));
+        showSnap(sn);
+        if (P.anchor) L.onMeasure("Length", fmt(sn.p.distanceTo(V(P.anchor))));
+        P.move(pluginPoint(sn, e));
+        return;
+      }
+
       switch (op?.t) {
         case "box": {
           op.x1 = e.clientX;
@@ -3191,6 +3253,13 @@ export default function Viewport(props: Props) {
           const o = h.point.clone().addScaledVector(n, 0.01);
           await L.run({ cmd: "section_plane", origin: arr(o), normal: arr(n) });
           L.setTool("select");
+          return;
+        }
+        case "plugin": {
+          if (!L.pluginTool) return;
+          const P = L.pluginTool;
+          const sn = infer(E, e, { anchor: P.anchor ? V(P.anchor) : null, lock: st.current.lock });
+          P.click(pluginPoint(sn, e));
           return;
         }
         case "place": {

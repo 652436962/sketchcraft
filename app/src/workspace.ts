@@ -25,7 +25,7 @@ export interface Workspace {
 }
 
 /** every tool that can sit on the toolbar, with its name and key */
-export const TOOL_INFO: Record<Exclude<Tool, "place">, { name: string; key: string }> = {
+export const TOOL_INFO: Record<Exclude<Tool, "place" | "plugin">, { name: string; key: string }> = {
   select: { name: "Select", key: "Space" },
   line: { name: "Line", key: "L" },
   arc: { name: "2-Point Arc: ends, then bulge", key: "A" },

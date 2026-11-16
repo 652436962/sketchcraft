@@ -69,7 +69,67 @@ and can be `async`. `ctx` has:
 | `ctx.units` | the model's units: `"m"`, `"cm"`, `"mm"`, `"ft"` or `"in"` (sizes are always meters) |
 | `ctx.run(cmd)` | run an engine command, returns its reply (`{ ok, ... }` or `{ ok: false, error }`) |
 | `ctx.show({ title, text, table })` | show a result; `table` is `{ columns: [...], rows: [[...], ...] }`, which people can copy or save as CSV |
+| `ctx.ask(form)` | shows a form and returns the answers, or `null` if cancelled (below) |
 | `ctx.toast(text)` | a short message at the top of the model |
+
+### Forms: `ctx.ask`
+
+```js
+const a = await ctx.ask({
+  title: "Shelf unit",
+  text: "A line or two about what happens.",
+  ok: "Build",
+  fields: [
+    { id: "width", label: "Width", type: "length", value: 0.8, min: 0.2, max: 4 },
+    { id: "count", label: "Shelves", type: "number", value: 3 },
+    { id: "wood", label: "Wood", type: "choice", options: ["Pine", "Oak", "Birch ply"] },
+    { id: "back", label: "Add a back", type: "check", value: true },
+    { id: "note", label: "Label", type: "text", value: "" },
+  ],
+});
+if (!a) return; // cancelled
+```
+
+A `length` is typed in the model's units (`2.4m`, `8'`, `90cm`) and comes back
+in meters; `min` and `max` are checked before the form closes. Time spent on a
+form doesn't count toward the one-minute limit.
+
+## Tools: `sketchcraft.tool`
+
+A command with `"tool": true` in plugin.json starts an interactive tool instead
+of running once. The plugin stays running while the tool is in use and gets
+every move and click, snapped like SketchCraft's own tools:
+
+```js
+let start = null;
+sketchcraft.tool("fence", {
+  start(ctx) { ctx.hint("Click where the fence starts."); },
+  move(ctx, at) { if (start) ctx.preview([[start, at.point]]); },
+  async click(ctx, at) {
+    if (!start) { start = at.point; ctx.anchor(start); return ctx.hint("Click where it ends."); }
+    // ... build with ctx.run, then carry on from here
+    start = at.point;
+    ctx.anchor(start);
+  },
+  stop(ctx) {},
+});
+```
+
+`at` is `{ point: [x, y, z], snap, face, normal, shift, alt }`: `snap` says what
+it locked to (`endpoint`, `midpoint`, `center`, `origin`, `on-edge`, `face`,
+`ground`, `axis`…) and `face` is the id of the face under the cursor. A tool's
+`ctx` also has:
+
+| | |
+| --- | --- |
+| `ctx.preview(lines)` | lines to draw: `[[from, to], ...]`, in meters; `[]` clears them |
+| `ctx.anchor(point)` | where the rubber band and the arrow-key axis locks start (`null`: none) |
+| `ctx.hint(text)` | the hint in the corner while the tool runs |
+| `ctx.finish()` | leave the tool (Esc or picking another tool does too) |
+
+Each move or click gets ten seconds; moves that arrive while the last one is
+still busy are skipped, so keep `move` quick. The built-in
+[Framing](../core/plugins/framing/main.js) plugin (Stud wall) is a full example.
 
 `ctx.run` takes the same commands as the CLI and the MCP server: draw, push/pull,
 move, paint, group, place components and more (see the README's command
@@ -89,7 +149,7 @@ Each run gets a fresh, sandboxed worker:
 - no access to the page, the network (`fetch` and friends are gone) or your files;
 - commands that read or write files (`save`, `open`, `import_*`, `export_*`,
   anything with a `path` or `out`, and the like) are refused;
-- a run that takes over a minute is stopped.
+- a run that takes over a minute is stopped (a tool: ten seconds per click or move).
 
 So a plugin can change your model (and you can undo that), but it can't send
 anything anywhere or touch other files.

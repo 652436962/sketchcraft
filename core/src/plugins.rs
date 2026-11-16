@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 const BUILTIN: &[(&str, &str, &str)] = &[
     ("cutlist", include_str!("../plugins/cutlist/plugin.json"), include_str!("../plugins/cutlist/main.js")),
     ("shelves", include_str!("../plugins/shelves/plugin.json"), include_str!("../plugins/shelves/main.js")),
+    ("framing", include_str!("../plugins/framing/plugin.json"), include_str!("../plugins/framing/main.js")),
 ];
 
 /// Where people put their own plugins.

@@ -13,6 +13,8 @@ export interface PluginCommand {
   hint?: string;
   /** its icon (a data URL), for the tool bar */
   icon?: string | null;
+  /** an interactive tool (sketchcraft.tool), not a one-shot command */
+  tool?: boolean;
 }
 
 export interface Plugin {
@@ -86,11 +88,15 @@ for (const k of ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importS
   try { Object.defineProperty(self, k, { value: undefined, configurable: false }); } catch {}
 }
 const __commands = Object.create(null);
+const __tools = Object.create(null);
+let __tool = null; // the tool in use: { handlers, ctx }
 const __waiting = new Map();
 let __rid = 0;
 const sketchcraft = Object.freeze({
   /** Add a command: fn(ctx) runs when it's picked. */
   command(id, fn) { __commands[String(id)] = fn; },
+  /** Add a tool: { start(ctx), move(ctx, at), click(ctx, at), stop(ctx) }, all optional. */
+  tool(id, handlers) { __tools[String(id)] = handlers || {}; },
 });
 self.onmessage = async (e) => {
   const m = e.data || {};
@@ -100,6 +106,7 @@ self.onmessage = async (e) => {
     if (w) w(m.reply);
     return;
   }
+  if (m.type === "tool-start" || m.type === "tool-event") return __toolMessage(m);
   if (m.type !== "invoke") return;
   const fn = __commands[m.id];
   if (typeof fn !== "function") return postMessage({ type: "error", error: "this plugin has no command " + JSON.stringify(m.id) });
@@ -114,6 +121,40 @@ self.onmessage = async (e) => {
   try { await fn(ctx); postMessage({ type: "done" }); }
   catch (err) { postMessage({ type: "error", error: String((err && err.message) || err) }); }
 };
+function __toolCtx(m) {
+  return Object.freeze({
+    selection: m.selection,
+    units: m.units,
+    run: (cmd) => new Promise((res) => { const rid = ++__rid; __waiting.set(rid, res); postMessage({ type: "exec", rid, cmd: JSON.parse(JSON.stringify(cmd)) }); }),
+    ask: (form) => new Promise((res) => { const rid = ++__rid; __waiting.set(rid, res); postMessage({ type: "ask", rid, form: JSON.parse(JSON.stringify(form)) }); }),
+    show: (r) => postMessage({ type: "show", result: JSON.parse(JSON.stringify(r)) }),
+    toast: (t) => postMessage({ type: "toast", text: String(t) }),
+    /** lines to draw while the tool runs: [[from, to], ...] (meters) */
+    preview: (lines) => postMessage({ type: "preview", lines: JSON.parse(JSON.stringify(lines || [])) }),
+    /** the hint in the corner while the tool runs */
+    hint: (text) => postMessage({ type: "hint", text: String(text) }),
+    /** a point the cursor's axis locks and rubber band start from (null: none) */
+    anchor: (p) => postMessage({ type: "anchor", point: p ? JSON.parse(JSON.stringify(p)) : null }),
+    /** leave the tool */
+    finish: () => postMessage({ type: "finish" }),
+  });
+}
+async function __toolMessage(m) {
+  try {
+    if (m.type === "tool-start") {
+      const h = __tools[m.id];
+      if (!h) return postMessage({ type: "error", error: "this plugin has no tool " + JSON.stringify(m.id) });
+      __tool = { h, ctx: __toolCtx(m) };
+      if (h.start) await h.start(__tool.ctx);
+    } else if (__tool) {
+      const f = __tool.h[m.kind];
+      if (f) await f(__tool.ctx, m.at);
+    }
+    postMessage({ type: "handled", seq: m.seq });
+  } catch (err) {
+    postMessage({ type: "error", error: String((err && err.message) || err) });
+  }
+}
 `;
 
 const LIMIT_MS = 60_000;
@@ -445,4 +486,128 @@ export function PluginFormDialog({ form, plugin, units, done }: { form: PluginFo
       </form>
     </div>
   );
+}
+
+/** Where the cursor is, for a plugin tool: the snapped point and what it's on. */
+export interface ToolPoint {
+  point: [number, number, number];
+  /** what it snapped to: endpoint, midpoint, center, origin, on-edge, face, ground, axis… */
+  snap: string;
+  /** the face under the cursor (its id), if any */
+  face: number | null;
+  normal: [number, number, number];
+  shift: boolean;
+  alt: boolean;
+}
+
+export interface ToolSession {
+  move: (at: ToolPoint) => void;
+  click: (at: ToolPoint) => void;
+  stop: () => void;
+}
+
+const EVENT_LIMIT_MS = 10_000;
+
+/** Start a plugin's tool: a worker that stays while the tool is in use and
+ * gets every move and click. Moves are dropped while the last one is busy. */
+export function startPluginTool(
+  plugin: Plugin,
+  toolId: string,
+  env: {
+    selection: { faces: number[]; edges: number[]; groups: number[]; instances: number[] };
+    units: string;
+    run: (cmd: Record<string, unknown>) => Promise<Reply>;
+    show: (r: PluginResult, plugin: Plugin) => void;
+    toast: (text: string, bad?: boolean) => void;
+    ask: (form: PluginForm, plugin: Plugin) => Promise<Record<string, unknown> | null>;
+    preview: (lines: [number, number, number][][]) => void;
+    hint: (text: string) => void;
+    anchor: (p: [number, number, number] | null) => void;
+    /** the tool ended (finished, failed or stopped) */
+    ended: () => void;
+  },
+): ToolSession {
+  const url = URL.createObjectURL(new Blob([PRELUDE, "\n;\n", plugin.code], { type: "text/javascript" }));
+  const worker = new Worker(url);
+  let seq = 0;
+  let busy = false;
+  let pendingMove: ToolPoint | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let over = false;
+  const end = () => {
+    if (over) return;
+    over = true;
+    clearTimeout(timer);
+    worker.terminate();
+    URL.revokeObjectURL(url);
+    env.preview([]);
+    env.anchor(null);
+    env.ended();
+  };
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      env.toast(`${plugin.name} took over 10 seconds on one step, so its tool was stopped.`, true);
+      end();
+    }, EVENT_LIMIT_MS);
+  };
+  const send = (m: Record<string, unknown>) => {
+    if (over) return;
+    busy = true;
+    arm();
+    worker.postMessage({ ...m, seq: ++seq });
+  };
+  worker.onerror = (e) => {
+    env.toast(`${plugin.name}: ${e.message || "it hit an error"}`, true);
+    end();
+  };
+  worker.onmessage = async (e) => {
+    const m = e.data ?? {};
+    if (m.type === "exec") {
+      const why = allowed(m.cmd);
+      const reply: Reply = why ? { ok: false, error: why } : await env.run(m.cmd);
+      worker.postMessage({ type: "reply", rid: m.rid, reply });
+    } else if (m.type === "ask") {
+      clearTimeout(timer);
+      const answers = await env.ask(m.form as PluginForm, plugin);
+      arm();
+      worker.postMessage({ type: "reply", rid: m.rid, reply: answers });
+    } else if (m.type === "show") env.show(m.result as PluginResult, plugin);
+    else if (m.type === "toast") env.toast(String(m.text));
+    else if (m.type === "preview") env.preview(Array.isArray(m.lines) ? m.lines.slice(0, 5000) : []);
+    else if (m.type === "hint") env.hint(String(m.text).slice(0, 300));
+    else if (m.type === "anchor") env.anchor(Array.isArray(m.point) && m.point.length === 3 ? m.point : null);
+    else if (m.type === "finish") end();
+    else if (m.type === "error") {
+      env.toast(`${plugin.name}: ${m.error}`, true);
+      end();
+    } else if (m.type === "handled") {
+      busy = false;
+      clearTimeout(timer);
+      if (pendingMove) {
+        const at = pendingMove;
+        pendingMove = null;
+        send({ type: "tool-event", kind: "move", at });
+      }
+    }
+  };
+  send({ type: "tool-start", id: toolId, selection: env.selection, units: env.units });
+  return {
+    move: (at) => {
+      if (busy) pendingMove = at;
+      else send({ type: "tool-event", kind: "move", at });
+    },
+    click: (at) => {
+      // a click always goes through, after whatever's in flight
+      pendingMove = null;
+      const go = () => (busy ? setTimeout(go, 15) : send({ type: "tool-event", kind: "click", at }));
+      go();
+    },
+    stop: () => {
+      if (over) return;
+      // let the plugin tidy up, briefly
+      worker.postMessage({ type: "tool-event", kind: "stop", at: null, seq: ++seq });
+      setTimeout(end, 150);
+    },
+  };
 }

@@ -14,6 +14,11 @@ What changed in each SketchCraft release, newest first. The format follows
 - **Plugin forms.** `ctx.ask()` shows a form (lengths in the model's units,
   numbers, text, choices, checkboxes) and returns the answers; time spent
   filling it in doesn't count toward the one-minute limit.
+- **Plugin tools.** A plugin can add an interactive tool: it gets snapped
+  clicks and moves, draws previews, shows its hint, and keeps going until Esc.
+- **Framing** (a built-in example): the **Stud wall** tool. Click where a wall
+  starts and ends; plates and studs at your spacing (16" on center by default),
+  every board its own group, walls chaining corner to corner.
 - **Plugin buttons on the tool bar.** A plugin command with an icon gets a
   button, in its own group at the end of the bar; Cut list and Shelves have one.
 - **More help in the app.** Learn has three new lessons (move a single
