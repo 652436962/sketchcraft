@@ -3202,3 +3202,14 @@ input[type="color"]::-moz-color-swatch {
   margin: 0;
   line-height: 1.5;
 }
+
+/* the Skins button: the brush with its name, so it doesn't read as a pencil */
+.skin-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.skin-btn svg {
+  width: 15px;
+  height: 15px;
+}

@@ -35,6 +35,10 @@ What changed in each SketchCraft release, newest first. The format follows
   push.png…; **File names** lists them). They're saved in the .sketchskin
   file, so an icon set can be shared like any skin.
 
+### Changed
+- The Skins button at the top right says **Skins** (the brush alone looked
+  like a pencil).
+
 ## [0.3.4] - 2026-11-15
 
 ### Changed

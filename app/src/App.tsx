@@ -904,8 +904,9 @@ export default function App() {
           <button className="btn small ghost learn-btn" title="Lessons and demos: learn SketchCraft by doing" onClick={() => setShowLearn(true)}>
             Learn{lessonsDone().length === 0 && <i className="learn-dot" aria-label="(new)" />}
           </button>
-          <button className="icon-btn skin-btn" title="Skins: change how SketchCraft looks" onClick={() => setShowSkins(true)} aria-label="Skins">
+          <button className="btn small ghost skin-btn" title="Skins: change how SketchCraft looks" onClick={() => setShowSkins(true)}>
             <Icons.paint />
+            Skins
           </button>
           <button className="icon-btn" title="Undo (⌘Z)" onClick={() => run({ cmd: "undo" })}>
             <Icons.undo />
