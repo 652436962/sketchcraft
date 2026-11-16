@@ -149,6 +149,17 @@ pub enum Command {
     },
     /// The plugins: built in, and those in ~/Documents/SketchCraft/Plugins.
     Plugins,
+    /// Turn a plugin on or off (remembered in the Plugins folder).
+    PluginEnable { id: String, on: bool },
+    /// Install a plugin from a .zip: a file `path`, or its bytes as base64 `data`.
+    InstallPlugin {
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default)]
+        data: Option<String>,
+    },
+    /// Remove a plugin you installed (moved aside to Plugins/.removed, not deleted).
+    RemovePlugin { id: String },
     /// Write text to a file (the app's Save CSV; plugins can't reach it).
     SaveText { path: String, text: String },
     /// Make faces or a group into a reusable component (placed where it was).
@@ -1120,6 +1131,9 @@ impl Command {
                 | Command::Info
                 | Command::Parts { .. }
                 | Command::Plugins
+                | Command::PluginEnable { .. }
+                | Command::InstallPlugin { .. }
+                | Command::RemovePlugin { .. }
                 | Command::SaveText { .. }
                 | Command::Components
                 | Command::Pick { .. }
@@ -1750,6 +1764,19 @@ impl Engine {
             }
             Command::Parts { ids } => json!({"parts": crate::plugins::parts(m, &ids), "units": m.units}),
             Command::Plugins => crate::plugins::list(),
+            Command::PluginEnable { id, on } => crate::plugins::enable(&id, on)?,
+            Command::InstallPlugin { path, data } => {
+                let bytes = match (path, data) {
+                    (Some(p), _) => std::fs::read(&p)?,
+                    (None, Some(d)) => {
+                        use base64::Engine as _;
+                        base64::engine::general_purpose::STANDARD.decode(d.trim().trim_start_matches("data:application/zip;base64,"))?
+                    }
+                    _ => bail!("install_plugin needs a path or data"),
+                };
+                crate::plugins::install(&bytes)?
+            }
+            Command::RemovePlugin { id } => crate::plugins::remove(&id)?,
             Command::SaveText { path, text } => {
                 std::fs::write(&path, text)?;
                 json!({"path": path})

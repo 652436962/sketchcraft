@@ -8,8 +8,10 @@
 use crate::model::{Id, Model};
 use glam::DVec3;
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+use anyhow::{bail, Context, Result};
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 const BUILTIN: &[(&str, &str, &str)] = &[("cutlist", include_str!("../plugins/cutlist/plugin.json"), include_str!("../plugins/cutlist/main.js"))];
 
@@ -18,31 +20,192 @@ pub fn dir() -> PathBuf {
     crate::live::default_doc().parent().map(|p| p.join("Plugins")).unwrap_or_else(|| PathBuf::from("Plugins"))
 }
 
-fn entry(id: &str, manifest: &str, code: String, builtin: bool) -> Option<Value> {
+fn entry(id: &str, manifest: &str, code: String, builtin: bool, folder: Option<&Path>) -> Option<Value> {
     let mut m: Value = serde_json::from_str(manifest).ok()?;
     let o = m.as_object_mut()?;
     o.insert("id".into(), json!(id));
     o.insert("code".into(), json!(code));
     o.insert("builtin".into(), json!(builtin));
+    o.insert("enabled".into(), json!(!disabled().contains(id)));
+    if let Some(f) = folder {
+        o.insert("folder".into(), json!(f));
+        // command icons: a small SVG or PNG beside main.js, sent as a data URL
+        if let Some(cmds) = o.get_mut("commands").and_then(|c| c.as_array_mut()) {
+            for c in cmds {
+                let Some(name) = c.get("icon").and_then(|i| i.as_str()).map(str::to_string) else { continue };
+                c.as_object_mut()?.insert("icon".into(), icon_data(f, &name).map(Value::from).unwrap_or(Value::Null));
+            }
+        }
+    }
     Some(m)
+}
+
+/// A plugin's icon file as a data URL (SVG or PNG, up to 256 KB, inside its folder).
+fn icon_data(folder: &Path, name: &str) -> Option<String> {
+    use base64::Engine as _;
+    if name.contains("..") || name.contains('/') || name.contains('\\') {
+        return None;
+    }
+    let kind = match Path::new(name).extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        _ => return None,
+    };
+    let bytes = std::fs::read(folder.join(name)).ok().filter(|b| b.len() <= 256 * 1024)?;
+    Some(format!("data:{kind};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+/// Plugins turned off (by id), kept in the Plugins folder.
+fn disabled() -> BTreeSet<String> {
+    std::fs::read_to_string(dir().join("disabled.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+pub fn enable(id: &str, on: bool) -> Result<Value> {
+    let mut d = disabled();
+    if on {
+        d.remove(id);
+    } else {
+        d.insert(id.to_string());
+    }
+    std::fs::create_dir_all(dir())?;
+    std::fs::write(dir().join("disabled.json"), serde_json::to_string_pretty(&d)?)?;
+    Ok(json!({"id": id, "enabled": on}))
+}
+
+/// A folder name for a plugin: lowercase letters, digits and dashes.
+fn slug(s: &str) -> String {
+    let mut out = String::new();
+    for ch in s.trim().to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+        } else if !out.ends_with('-') && !out.is_empty() {
+            out.push('-');
+        }
+    }
+    out.trim_end_matches('-').chars().take(40).collect()
+}
+
+const MAX_ZIP: usize = 8 << 20;
+const MAX_FILES: usize = 64;
+const MAX_UNPACKED: u64 = 16 << 20;
+
+/// Install a plugin from a .zip's bytes: plugin.json and main.js at its top,
+/// or in one folder inside. Only plain files with safe names are unpacked
+/// (no paths out of the folder, no hidden files, size limits). Replaces an
+/// older copy of the same plugin, which is kept in .removed.
+pub fn install(bytes: &[u8]) -> Result<Value> {
+    if bytes.len() > MAX_ZIP {
+        bail!("that plugin is over 8 MB");
+    }
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).context("that isn't a .zip file")?;
+    if z.len() > MAX_FILES {
+        bail!("that plugin has over {MAX_FILES} files");
+    }
+    // where plugin.json is: the top, or one folder down
+    let mut names = Vec::new();
+    for i in 0..z.len() {
+        names.push(z.by_index(i)?.name()?.to_string());
+    }
+    let manifest_at = names.iter().find(|n| n.trim_start_matches("./") == "plugin.json" || (n.ends_with("/plugin.json") && n.matches('/').count() == 1)).cloned().ok_or_else(|| anyhow::anyhow!("no plugin.json in it"))?;
+    let prefix = manifest_at.trim_start_matches("./").trim_end_matches("plugin.json").to_string();
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut total = 0u64;
+    for i in 0..z.len() {
+        let mut f = z.by_index(i)?;
+        if f.is_dir() {
+            continue;
+        }
+        let name = f.name()?.trim_start_matches("./").to_string();
+        let Some(rel) = name.strip_prefix(&prefix) else { continue };
+        // safe names only: no parent dirs, no absolute paths, no hidden files
+        if rel.is_empty() || rel.split('/').any(|p| p.is_empty() || p == ".." || p.starts_with('.')) || rel.contains('\\') || rel.contains(':') {
+            bail!("unsafe file name in the plugin: {name}");
+        }
+        let ext = Path::new(rel).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        if !matches!(ext.as_str(), "json" | "js" | "svg" | "png" | "md" | "txt") {
+            continue; // other files aren't needed
+        }
+        total += f.size();
+        if total > MAX_UNPACKED {
+            bail!("that plugin unpacks to over 16 MB");
+        }
+        let mut b = Vec::new();
+        f.by_ref().take(MAX_UNPACKED).read_to_end(&mut b)?;
+        files.push((rel.to_string(), b));
+    }
+    let manifest = files.iter().find(|(n, _)| n == "plugin.json").map(|(_, b)| b.clone()).ok_or_else(|| anyhow::anyhow!("no plugin.json"))?;
+    if !files.iter().any(|(n, _)| n == "main.js") {
+        bail!("no main.js next to plugin.json");
+    }
+    let m: Value = serde_json::from_slice(&manifest).context("plugin.json isn't valid JSON")?;
+    let name = m.get("name").and_then(|n| n.as_str()).filter(|n| !n.trim().is_empty()).ok_or_else(|| anyhow::anyhow!("plugin.json needs a name"))?;
+    if !m.get("commands").is_some_and(|c| c.is_array()) {
+        bail!("plugin.json needs a commands list");
+    }
+    let id = slug(name);
+    if id.is_empty() || BUILTIN.iter().any(|(b, ..)| *b == id) {
+        bail!("pick another name for this plugin");
+    }
+    let root = dir();
+    std::fs::create_dir_all(&root)?;
+    let target = root.join(&id);
+    let replaced = target.exists();
+    if replaced {
+        set_aside(&target, &id)?;
+    }
+    for (rel, b) in &files {
+        let p = target.join(rel);
+        if let Some(d) = p.parent() {
+            std::fs::create_dir_all(d)?;
+        }
+        std::fs::write(p, b)?;
+    }
+    Ok(json!({"id": id, "name": name, "files": files.len(), "replaced": replaced}))
+}
+
+fn set_aside(folder: &Path, id: &str) -> Result<PathBuf> {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    // a fresh name, even twice in one second
+    let mut away = dir().join(".removed").join(format!("{id}-{stamp}"));
+    let mut n = 1;
+    while away.exists() {
+        n += 1;
+        away = dir().join(".removed").join(format!("{id}-{stamp}-{n}"));
+    }
+    std::fs::create_dir_all(away.parent().unwrap())?;
+    std::fs::rename(folder, &away)?;
+    Ok(away)
+}
+
+/// Move one of your plugins aside (to Plugins/.removed), so it can be put back.
+pub fn remove(id: &str) -> Result<Value> {
+    if id.is_empty() || id.contains('/') || id.contains('\\') || id.starts_with('.') || BUILTIN.iter().any(|(b, ..)| *b == id) {
+        bail!("can't remove {id:?}");
+    }
+    let folder = dir().join(id);
+    if !folder.is_dir() {
+        bail!("no plugin {id}");
+    }
+    let away = set_aside(&folder, id)?;
+    Ok(json!({"id": id, "moved_to": away}))
 }
 
 /// Every plugin: manifest fields, its code, and whether it's built in. A
 /// folder that can't be read is listed in `problems` instead.
 pub fn list() -> Value {
-    let mut out: Vec<Value> = BUILTIN.iter().filter_map(|(id, m, c)| entry(id, m, c.to_string(), true)).collect();
+    let mut out: Vec<Value> = BUILTIN.iter().filter_map(|(id, m, c)| entry(id, m, c.to_string(), true, None)).collect();
     let mut problems = Vec::new();
     let d = dir();
     std::fs::create_dir_all(&d).ok(); // so "Open plugins folder" has somewhere to go
     if let Ok(rd) = std::fs::read_dir(&d) {
-        let mut dirs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+        let mut dirs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir() && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))).collect();
         dirs.sort();
         for p in dirs {
             let id = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             let manifest = std::fs::read_to_string(p.join("plugin.json"));
             let code = std::fs::read_to_string(p.join("main.js"));
             match (manifest, code) {
-                (Ok(m), Ok(c)) if c.len() <= 1 << 20 => match entry(&id, &m, c, false) {
+                (Ok(m), Ok(c)) if c.len() <= 1 << 20 => match entry(&id, &m, c, false, Some(&p)) {
                     Some(v) => out.push(v),
                     None => problems.push(json!({"id": id, "error": "plugin.json isn't valid JSON"})),
                 },
