@@ -512,17 +512,50 @@ fn bulged(pts: &[(DVec3, f64)], closed: bool, tol: f64) -> Vec<DVec3> {
 }
 
 /// Block references can nest and multiply (a small file can ask for billions
-/// of shapes), so the whole expansion has a budget: shapes drawn, and entities
-/// visited. Past it, the rest is skipped and counted.
-const MAX_SHAPES: usize = 2_000_000;
-const MAX_VISITS: usize = 20_000_000;
+/// of shapes), so the whole expansion has a budget: shapes drawn, entities
+/// visited and seconds spent. Past any of them the import is refused whole
+/// (and the expansion stops at once), because the model builder is far slower
+/// than the expansion and a half-drawn plan is worse than an error.
+const MAX_SHAPES: usize = 100_000;
+const MAX_VISITS: usize = 1_000_000;
+const MAX_SECONDS: u64 = 10;
 
 thread_local! {
     static VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static OVER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static STARTED: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The whole import (expansion and model building) must finish in this long.
+const MAX_IMPORT_SECONDS: u64 = 15;
+
+thread_local! {
+    static IMPORT_STARTED: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// Has the import used up its time? Checked in the loops that grow with the drawing.
+fn late() -> bool {
+    IMPORT_STARTED.with(|s| s.get().is_some_and(|t| t.elapsed().as_secs() >= MAX_IMPORT_SECONDS))
+}
+
+/// Count one visit; true (and flagged) when the budget is spent.
+fn spent(n: usize, shapes_so_far: usize) -> bool {
+    let visits = VISITS.with(|v| {
+        v.set(v.get() + n);
+        v.get()
+    });
+    let late = STARTED.with(|s| s.get().is_some_and(|t| t.elapsed().as_secs() >= MAX_SECONDS));
+    if visits > MAX_VISITS || shapes_so_far > MAX_SHAPES || late {
+        OVER.with(|o| o.set(true));
+    }
+    OVER.with(|o| o.get())
 }
 
 /// The shapes one entity draws (in its own coordinates; INSERTs are expanded).
 fn shapes(e: &Ent, blocks: &HashMap<String, (DVec3, Vec<Ent>)>, t: DMat4, layer: &str, depth: usize, out: &mut Vec<(String, Shape)>, skipped: &mut usize) {
+    if spent(1, out.len()) {
+        return;
+    }
     // entities on layer 0 inside a block take the block reference's layer
     let lay = match e.layer().as_str() {
         "0" if depth > 0 => layer.to_string(),
@@ -602,7 +635,7 @@ fn shapes(e: &Ent, blocks: &HashMap<String, (DVec3, Vec<Ent>)>, t: DMat4, layer:
                 *skipped += 1;
                 return;
             };
-            if depth > 8 || out.len() >= MAX_SHAPES {
+            if depth > 8 {
                 *skipped += 1;
                 return;
             }
@@ -615,12 +648,7 @@ fn shapes(e: &Ent, blocks: &HashMap<String, (DVec3, Vec<Ent>)>, t: DMat4, layer:
             for r in 0..rows.min(100) {
                 for c in 0..cols.min(100) {
                     let place = o * DMat4::from_translation(at) * DMat4::from_rotation_z(rot) * DMat4::from_translation(DVec3::new(c as f64 * dx, r as f64 * dy, 0.0)) * DMat4::from_scale(s) * DMat4::from_translation(-*base);
-                    let visits = VISITS.with(|v| {
-                        v.set(v.get() + ents.len() + 1);
-                        v.get()
-                    });
-                    if visits > MAX_VISITS || out.len() >= MAX_SHAPES {
-                        *skipped += 1;
+                    if spent(ents.len() + 1, out.len()) {
                         return;
                     }
                     for be in ents {
@@ -829,8 +857,18 @@ pub fn import(m: &mut Model, text: &str, name: &str, units: Option<&str>, at: DV
     let mut shapes_out = vec![];
     let mut skipped = 0;
     VISITS.with(|v| v.set(0));
+    OVER.with(|o| o.set(false));
+    STARTED.with(|s| s.set(Some(std::time::Instant::now())));
+    IMPORT_STARTED.with(|s| s.set(Some(std::time::Instant::now())));
     for e in entities(&ents_raw) {
         shapes(&e, &blocks, t, "0", 0, &mut shapes_out, &mut skipped);
+        if OVER.with(|o| o.get()) {
+            break;
+        }
+    }
+    STARTED.with(|s| s.set(None));
+    if OVER.with(|o| o.replace(false)) {
+        bail!("that DXF draws more than {MAX_SHAPES} shapes once its block references are expanded (or took over {MAX_SECONDS} seconds to expand), so none of it was imported. Explode or simplify the repeated blocks and try again");
     }
     if shapes_out.is_empty() {
         bail!("nothing SketchCraft can draw in that DXF ({skipped} text, hatch or other items skipped)");
@@ -952,6 +990,11 @@ pub fn import(m: &mut Model, text: &str, name: &str, units: Option<&str>, at: DV
     let mut edges: usize = bulks.iter().map(|b| b.edges.len()).sum();
     edges += cut_across_layers(m, &mut bulks);
     m.active_group = m.groups.get(&outer).and_then(|g| g.parent);
+    if late() {
+        IMPORT_STARTED.with(|s| s.set(None));
+        bail!("that DXF took more than {MAX_IMPORT_SECONDS} seconds to build, so none of it was imported. Try a smaller part of the drawing");
+    }
+    IMPORT_STARTED.with(|s| s.set(None));
     Ok(DxfResult { group: outer, layers, faces, edges, units: unit.into(), skipped, labels, dimensions, focus })
 }
 
@@ -1372,11 +1415,17 @@ impl Bulk {
         }
         // split points per segment, as parameters along it
         let mut cuts: Vec<Vec<f64>> = vec![vec![]; n];
-        let mut seen = std::collections::HashSet::new();
-        for list in grid.values() {
+        let bbox: Vec<(DVec2, DVec2)> = seg.iter().map(|(a, b)| (a.min(*b) - DVec2::splat(TOL), a.max(*b) + DVec2::splat(TOL))).collect();
+        for (&cellkey, list) in grid.iter() {
+            if late() {
+                break;
+            }
             for (k, &i) in list.iter().enumerate() {
                 for &j in &list[k + 1..] {
-                    if !seen.insert((i.min(j), i.max(j))) {
+                    // boxes apart: they can't meet; and a pair is looked at once, in the
+                    // cell holding the corner of the boxes' overlap
+                    let (bi, bj) = (&bbox[i], &bbox[j]);
+                    if bi.1.x < bj.0.x || bj.1.x < bi.0.x || bi.1.y < bj.0.y || bj.1.y < bi.0.y || at(bi.0.max(bj.0)) != cellkey {
                         continue;
                     }
                     let ((p, p2), (q, q2)) = (seg[i], seg[j]);
@@ -1579,14 +1628,30 @@ fn faces_in_plan(m: &mut Model, es: &[(Id, Id)], group: Id) -> usize {
     }
     // each island's outline (a clockwise cycle) is a hole in the smallest face around it
     let mut holes: HashMap<usize, Vec<Vec<Id>>> = HashMap::new();
+    // each face's outline and bounding box once, so most candidates are ruled out by the box
+    let polys: Vec<(Vec<glam::DVec2>, glam::DVec2, glam::DVec2)> = pos
+        .iter()
+        .map(|(c, _)| {
+            let pts: Vec<glam::DVec2> = c.iter().map(|v| xy(*v)).collect();
+            let lo = pts.iter().fold(glam::DVec2::splat(f64::MAX), |a, p| a.min(*p));
+            let hi = pts.iter().fold(glam::DVec2::splat(f64::MIN), |a, p| a.max(*p));
+            (pts, lo, hi)
+        })
+        .collect();
     for h in neg {
+        if late() {
+            break;
+        }
         let p = xy(h[0]);
         // a point just inside the island's outline isn't needed: any outline point is
         // outside every face of its own island, so only faces around it contain it
         let around = pos
             .iter()
             .enumerate()
-            .filter(|(_, (c, _))| !c.contains(&h[0]) && crate::geom::inside(p, &c.iter().map(|v| xy(*v)).collect::<Vec<_>>()))
+            .filter(|(i, (c, _))| {
+                let (pts, lo, hi) = &polys[*i];
+                p.cmpge(*lo).all() && p.cmple(*hi).all() && !c.contains(&h[0]) && crate::geom::inside(p, pts)
+            })
             .min_by(|a, b| a.1 .1.partial_cmp(&b.1 .1).unwrap());
         if let Some((i, _)) = around {
             holes.entry(i).or_default().push(h);

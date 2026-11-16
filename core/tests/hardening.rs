@@ -315,8 +315,35 @@ fn a_dxf_block_bomb_is_cut_off() {
     let t = std::time::Instant::now();
     let r = e.exec_json(&json!({"cmd": "import_dxf", "text": dxf}).to_string());
     assert!(t.elapsed().as_secs() < 20, "took {:?}", t.elapsed());
-    // either imported what fit under the budget, or refused; never a hang
-    assert!(r["ok"] == true || r["ok"] == false);
+    // refused whole, at once; never a hang
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(e.model.faces.is_empty() && e.model.edges.is_empty(), "nothing was imported");
+}
+
+/// R2-MBK-004 / R2-BRN-005: a small file that multiplies a big block through MINSERT rows and columns
+/// (or three nested 100 x 100 arrays of one line) is refused quickly.
+#[test]
+fn a_dxf_with_minsert_arrays_is_refused_inside_the_expansion() {
+    let mut dxf = String::from("0\nSECTION\n2\nBLOCKS\n0\nBLOCK\n2\nB\n10\n0\n20\n0\n30\n0\n");
+    for i in 0..3000 {
+        dxf += &format!("0\nLWPOLYLINE\n8\nW\n90\n4\n70\n1\n10\n{i}\n20\n0\n10\n{}\n20\n0\n10\n{}\n20\n1\n10\n{i}\n20\n1\n", i + 1, i + 1);
+    }
+    dxf += "0\nENDBLK\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nINSERT\n2\nB\n10\n0\n20\n0\n30\n0\n70\n100\n71\n100\n44\n10\n45\n10\n0\nENDSEC\n0\nEOF\n";
+    let mut e = Engine::new();
+    let t = std::time::Instant::now();
+    let r = e.exec_json(&json!({"cmd": "import_dxf", "text": dxf}).to_string());
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(t.elapsed().as_secs() < 10, "took {:?}", t.elapsed());
+    // nested arrays of one line
+    let mut d2 = String::from("0\nSECTION\n2\nBLOCKS\n");
+    d2 += "0\nBLOCK\n2\nA\n10\n0\n20\n0\n30\n0\n0\nLINE\n10\n0\n20\n0\n30\n0\n11\n1\n21\n1\n31\n0\n0\nENDBLK\n";
+    d2 += "0\nBLOCK\n2\nB\n10\n0\n20\n0\n30\n0\n0\nINSERT\n2\nA\n10\n0\n20\n0\n30\n0\n70\n100\n71\n100\n44\n2\n45\n2\n0\nENDBLK\n";
+    d2 += "0\nBLOCK\n2\nC\n10\n0\n20\n0\n30\n0\n0\nINSERT\n2\nB\n10\n0\n20\n0\n30\n0\n70\n100\n71\n100\n44\n300\n45\n300\n0\nENDBLK\n";
+    d2 += "0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nINSERT\n2\nC\n10\n0\n20\n0\n30\n0\n70\n100\n71\n100\n44\n30000\n45\n30000\n0\nENDSEC\n0\nEOF\n";
+    let t = std::time::Instant::now();
+    let r = e.exec_json(&json!({"cmd": "import_dxf", "text": d2}).to_string());
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(t.elapsed().as_secs() < 10);
 }
 
 #[test]
