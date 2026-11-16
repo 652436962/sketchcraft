@@ -63,6 +63,33 @@ self.onmessage = (e) => {
   return r as { js?: string; error?: string };
 }
 
+// compiled JavaScript is kept between sessions (by a hash of the Ruby), so
+// the 2 MB compiler only loads the first time a script is seen
+const OPAL = "opal-1.7.3";
+function hash(s: string) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(36) + s.length.toString(36);
+}
+async function cachedCompile(files: Record<string, string>): Promise<{ js?: string; error?: string }> {
+  const key = `sketchcraft.rubyjs.${OPAL}.${hash(JSON.stringify(files))}`;
+  try {
+    const hit = localStorage.getItem(key);
+    if (hit) return { js: hit };
+  } catch {
+    /* no storage: compile every time */
+  }
+  const r = await compile(files);
+  if (r.js) {
+    try {
+      localStorage.setItem(key, r.js);
+    } catch {
+      /* full: fine, it compiles again next time */
+    }
+  }
+  return r;
+}
+
 const compiled = new Map<string, Promise<{ js?: string; error?: string }>>();
 let apiJs: Promise<{ js?: string; error?: string }> | null = null;
 
@@ -74,7 +101,7 @@ function compiledPlugin(p: Plugin): Promise<{ js?: string; error?: string }> {
     .join("|")}`;
   if (!compiled.has(key)) {
     const named = Object.fromEntries(Object.entries(files).map(([k, v]) => [k.replace(/\.rb$/i, ""), v]));
-    compiled.set(key, compile(named));
+    compiled.set(key, cachedCompile(named));
   }
   return compiled.get(key)!;
 }
@@ -103,7 +130,7 @@ export async function runRuby(
   opts: { item?: number; answers?: string[][]; selection?: { id: number; name: string; kind: string }[] },
 ): Promise<RubyRun> {
   const empty = { journal: [], menu: [], out: "", toasts: [] };
-  apiJs ??= compile({ sketchup_api: SKETCHUP_RB });
+  apiJs ??= cachedCompile({ sketchup_api: SKETCHUP_RB });
   const [rt, api, mine] = await Promise.all([opal(), apiJs, compiledPlugin(p)]);
   if (api.error) return { ...empty, error: `SketchCraft's Ruby layer: ${api.error}` };
   if (mine.error) return { ...empty, error: mine.error };
