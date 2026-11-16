@@ -32,12 +32,19 @@ fn entry(id: &str, manifest: &str, code: String, builtin: bool, folder: Option<&
     o.insert("enabled".into(), json!(!disabled().contains(id)));
     if let Some(f) = folder {
         o.insert("folder".into(), json!(f));
-        // command icons: a small SVG or PNG beside main.js, sent as a data URL
-        if let Some(cmds) = o.get_mut("commands").and_then(|c| c.as_array_mut()) {
-            for c in cmds {
-                let Some(name) = c.get("icon").and_then(|i| i.as_str()).map(str::to_string) else { continue };
-                c.as_object_mut()?.insert("icon".into(), icon_data(f, &name).map(Value::from).unwrap_or(Value::Null));
-            }
+    }
+    // command icons, sent as data URLs: inline SVG ("<svg ...>"), or a small
+    // SVG or PNG file beside main.js
+    if let Some(cmds) = o.get_mut("commands").and_then(|c| c.as_array_mut()) {
+        for c in cmds {
+            let Some(icon) = c.get("icon").and_then(|i| i.as_str()).map(str::to_string) else { continue };
+            let data = if icon.trim_start().starts_with("<svg") && icon.len() <= 64 * 1024 {
+                use base64::Engine as _;
+                Some(format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(icon.trim())))
+            } else {
+                folder.and_then(|f| icon_data(f, &icon))
+            };
+            c.as_object_mut()?.insert("icon".into(), data.map(Value::from).unwrap_or(Value::Null));
         }
     }
     Some(m)

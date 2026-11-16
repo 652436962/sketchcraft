@@ -26,6 +26,19 @@ the next time you open the Plugins menu, and in Shift+S.
 }
 ```
 
+### A tool bar button
+
+Give a command an `"icon"` and it gets a button on the tool bar (in its own
+group at the end, kept visible when the bar is short of room):
+
+```json
+{ "id": "board-feet", "label": "Board feet…", "icon": "board-feet.svg" }
+```
+
+The icon is an SVG or PNG file beside `main.js` (up to 256 KB), or SVG written
+inline (`"icon": "<svg xmlns=…>…</svg>"`). Draw it on a 24 × 24 grid; a
+mid-grey stroke reads on light and dark themes.
+
 ## main.js
 
 ```js

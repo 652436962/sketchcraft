@@ -8,20 +8,32 @@ import { skinIcon } from "./skins";
 
 type ToolId = keyof typeof TOOL_INFO;
 
-const info = (id: string) => TOOL_INFO[id as ToolId];
+/** Buttons plugins add (id "plugin:<plugin>:<command>"): set by the Toolbar each render. */
+export interface ExtraButton {
+  id: string;
+  name: string;
+  icon: string;
+  run: () => void;
+}
+let EXTRA = new Map<string, ExtraButton>();
+
+const info = (id: string) => (EXTRA.has(id) ? { name: `${EXTRA.get(id)!.name} (plugin)`, key: "" } : TOOL_INFO[id as ToolId]);
 /** The tool's icon: the worn skin's own image if it has one, else the built-in. */
 const icon = (id: string) => {
+  const ex = EXTRA.get(id);
+  if (ex) return <img className="skin-icon plugin-icon" src={ex.icon} alt="" draggable={false} />;
   const img = skinIcon(id);
   return img ? <img className="skin-icon" src={img} alt="" draggable={false} /> : Icons[id as keyof typeof Icons]?.();
 };
 
 export function Toolbar({
-  groups,
+  groups: toolGroups,
   tool,
-  choose,
+  choose: chooseTool,
   vertical,
   onCustomize,
   children,
+  extra = [],
 }: {
   groups: string[][];
   tool: string;
@@ -31,7 +43,13 @@ export function Toolbar({
   onCustomize: () => void;
   /** after the tools (the paint color chip) */
   children?: ReactNode;
+  /** plugin buttons, in their own group at the end */
+  extra?: ExtraButton[];
 }) {
+  EXTRA = new Map(extra.map((b) => [b.id, b]));
+  const groups = useMemo(() => (extra.length ? [...toolGroups, extra.map((b) => b.id)] : toolGroups), [toolGroups, extra]);
+  // a plugin button runs its command; anything else picks the tool
+  const choose = (id: string) => (EXTRA.has(id) ? EXTRA.get(id)!.run() : chooseTool(id));
   const nav = useRef<HTMLElement>(null);
   const [room, setRoom] = useState(Infinity);
   const [open, setOpen] = useState(false);
@@ -64,9 +82,13 @@ export function Toolbar({
     const full = all.length * per + groups.length * groupPad;
     if (full <= left) return { shown: groups, hidden: [] as string[] };
     left -= moreW;
+    // plugin buttons are ones you chose to add: they stay, the built-in tools overflow
+    const pinned = extra.length ? groups[groups.length - 1] : null;
+    const rest = pinned ? groups.slice(0, -1) : groups;
+    if (pinned) left -= pinned.length * per + groupPad;
     const shown: string[][] = [];
     const hidden: string[] = [];
-    for (const g of groups) {
+    for (const g of rest) {
       const keep: string[] = [];
       for (const id of g) {
         const cost = per + (keep.length === 0 ? groupPad : 0);
@@ -77,8 +99,9 @@ export function Toolbar({
       }
       if (keep.length) shown.push(keep);
     }
+    if (pinned) shown.push(pinned);
     return { shown, hidden };
-  }, [groups, room]);
+  }, [groups, room, extra.length]);
 
   const activeHidden = hidden.includes(tool);
   return (

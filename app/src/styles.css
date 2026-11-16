@@ -3366,3 +3366,7 @@ input[type="color"]::-moz-color-swatch {
   color: var(--danger);
   margin: 8px 0 0;
 }
+/* plugin buttons on the tool bar: a dark theme lightens their grey strokes */
+[data-dark="1"] .tool .plugin-icon {
+  filter: brightness(1.8);
+}

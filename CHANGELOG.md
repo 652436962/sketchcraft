@@ -14,6 +14,8 @@ What changed in each SketchCraft release, newest first. The format follows
 - **Plugin forms.** `ctx.ask()` shows a form (lengths in the model's units,
   numbers, text, choices, checkboxes) and returns the answers; time spent
   filling it in doesn't count toward the one-minute limit.
+- **Plugin buttons on the tool bar.** A plugin command with an icon gets a
+  button, in its own group at the end of the bar; Cut list and Shelves have one.
 - **More help in the app.** Learn has three new lessons (move a single
   corner, plugins, making it look your way), every lesson can play its demo
   first, eleven demos to watch (recorded from the app in the Classic look), and

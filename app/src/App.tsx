@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { UpdateCard, checkForUpdatesNow } from "./updater";
 import { ask, AskHost } from "./ask";
 import { exec, inTauri, loadScene, sync, type Reply, type Scene, type Vec3 } from "./engine";
@@ -285,6 +285,12 @@ export default function App() {
   const reloadPlugins = () => loadPlugins().then(setPlugins, () => {});
   // plugins that are on
   const livePlugins = plugins.plugins.filter((p) => p.enabled !== false);
+  // their commands with icons sit on the tool bar
+  const pluginButtons = useMemo(
+    () => livePlugins.flatMap((pl) => pl.commands.filter((c) => c.icon).map((c) => ({ id: `plugin:${pl.id}:${c.id}`, name: c.label.replace(/…$/, ""), icon: c.icon!, run: () => void runPluginCommandRef.current(pl, c.id) }))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [plugins],
+  );
   useEffect(() => {
     loadPlugins().then(setPlugins, () => {});
   }, []);
@@ -632,6 +638,8 @@ export default function App() {
     return r.ok;
   };
 
+  // the tool bar's buttons call the latest runner (it reads the current selection)
+  const runPluginCommandRef = useRef<(p: Plugin, c: string) => Promise<void>>(async () => {});
   const runPluginCommand = (plugin: Plugin, commandId: string) =>
     runPlugin(plugin, commandId, {
       onDone: () => setPluginRuns((n) => n + 1),
@@ -652,6 +660,8 @@ export default function App() {
           }),
         ),
     });
+
+  runPluginCommandRef.current = runPluginCommand;
 
   const file = {
     new: async () => {
@@ -1032,7 +1042,7 @@ export default function App() {
         />
         {matching && <MatchPhoto src={matching.src} width={matching.width} height={matching.height} defaultName={`Photo ${(scene?.views.filter((v) => v.photo).length ?? 0) + 1}`} onDone={finishMatch} onCancel={() => setMatching(null)} />}
 
-        <Toolbar groups={ws.tools} tool={tool} choose={(id) => chooseTool(id as Tool)} vertical={ws.dock === "left"} onCustomize={() => setShowWs(true)}>
+        <Toolbar groups={ws.tools} tool={tool} choose={(id) => chooseTool(id as Tool)} vertical={ws.dock === "left"} onCustomize={() => setShowWs(true)} extra={pluginButtons}>
           <label className="chip" style={{ background: hex(color) }} title="Paint color">
             <input type="color" value={hex(color)} onChange={(e) => (setColor(unhex(e.target.value)), chooseTool("paint"))} />
           </label>
