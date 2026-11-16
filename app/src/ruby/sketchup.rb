@@ -34,7 +34,11 @@ module SC
   end
 
   # record one SketchCraft command, inside the right group
+  # (a script can't queue more than MAX_COMMANDS: each one is replayed, and a loop could add millions)
+  MAX_COMMANDS = 10_000
+
   def self.emit(cmd, ctx = :same)
+    raise "this script made more than #{MAX_COMMANDS} changes in one run, so it was stopped" if `globalThis.__journal.length` > MAX_COMMANDS
     if ctx != :same && ctx != @ctx
       `globalThis.__journal.push({cmd: "close"})` if @ctx
       `globalThis.__journal.push({cmd: "edit", id: #{"@" + ctx.ref}})` if ctx

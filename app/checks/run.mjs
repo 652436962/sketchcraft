@@ -49,13 +49,16 @@ try {
 
   // ---- the plugin's command check is a first filter only ----------------------------
   globalThis.window ??= {}; // engine.ts asks whether it is inside Tauri
-  const { allowed } = await load("/src/plugins.tsx");
+  const { allowed, csvCell } = await load("/src/plugins.tsx");
+  // spreadsheet formulas in a saved table are neutralized; ordinary numbers and text are not touched
+  check(csvCell("=HYPERLINK(\"http://x\")").startsWith(`"'=`) && csvCell("+1+2") === "'+1+2" && csvCell("@SUM(A1)") === "'@SUM(A1)" && csvCell("-1+cmd") === "'-1+cmd" && csvCell("\tx").startsWith("'\t"), "CSV cells that start like a formula get a quote");
+  check(csvCell(-5) === "-5" && csvCell("-5") === "-5" && csvCell("3.5") === "3.5" && csvCell("a,b") === '"a,b"' && csvCell("hello") === "hello", "numbers, plain text and commas are as before");
   check(allowed({ cmd: "rect" }) === null && allowed({}) !== null && allowed(null) !== null && allowed([]) !== null, "allowed() checks the shape of a command");
 
   // ---- the worker lockdown does what it says ----------------------------------------
   const { LOCKDOWN_SOURCE } = await load("/src/lockdown.ts");
-  const names = ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "indexedDB", "caches", "Worker", "SharedWorker", "BroadcastChannel", "WebTransport"];
-  const self = { navigator: { sendBeacon: () => true } };
+  const names = ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "indexedDB", "caches", "Worker", "SharedWorker", "BroadcastChannel", "WebTransport", "FontFace", "FontFaceSet", "Notification", "Request"];
+  const self = { navigator: { sendBeacon: () => true, storage: {}, serviceWorker: {} }, WebAssembly: { instantiateStreaming: () => 1, compileStreaming: () => 1 } };
   for (const n of names) self[n] = function () {};
   self.self = self;
   const ctx = vm.createContext(self);
@@ -76,7 +79,8 @@ try {
     if (ctx[n] !== undefined) reached.push(n);
   }
   check(reached.length === 0, `a plugin can't put them back${reached.length ? ` (${reached})` : ""}`);
-  check(ctx.navigator.sendBeacon === undefined, "sendBeacon is gone");
+  check(ctx.navigator.sendBeacon === undefined && ctx.navigator.storage === undefined && ctx.navigator.serviceWorker === undefined, "sendBeacon, navigator.storage and serviceWorker are gone");
+  check(ctx.WebAssembly.instantiateStreaming === undefined && ctx.WebAssembly.compileStreaming === undefined, "WebAssembly can't be streamed in from a URL");
 } finally {
   await server.close();
 }

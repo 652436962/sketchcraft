@@ -8,6 +8,7 @@ import { confirm } from "./ask";
 import { exec, type Reply } from "./engine";
 import { pickSave } from "./files";
 import { LOCKDOWN_SOURCE } from "./lockdown";
+import { pluginSandboxHolds } from "./cspcheck";
 import { cleanForm, cleanResult, type PluginField, type PluginForm, type PluginResult } from "./pluginclean";
 
 export { cleanForm, cleanResult };
@@ -162,6 +163,31 @@ async function __toolMessage(m) {
 `;
 
 const LIMIT_MS = 60_000;
+/** The most commands one plugin run may send (each is checked, run and counted by the engine). */
+export const MAX_COMMANDS = 10_000;
+
+/**
+ * Plugin commands run as ONE undo step: the engine's batch opens at the first command
+ * and closes when the run (or one tool click) is over, so a single Undo takes back
+ * everything the plugin did, however many commands that was.
+ */
+export function batcher() {
+  let open = false;
+  return {
+    async begin() {
+      if (!open) {
+        open = true;
+        await exec({ cmd: "begin_batch" });
+      }
+    },
+    async end() {
+      if (open) {
+        open = false;
+        await exec({ cmd: "end_batch" });
+      }
+    },
+  };
+}
 
 /** Run one plugin command. `run` sends engine commands (and refreshes the model). */
 export function runPlugin(
@@ -179,7 +205,11 @@ export function runPlugin(
     onDone?: () => void;
   },
 ): Promise<void> {
-  return new Promise((resolve) => {
+  return pluginSandboxHolds().then((safe) => new Promise<void>((resolve) => {
+    if (!safe.ok) {
+      env.toast(`Plugins are off: ${safe.why}.`, true);
+      return resolve();
+    }
     const url = URL.createObjectURL(new Blob([PRELUDE, "\n;\n", plugin.code], { type: "text/javascript" }));
     let worker: Worker;
     try {
@@ -189,11 +219,13 @@ export function runPlugin(
       env.toast(`${plugin.name} couldn't start: ${String(e)}`, true);
       return resolve();
     }
+    const batch = batcher();
+    let sent = 0;
     const finish = () => {
       clearTimeout(timer);
       worker.terminate();
       URL.revokeObjectURL(url);
-      resolve();
+      void batch.end().finally(() => resolve());
     };
     // a minute of running (time spent filling in its forms doesn't count)
     let timer = 0 as unknown as ReturnType<typeof setTimeout>;
@@ -211,9 +243,19 @@ export function runPlugin(
     worker.onmessage = async (e) => {
       const m = e.data ?? {};
       if (m.type === "exec") {
-        const why = allowed(m.cmd);
-        const reply: Reply = why ? { ok: false, error: why } : await env.run(m.cmd);
+        let why = allowed(m.cmd);
+        if (!why && ++sent > MAX_COMMANDS) why = `a plugin run may send at most ${MAX_COMMANDS} commands`;
+        let reply: Reply;
+        if (why) reply = { ok: false, error: why };
+        else {
+          await batch.begin();
+          reply = await env.run(m.cmd);
+        }
         worker.postMessage({ type: "reply", rid: m.rid, reply });
+        if (sent > MAX_COMMANDS) {
+          env.toast(`${plugin.name} sent more than ${MAX_COMMANDS} commands, so it was stopped.`, true);
+          finish();
+        }
       } else if (m.type === "ask") {
         clearTimeout(timer);
         const answers = await env.ask(cleanForm(m.form), plugin);
@@ -230,12 +272,19 @@ export function runPlugin(
       }
     };
     worker.postMessage({ type: "invoke", id: commandId, selection: env.selection, units: env.units });
-  });
+  }));
 }
 
-const csvCell = (v: string | number) => {
-  const s = String(v ?? "");
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+/**
+ * One CSV cell. A text cell that starts like a spreadsheet formula (= + - @, tab or
+ * return) gets a leading quote, so opening the file in a spreadsheet can't run it;
+ * real numbers are left as they are.
+ */
+export const csvCell = (v: string | number) => {
+  let s = String(v ?? "");
+  const number = typeof v === "number" && Number.isFinite(v);
+  if (!number && /^[=+\-@\t\r]/.test(s) && !/^[-+]?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(s)) s = `'${s}`;
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
 /** What a plugin showed: its text and table, to copy or save as CSV. */
@@ -577,9 +626,13 @@ export function startPluginTool(
   let pendingMove: ToolPoint | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let over = false;
+  // one undo step per tool event (a click): the batch opens at its first command and closes when it is handled
+  const batch = batcher();
+  let sent = 0;
   const end = () => {
     if (over) return;
     over = true;
+    void batch.end();
     clearTimeout(timer);
     worker.terminate();
     URL.revokeObjectURL(url);
@@ -607,8 +660,14 @@ export function startPluginTool(
   worker.onmessage = async (e) => {
     const m = e.data ?? {};
     if (m.type === "exec") {
-      const why = allowed(m.cmd);
-      const reply: Reply = why ? { ok: false, error: why } : await env.run(m.cmd);
+      let why = allowed(m.cmd);
+      if (!why && ++sent > MAX_COMMANDS) why = `a plugin tool may send at most ${MAX_COMMANDS} commands`;
+      let reply: Reply;
+      if (why) reply = { ok: false, error: why };
+      else {
+        await batch.begin();
+        reply = await env.run(m.cmd);
+      }
       worker.postMessage({ type: "reply", rid: m.rid, reply });
     } else if (m.type === "ask") {
       clearTimeout(timer);
@@ -627,6 +686,7 @@ export function startPluginTool(
     } else if (m.type === "handled") {
       busy = false;
       clearTimeout(timer);
+      await batch.end();
       if (pendingMove) {
         const at = pendingMove;
         pendingMove = null;

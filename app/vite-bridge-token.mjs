@@ -1,5 +1,6 @@
 // Dev-only Vite plugin: hands the dev page the bridge's per-launch token.
 // Plain JS (not part of the app's type-checked sources: it uses Node APIs).
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,9 +13,41 @@ function tokenFile() {
 }
 
 /**
+ * Is the caller a process of the same user as this dev server? The token file
+ * is readable only by its owner; this endpoint must not widen that. The peer of
+ * a loopback connection is found by its port (lsof); a caller that can't be seen
+ * (another user's process isn't listed to us) or isn't ours is refused. On
+ * Windows there is no such check: the dev server is for a single-user machine.
+ */
+function sameUser(req) {
+  if (process.platform === "win32") return true;
+  const port = req.socket.remotePort;
+  const addr = req.socket.remoteAddress ?? "";
+  if (!port || !(addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1")) return false;
+  try {
+    const out = execFileSync("lsof", ["-nP", "-F", "pu", `-iTCP:${port}`], { timeout: 3000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    let pid = 0;
+    let other = 0;
+    for (const line of out.split("\n")) {
+      if (line.startsWith("p")) pid = Number(line.slice(1));
+      else if (line.startsWith("u")) {
+        const mine = Number(line.slice(1)) === process.getuid();
+        if (!mine) return false;
+        if (pid !== process.pid) other++;
+      }
+    }
+    return other > 0; // the caller's own process was seen, and it is ours
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The bridge refuses requests without its token. The token file is readable
  * only by you; the page reads it again if the bridge is restarted. Only
- * same-origin requests from the dev page itself are answered.
+ * same-origin browser requests from the dev page itself (the page marks them
+ * with X-Sketchcraft-Dev, which another site can't send without a preflight
+ * this server never answers), made by a process of the same user, are answered.
  */
 export default function bridgeToken(port) {
   return {
@@ -23,7 +56,7 @@ export default function bridgeToken(port) {
       server.middlewares.use("/__bridge-token", (req, res) => {
         const host = String(req.headers.host ?? "");
         const site = req.headers["sec-fetch-site"];
-        const ok = (host === `127.0.0.1:${port}` || host === `localhost:${port}`) && (site === undefined || site === "same-origin" || site === "none");
+        const ok = (host === `127.0.0.1:${port}` || host === `localhost:${port}`) && site === "same-origin" && req.headers["x-sketchcraft-dev"] === "1" && sameUser(req);
         if (!ok) {
           res.statusCode = 403;
           return res.end();

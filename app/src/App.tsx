@@ -17,7 +17,8 @@ import { AppearanceDialog, WorkspaceDialog } from "./appearance";
 import { WorkspaceStrip } from "./wsstrip";
 import { Toolbar } from "./toolbar";
 import { runRuby } from "./ruby";
-import { cleanForm, cleanResult, loadPlugins, PluginFormDialog, PluginResultDialog, PluginsDialog, runPlugin, startPluginTool, type Plugin, type PluginCommand, type PluginForm, type PluginList, type PluginResult, type ToolSession } from "./plugins";
+import { pluginSandboxHolds } from "./cspcheck";
+import { batcher, cleanForm, cleanResult, loadPlugins, MAX_COMMANDS, PluginFormDialog, PluginResultDialog, PluginsDialog, runPlugin, startPluginTool, type Plugin, type PluginCommand, type PluginForm, type PluginList, type PluginResult, type ToolSession } from "./plugins";
 import { ErrorBoundary } from "./boundary";
 import { PhotoModeler } from "./photomodel";
 import { RefImageDialog } from "./refimage";
@@ -381,14 +382,16 @@ export default function App() {
 
   // what plugin code asks for (JavaScript or Ruby): the engine only lets it model
   const runForPlugin = useCallback(
-    async (cmd: Record<string, unknown>): Promise<Reply> => {
+    async (cmd: Record<string, unknown>, plugin?: Plugin): Promise<Reply> => {
       const r = await execPlugin(cmd);
-      if (!r.ok) say(r.error ?? "That didn't work", true);
+      if (!r.ok) say(`${plugin ? `Plugin “${plugin.name}”: ` : ""}${r.error ?? "That didn't work"}`, true);
       await refresh();
       return r;
     },
     [refresh, say]
   );
+  // what a plugin says is shown as the plugin's, never in the app's own voice
+  const sayAs = useCallback((plugin: Plugin, t: string, bad?: boolean) => say(plugin.builtin ? t : `Plugin “${plugin.name.slice(0, 40)}”: ${t}`, bad), [say]);
 
   // a notice from the engine (a damaged model file was set aside...): say it once
   const lastNotice = useRef("");
@@ -683,19 +686,21 @@ export default function App() {
   // the tool bar's buttons call the latest runner (it reads the current selection)
   const runPluginCommandRef = useRef<(p: Plugin, c: string) => Promise<void>>(async () => {});
   // a command marked "tool" starts the plugin's tool instead of running once
-  const startTool = (plugin: Plugin, toolId: string, label: string) => {
+  const startTool = async (plugin: Plugin, toolId: string, label: string) => {
+    const safe = await pluginSandboxHolds();
+    if (!safe.ok) return say(`Plugins are off: ${safe.why}.`, true);
     toolSession.current?.stop();
-    const name = label.replace(/…$/, "");
+    const name = (plugin.builtin ? label : `${label} · plugin “${plugin.name.slice(0, 40)}”`).replace(/…$/, "");
     setPluginTool({ name, hint: "", preview: [], anchor: null });
     const session = startPluginTool(plugin, toolId, {
       selection: { faces: sel.faces, edges: sel.edges, groups: sel.groups, instances: sel.instances },
       units: scene?.units || "m",
-      run: (cmd) => runForPlugin(cmd),
+      run: (cmd) => runForPlugin(cmd, plugin),
       show: (result, pl) => setPluginShown({ result, plugin: pl }),
-      toast: (t, bad) => say(t, bad),
+      toast: (t, bad) => sayAs(plugin, t, bad),
       ask: (form, pl) => new Promise((resolve) => setPluginForm({ form, plugin: pl, done: (a) => (setPluginForm(null), resolve(a)) })),
       preview: (lines) => setPluginTool((p) => (p ? { ...p, preview: lines } : p)),
-      hint: (text) => setPluginTool((p) => (p ? { ...p, hint: text } : p)),
+      hint: (text) => setPluginTool((p) => (p ? { ...p, hint: plugin.builtin ? text : `Plugin: ${text}` } : p)),
       anchor: (pt) => setPluginTool((p) => (p ? { ...p, anchor: pt } : p)),
       ended: () => {
         if (toolSession.current === session) {
@@ -750,18 +755,26 @@ export default function App() {
         continue;
       }
       if (r.error) return say(`${plugin.name}: ${r.error}`, true);
+      if (r.journal.length > MAX_COMMANDS) return say(`${plugin.name} made ${r.journal.length} changes in one run; the most is ${MAX_COMMANDS}, so none were applied.`, true);
       let failed = "";
-      for (const [i, cmd] of r.journal.entries()) {
-        // Ruby's recorded commands are plugin commands too: same limits as JavaScript plugins
-        const res = await execPlugin(cmd);
-        if (!res.ok) {
-          failed = `step ${i + 1} (${String(cmd.cmd)}): ${res.error}`;
-          break;
+      // everything it recorded is ONE undo step (and one save)
+      const batch = batcher();
+      try {
+        await batch.begin();
+        for (const [i, cmd] of r.journal.entries()) {
+          // Ruby's recorded commands are plugin commands too: same limits as JavaScript plugins
+          const res = await execPlugin(cmd);
+          if (!res.ok) {
+            failed = `step ${i + 1} (${String(cmd.cmd)}): ${res.error}`;
+            break;
+          }
         }
+      } finally {
+        await batch.end();
       }
       await refresh();
       setPluginRuns((n) => n + 1);
-      for (const t of r.toasts.slice(0, 5)) say(String(t).slice(0, 300));
+      for (const t of r.toasts.slice(0, 5)) sayAs(plugin, String(t).slice(0, 300));
       if (failed) say(`${plugin.name} stopped at ${failed}. ⌘Z undoes what it did.`, true);
       if (r.out.trim()) setPluginShown({ result: cleanResult({ title: plugin.name, text: r.out.trim() }), plugin });
       return;
@@ -772,14 +785,14 @@ export default function App() {
   const runPluginCommand = (plugin: Plugin, commandId: string) => {
     if (plugin.ruby) return runRubyCommand(plugin, Number(commandId));
     const c = plugin.commands.find((x) => x.id === commandId);
-    if (c?.tool) return Promise.resolve(startTool(plugin, commandId, c.label));
+    if (c?.tool) return startTool(plugin, commandId, c.label);
     return runPlugin(plugin, commandId, {
       onDone: () => setPluginRuns((n) => n + 1),
       selection: { faces: sel.faces, edges: sel.edges, groups: sel.groups, instances: sel.instances },
       units: scene?.units || "m",
-      run: (cmd) => runForPlugin(cmd),
+      run: (cmd) => runForPlugin(cmd, plugin),
       show: (result, pl) => setPluginShown({ result, plugin: pl }),
-      toast: (t, bad) => say(t, bad),
+      toast: (t, bad) => sayAs(plugin, t, bad),
       ask: (form, pl) =>
         new Promise((resolve) =>
           setPluginForm({

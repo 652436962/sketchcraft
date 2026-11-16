@@ -213,7 +213,7 @@ const BRIDGE = `http://127.0.0.1:${import.meta.env.VITE_BRIDGE_PORT ?? 5175}`;
 // hands it over from the file the bridge wrote (see docs/dev/building.md);
 // it is read again if the bridge was restarted.
 let bridgeToken: Promise<string> | null = null;
-const readToken = () => (bridgeToken ??= fetch("/__bridge-token", { cache: "no-store" }).then((r) => (r.ok ? r.text() : "")).catch(() => ""));
+const readToken = () => (bridgeToken ??= fetch("/__bridge-token", { cache: "no-store", headers: { "X-Sketchcraft-Dev": "1" } }).then((r) => (r.ok ? r.text() : "")).catch(() => ""));
 
 async function http<T>(path: string, body?: unknown, retry = true): Promise<T> {
   const token = (await readToken()).trim();

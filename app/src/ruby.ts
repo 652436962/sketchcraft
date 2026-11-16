@@ -4,6 +4,7 @@
 // network, no files); the app replays the commands, so they undo as usual.
 import SKETCHUP_RB from "./ruby/sketchup.rb?raw";
 import { LOCKDOWN_SOURCE } from "./lockdown";
+import { pluginSandboxHolds } from "./cspcheck";
 import type { Plugin } from "./plugins";
 
 // the same lockdown as JavaScript plugins (see plugins.tsx)
@@ -15,7 +16,9 @@ const text = (url: string) => fetch(url).then((r) => (r.ok ? r.text() : Promise.
 const opal = () => (runtime ??= text("ruby/opal.js"));
 const opalCompiler = () => (compiler ??= text("ruby/opal-compiler.js"));
 
-function worker(code: string, limitMs: number, msg: unknown): Promise<Record<string, unknown>> {
+async function worker(code: string, limitMs: number, msg: unknown): Promise<Record<string, unknown>> {
+  const safe = await pluginSandboxHolds();
+  if (!safe.ok) return { error: `plugins are off: ${safe.why}` };
   return new Promise((resolve) => {
     const url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
     const w = new Worker(url);
