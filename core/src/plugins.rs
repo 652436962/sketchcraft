@@ -192,8 +192,15 @@ pub fn install(bytes: &[u8], file_name: Option<&str>, opts: &InstallOpts) -> Res
     }
     // where plugin.json is: the top, or one folder down
     let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for i in 0..z.len() {
-        names.push(z.by_index(i)?.name()?.to_string());
+        let f = z.by_index(i)?;
+        let n = f.name()?.to_string();
+        // two entries with one name: what is shown and what is installed could differ
+        if !f.is_dir() && !seen.insert(n.trim_start_matches("./").to_ascii_lowercase()) {
+            bail!("the plugin has two files named {n}");
+        }
+        names.push(n);
     }
     let manifest_at = names.iter().find(|n| n.trim_start_matches("./") == "plugin.json" || (n.ends_with("/plugin.json") && n.matches('/').count() == 1)).cloned();
     // no plugin.json but Ruby files: a SketchUp extension (.rbz)
@@ -361,7 +368,7 @@ fn write_plugin(id: &str, files: &[(String, Vec<u8>)]) -> Result<bool> {
 }
 
 fn set_aside(folder: &Path, id: &str) -> Result<PathBuf> {
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     // a fresh name, even twice in one second
     let mut away = dir().join(".removed").join(format!("{id}-{stamp}"));
     let mut n = 1;
@@ -375,14 +382,44 @@ fn set_aside(folder: &Path, id: &str) -> Result<PathBuf> {
     Ok(away)
 }
 
-/// Keep only the newest `KEEP_REMOVED` folders in `.removed`.
+/// When a set-aside folder was made, from its name `id-<seconds>[-<n>]` (the folder's own
+/// modified time doesn't change when it is renamed, so it says nothing about when it was removed).
+fn removed_key(name: &str) -> (u64, u64) {
+    let toks: Vec<&str> = name.split('-').collect();
+    let nums: Vec<(usize, u64)> = toks.iter().enumerate().rev().take(2).filter_map(|(i, t)| t.parse::<u64>().ok().map(|n| (i, n))).collect();
+    // seconds (older set-asides) or milliseconds, all compared in milliseconds
+    let ms = |t: u64| if t < 100_000_000_000 { t * 1000 } else { t };
+    match nums.as_slice() {
+        [(_, n), (_, t)] if *t >= 100_000_000 => (ms(*t), *n),
+        [(_, t), ..] if *t >= 100_000_000 => (ms(*t), 0),
+        _ => (0, 0),
+    }
+}
+
+/// Keep only the newest `KEEP_REMOVED` folders in `.removed`, by when they were set aside;
+/// and clear staging folders a crashed install left behind.
 fn prune_removed() {
     let root = dir().join(".removed");
-    let Ok(rd) = std::fs::read_dir(&root) else { return };
-    let mut all: Vec<(std::time::SystemTime, PathBuf)> = rd.flatten().filter(|e| e.path().is_dir()).map(|e| (e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH), e.path())).collect();
-    all.sort();
-    while all.len() > KEEP_REMOVED {
-        std::fs::remove_dir_all(all.remove(0).1).ok();
+    if let Ok(rd) = std::fs::read_dir(&root) {
+        let mut all: Vec<(( u64, u64), PathBuf)> = rd.flatten().filter(|e| e.path().is_dir()).map(|e| (removed_key(&e.file_name().to_string_lossy()), e.path())).collect();
+        all.sort();
+        while all.len() > KEEP_REMOVED {
+            std::fs::remove_dir_all(all.remove(0).1).ok();
+        }
+    }
+    clear_stale_staging();
+}
+
+/// `.installing-*` folders older than an hour belong to an install that died.
+fn clear_stale_staging() {
+    let Ok(rd) = std::fs::read_dir(dir()) else { return };
+    for e in rd.flatten() {
+        if e.file_name().to_string_lossy().starts_with(".installing-") && e.path().is_dir() {
+            let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|d| d.as_secs() > 3600);
+            if old {
+                std::fs::remove_dir_all(e.path()).ok();
+            }
+        }
     }
 }
 
@@ -406,6 +443,7 @@ pub fn list() -> Value {
     let mut problems = Vec::new();
     let d = dir();
     std::fs::create_dir_all(&d).ok(); // so "Open plugins folder" has somewhere to go
+    clear_stale_staging();
     if let Ok(rd) = std::fs::read_dir(&d) {
         let mut dirs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir() && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))).collect();
         dirs.sort();

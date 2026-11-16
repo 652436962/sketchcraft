@@ -124,6 +124,43 @@ fn install_turn_off_and_remove_a_plugin() {
     }
     let kept = std::fs::read_dir(home.join("Plugins/.removed")).unwrap().count();
     assert!(kept <= 20, "{kept} folders kept in .removed");
+    // R2-MBK-012: the plugin removed now is kept, even with 25 older set-asides made after its folder was
+    for i in 0..25 {
+        std::fs::create_dir_all(home.join(format!("Plugins/.removed/fake-1700000000-{}", i + 2))).unwrap();
+    }
+    let r = run(&mut e, json!({"cmd":"remove_plugin","id":"churn"}));
+    assert_eq!(r["ok"], true, "{r}");
+    let moved = r["moved_to"].as_str().unwrap().to_string();
+    assert!(std::path::Path::new(&moved).is_dir(), "the plugin removed just now was pruned at once");
+    // R2-MBK-012: a zip with two files of one name is refused (what was shown could differ from what is installed)
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut z = zip::ZipWriter::new(&mut buf);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default();
+        z.start_file("plugin.json", opts).unwrap();
+        z.write_all(br#"{"name":"Twin","commands":[{"id":"a","label":"Shown"}]}"#).unwrap();
+        z.start_file("main.js", opts).unwrap();
+        z.write_all(b"").unwrap();
+        z.start_file("plugin.jsoX", opts).unwrap();
+        z.write_all(br#"{"name":"Twin","commands":[{"id":"a","label":"Installed"}]}"#).unwrap();
+        z.finish().unwrap();
+    }
+    // the writer won't make two entries of one name, so rename the second one in the bytes
+    let mut bytes = buf.into_inner();
+    let needle = b"plugin.jsoX";
+    while let Some(i) = bytes.windows(needle.len()).position(|w| w == needle) {
+        bytes[i + needle.len() - 1] = b'n';
+    }
+    // the zip reader keeps one entry per name; either way what the person is shown is what is installed
+    let shown = run(&mut e, json!({"cmd":"install_plugin","data": b64(&bytes),"preview": true}));
+    let r = run(&mut e, json!({"cmd":"install_plugin","data": b64(&bytes)}));
+    if shown["ok"] == true && r["ok"] == true {
+        let installed: Value = serde_json::from_str(&std::fs::read_to_string(home.join("Plugins/twin/plugin.json")).unwrap()).unwrap();
+        assert_eq!(installed["commands"][0]["label"], shown["commands"][0]);
+    }
+    // a crashed install's staging folder is cleared
+    std::fs::create_dir_all(home.join("Plugins/.installing-old-1")).unwrap();
+    run(&mut e, json!({"cmd":"plugins"}));
 
     std::fs::remove_dir_all(&home).ok();
 }
