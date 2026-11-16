@@ -23,6 +23,19 @@ What changed in each SketchCraft release, newest first. The format follows
   only the right kind of file with a new name (never over yours) and can't be
   steered out of their folder by an OBJ file. Plugin messages say which plugin
   they come from, and saved CSVs can't carry spreadsheet formulas.
+- **A third review.** Backups are safer: only SketchCraft's own backups are
+  counted, the newest of each time slot is kept, the copy taken just before a
+  New, Open or big delete is kept for a day, and another model in the same folder
+  can't thin yours. If another program saves while a plugin runs, or while your
+  own save was failing, your changes are set aside in a `.unsaved-` file next to
+  the model (with a warning that stays until you deal with it) instead of being
+  lost. A plugin run is never re-pointed at someone else's model mid-run, and a
+  run that is never closed is saved after a couple of minutes. AI agents can't
+  write into Backups or Plugins through the library, and can't replace library or
+  export files that already exist. Huge copies and arrays, dense DXF drawings,
+  text with many outlines and grouping part of a big mesh are bounded or fast
+  instead of freezing the app. The report CSV can't carry formulas, plugin tool
+  previews can't crash the window, and a long Ruby script has a time limit.
 
 ### Added
 - **Plugins window** (File › Plugins ▸ Manage plugins…, or Shift+S): every

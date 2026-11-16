@@ -42,7 +42,10 @@ person at the keyboard:
   `export_obj`, `.png` for `save_image`, and so on), and never replaces a file it
   didn't make itself in that session: it writes new file names. `save_image`
   only writes images it can decode. The library an agent uses is `Library/` in
-  its workspace;
+  its workspace; `save_to_library` and `library_add` take plain `collection`/`name`
+  values (no folders, dots or `Backups`/`Plugins`) and add new files only, and an
+  OBJ or DAE export refuses to write beside an existing `.mtl` or `_textures`
+  folder it didn't make;
 - never: installing, enabling or removing plugins, `save_text` (writing any text
   to any file), `reveal`, `skins`, `video_frame`/`video_finish`;
 - numbers outside +/-1e9, over-long strings and URL or pipe paths are refused

@@ -272,7 +272,10 @@ impl Live {
             self.sync();
         }
         let name = cmd["cmd"].as_str().unwrap_or("");
-        let size = |e: &Engine| e.model.faces.len() + e.model.instances.len() + e.model.groups.len();
+        fn weight(m: &crate::model::Model) -> usize {
+            m.faces.len() + m.instances.len() + m.groups.len() + m.definitions.values().map(|d| weight(&d.model)).sum::<usize>()
+        }
+        let size = |e: &Engine| weight(&e.model);
         let (before, size_before) = (self.engine.revision(), size(&self.engine));
         let destructive = DESTRUCTIVE.contains(&name);
         let mut r = self.engine.exec_value_as(caller, cmd.clone());

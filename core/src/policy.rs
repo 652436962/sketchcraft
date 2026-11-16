@@ -68,11 +68,11 @@ impl Workspace {
     pub fn anywhere() -> Self {
         Workspace { root: None, made: Default::default() }
     }
-    /// A folder an agent shouldn't be handed whole: the filesystem root, a drive root, or a home folder.
+    /// A folder an agent shouldn't be handed whole: the filesystem root, a drive root, a home folder, or a folder that holds the home folder.
     pub fn too_wide(&self) -> bool {
         let Some(root) = &self.root else { return false };
         let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(|h| std::fs::canonicalize(&h).unwrap_or_else(|_| PathBuf::from(h)));
-        root.parent().is_none() || root.components().count() <= 1 || home.as_ref().is_some_and(|h| h == root)
+        root.parent().is_none() || root.components().count() <= 1 || home.as_ref().is_some_and(|h| h.starts_with(root))
     }
 }
 

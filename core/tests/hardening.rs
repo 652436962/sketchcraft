@@ -1036,3 +1036,15 @@ fn a_dense_dxf_is_refused_not_ground_through() {
     // either refused (too many faces / too slow) or imported; never a hang
     let _ = r;
 }
+
+/// R3-BRN-012: an integration test program is recognized, and (with no SKETCHCRAFT_DOC) would get a temp folder, never ~/Documents.
+#[test]
+fn test_programs_are_scoped_away_from_the_real_folder() {
+    assert!(sketchcraft::live::running_as_cargo_test());
+    let p = sketchcraft::live::doc_path(None, sketchcraft::live::running_as_cargo_test(), std::env::var_os("HOME").map(PathBuf::from));
+    assert!(p.starts_with(std::env::temp_dir()), "{p:?}");
+    // with SKETCHCRAFT_DOC set (as every run here does) that wins
+    if let Some(v) = std::env::var_os("SKETCHCRAFT_DOC") {
+        assert_eq!(sketchcraft::live::default_doc(), PathBuf::from(v));
+    }
+}
