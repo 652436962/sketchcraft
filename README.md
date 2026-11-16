@@ -2,148 +2,168 @@
 
 # SketchCraft
 
-SketchCraft is a free, open-source push/pull 3D modeler for buildings, streets
-and anything with straight walls. It's written in Rust, runs as a desktop app
-on macOS, Windows and Linux, and is fully scriptable: every action is a JSON
-command, so scripts, the CLI and AI agents (over MCP) drive exactly what you
-drive with the mouse.
+**A free 3D modeler for houses, rooms, furniture and anything with straight
+walls.** Draw an outline, pull it up into a shape, and keep going. If you've
+used SketchUp, you already know how: same tools, same shortcuts, and it opens
+your SketchUp files.
+
+It's free and open source, and runs on Mac, Windows and Linux.
+
+<p align="center"><img src="docs/demos/first-model.gif" alt="Drawing a rectangle, pulling it up into a box, typing exact sizes" width="860"></p>
+
+## Download
+
+**[Get the latest version](https://github.com/jasonsutter87/sketchcraft/releases/latest)**
+
+| Your computer | Download |
+| --- | --- |
+| **Mac** (Apple silicon or Intel) | `SketchCraft_…_universal.dmg`, then drag SketchCraft to Applications |
+| **Windows 10 or 11** | `SketchCraft_…_x64-setup.exe`, or the **portable ZIP** if you'd rather not install |
+| **Linux** | `.AppImage` (any distro), `.deb` or `.rpm` |
+
+The first time you open it, your computer may ask whether you trust it,
+because SketchCraft isn't signed by Apple or Microsoft yet:
+
+- **Mac:** System Settings › Privacy & Security › **Open Anyway**.
+- **Windows:** **More info › Run anyway**.
+
+After that it **updates itself**: when a new version is out, it offers to
+update when you open it.
+
+## What you can do
+
+**Model buildings and things.** Push/pull, lines that cut faces, arcs,
+circles, offsets, Follow Me, move, rotate, scale and copies. Type exact sizes
+as you go (`5,4`, `8'6"`, `250cm`). Snap to corners, midpoints, centers and the
+axes.
+
+**Organize big models.** Groups inside groups, reusable components (change one,
+they all change), tags like layers, and an outliner of everything.
+
+**Start from what you have.** Open SketchUp files, AutoCAD drawings, Revit and
+ArchiCAD models, and 3D scans. Turn a 2D floor plan into walls in one click.
+
+**Show it off.** Photoreal renders, sun studies, walkthrough videos, styles from
+sketchy to blueprint, section cuts and floor plans, drawing sheets at real scale.
 
 ![A Craftsman house modeled in SketchCraft](docs/craftsman_street.png)
 
-![Dimensioned front elevation, rendered headless](docs/craftsman_front_elevation.png)
+**Plan the build.** The **Cut list** plugin lists every board to cut and roughly
+how many sheets and boards to buy.
 
-## What it does
+<p align="center"><img src="docs/demos/shelves-cut-list.gif" alt="The Shelves plugin builds a bookcase; Cut list lists its boards and what to buy" width="860"></p>
 
-- **Draw:** lines that split edges, cut faces and close into faces; rectangles,
-  circles, polygons, arcs, offsets.
-- **Shape:** push/pull (pull out, push in, carve windows and doors), Follow Me
-  sweeps for trim, cornices and eaves, auto-fold when a move bends a face.
-- **Transform:** move, copy and arrays (`x5`, `/5`), rotate, scale, mirror.
-- **Snap:** endpoints, midpoints, edges, faces, guides and the red/green/blue
-  axes, with "From Point" alignment and arrow-key axis locks. Type a number and
-  press Enter for exact sizes.
-- **Organize:** groups and components (edit one, every copy updates), tags,
-  hide/unhide, soft edges, an outliner.
-- **Document:** dimensions and text labels, saved views, section cuts, X-ray,
-  shadows, parallel projection, headless PNG renders.
-- **Library:** doors, windows, garage doors, trees, palms, cars, streetlights,
-  benches and hydrants, all built from editable command scripts.
-- **Build blocks:** walls along a path (or closed rooms), code-friendly stairs from a
-  total rise, gable/hip/shed roofs on any top face, columns.
-- **Textures:** add a photo as a material, paint faces with it at a real-world tile
-  size, or project it across a whole model from your view.
-- **Units:** meters, centimeters, millimeters, feet & inches, or inches. Type
-  lengths any way: `12'`, `8'6"`, `250cm`, `2.5m`.
-- **Pro tools:** Solid Tools (union, subtract, intersect, trim, split, outer
-  shell), Intersect Faces, Flip Along, Sandbox terrain (contours, scratch,
-  smoove, stamp, drape, flip edge), Dynamic Components (attributes and
-  formulas), Match Photo, section fills, scene animation (MP4), drawing sheets
-  at true scale (PDF), Generate Report (CSV), Classifier + IFC export, and Add
-  Location (real terrain + OpenStreetMap). See [docs/PARITY.md](docs/PARITY.md).
-- **Styles:** shaded, textured, monochrome, hidden line, wireframe; profiles,
-  sketchy edges, extensions, ambient occlusion; paper, blueprint and night.
-- **Keyboard:** SketchUp's default shortcuts, 1:1 (press `?` in the app).
-- **Files:** a File menu with New / Open / Save / Save As; `.sketchcraft` documents,
-  glTF (.glb), OBJ, STL, Collada, 3D DXF, PDF and IFC export; OBJ and binary FBX import; and **SketchUp (.skp) import** for
-  both legacy SketchUp 6–8 files and modern 2013+ files (checked against 26.2):
-  geometry, nested components and placements, colors and textures.
+**Make it yours.** A SketchUp-like Classic look by default, or SketchCraft's
+own themes, docked or floating tool bars, and your own tool icons.
 
-## Install
+<p align="center"><img src="docs/demos/themes-layouts.gif" alt="Switching themes and layouts" width="860"></p>
 
-Download the latest build from
-[Releases](https://github.com/jasonsutter87/sketchcraft/releases/latest):
-a `.dmg` for macOS, `.msi`/`.exe` for Windows, and `.AppImage`/`.deb` for Linux.
-The headless CLI is attached as `sketchcraft-cli-*.zip`.
+## Opens your files
 
-macOS builds aren't notarized yet. If macOS says the app "can't be opened",
-open **System Settings › Privacy & Security** and click **Open Anyway**.
+| | |
+| --- | --- |
+| **SketchUp** (`.skp`) | versions 6 to 8 and 2013 onward |
+| **AutoCAD** (`.dwg`, `.dxf`) | DXF on its own; DWG with a free helper |
+| **Revit, ArchiCAD** (`.ifc`) | with a free helper; SketchCraft shows how to set it up |
+| **3D models** (`.fbx`, `.obj`) | |
+| **3D scans** (`.ply`, `.las`, `.xyz`, `.pts`) | point clouds you can snap to |
 
-### Build from source
+It saves glTF, OBJ, STL (3D printing), Collada, DXF, DWG, IFC, PDF, PNG and MP4.
 
-```sh
-# engine + CLI
-cargo build --release -p sketchcraft-core
-# desktop app
-cd app && npm ci && npm run tauri build
-```
+## New to SketchCraft?
 
-Requires Rust (stable) and Node.js 22.
+- **In the app:** click **Learn** (top right) for short lessons that watch you
+  do each step, and demos to watch. Press **?** for every shortcut, and
+  **Shift+S** to find any command by name.
+- **The guide:** [Getting started](docs/guide/01-getting-started.md), then
+  [Drawing](docs/guide/02-drawing.md), [Shaping](docs/guide/03-shaping.md),
+  [Organizing](docs/guide/04-organizing.md), [Files](docs/guide/05-files.md),
+  [Presenting](docs/guide/06-presenting.md),
+  [Themes](docs/guide/07-themes.md), [Plugins](docs/guide/08-plugins.md),
+  [Shortcuts](docs/guide/09-shortcuts.md) and
+  [Troubleshooting](docs/guide/10-troubleshooting.md).
 
-## The app
+## Questions
 
-A Figma-style layout: Outliner / Library / Views on the left, Entity Info and
-paint on the right, a floating toolbar, and style toggles.
+**Is it really free?** Yes. No account, no subscription, no watermark. It's
+open source under the MIT license.
 
-| Key | Tool | Key | Tool |
-|---|---|---|---|
-| Space | Select (hold to orbit) | M | Move (Option copies) |
-| L | Line | Q | Rotate |
-| A | Arc | S | Scale |
-| R | Rectangle | T | Tape measure (guides) |
-| C | Circle | D | Dimension |
-| N | Polygon | W | Text |
-| P | Push/Pull | B | Paint (Option samples) |
-| F | Offset | E | Erase (Shift hides) |
-| J | Follow Me | O | Orbit |
-| X | Section cut | G / H | Group / Hide |
+**Do I need the internet?** No. SketchCraft works offline; it only goes online
+to check for updates and, if you ask, to fetch map imagery for a location.
 
-Arrow keys lock the red (→), green (←) or blue (↑) axis. On a trackpad,
-two-finger swipe orbits, Shift+swipe pans and pinch zooms. With a mouse,
-middle-drag orbits, right-drag pans and the wheel zooms. Right-click opens
-the context menu, ⇧Z zooms to fit.
+**Is it SketchUp?** No. It's an independent project that works the same way and
+reads the same files. Not affiliated with Trimble or SketchUp.
+
+**Something isn't working.** See [Troubleshooting](docs/guide/10-troubleshooting.md),
+or [tell us about it](https://github.com/jasonsutter87/sketchcraft/issues).
+
+---
+
+# For developers
+
+SketchCraft is a Rust engine with a React + three.js interface in a Tauri app.
+Every action is a JSON command, so scripts, plugins and AI agents drive exactly
+what you drive with the mouse.
 
 ## Scripting and the CLI
-
-One JSON command per line. Add `"as":"name"` to remember a result's id and use
-`"@name"` later. Units are meters; Z is up.
 
 ```json
 {"cmd":"rect","from":[0,0,0],"to":[8,12,0],"as":"lot"}
 {"cmd":"pushpull","face":"@lot","distance":6}
 {"cmd":"insert","asset":"door","at":[3.5,0,0]}
-{"cmd":"dimension","from":[0,-1,0],"to":[8,-1,0],"offset":[0,0,-1]}
 {"cmd":"render","out":"house.png","view":"iso"}
 ```
 
 ```sh
-sketchcraft run examples/craftsman_house.jsonl     # run a script
-sketchcraft serve                                  # JSON in, JSON out on stdio
-sketchcraft mcp --doc model.sketchcraft            # MCP server for AI agents
-sketchcraft bridge                                 # the app's UI in a browser
+sketchcraft run house.jsonl            # run a script
+sketchcraft serve                      # JSON lines in and out on stdio
+sketchcraft mcp --doc model.sketchcraft
+sketchcraft bridge                     # the app's UI in a browser (localhost)
 ```
 
-| Area | Commands |
-|---|---|
-| Draw | `rect`, `polygon`, `line`, `circle`, `arc`, `offset` |
-| Shape | `pushpull`, `follow_me` |
-| Transform | `move`, `rotate`, `scale`, `duplicate`, `array`, `copy` |
-| Organize | `begin_group`/`end_group`, `group`, `edit`/`close`, `make_component`, `place`, `explode`, `components`, `rename` |
-| Library | `insert`, `assets`, `wall`, `stairs`, `roof`, `column` |
-| Materials | `paint` (color or material), `texture`, `units` |
-| Visibility | `hide`, `unhide`, `tag`, `tag_visible`, `soften` |
-| Notes | `dimension`, `text`, `guide`, `clear_guides`, `save_view`, `delete_view` |
-| Inspect | `pick`, `faces`, `info`, `undo`, `redo`, `new` |
-| Files | `save`, `open`, `export_obj`, `export_glb`, `export_stl`, `import_obj`, `import_skp`, `render` |
+Every command: [docs/dev/scripting.md](docs/dev/scripting.md). The CLI is in each
+release as `sketchcraft-cli-<platform>.zip`.
 
 ## AI agents (MCP)
 
-`sketchcraft mcp` exposes `sketchcraft_run`, `sketchcraft_render` (returns an
-image the agent can look at) and `sketchcraft_info`. With `--doc` it shares the
-desktop app's live model, so you and an agent can build the same model at once.
-This repo's `.mcp.json` sets it up for Claude Code.
+`sketchcraft mcp` gives an agent `sketchcraft_run`, `sketchcraft_render` (it
+gets the picture back, so it can see what it built) and `sketchcraft_info`.
+Pointed at the app's live model, you and the agent build the same thing.
+[docs/dev/mcp.md](docs/dev/mcp.md)
 
-## Status
+## Plugins
 
-Young and moving fast. What changed in each release is in [CHANGELOG.md](CHANGELOG.md). Next up: photo match (line a photo up with the model),
-textures in exports, solid tools
-(union/subtract), intersect faces, and parallel / perpendicular inference.
+Plugins are small JavaScript files that add commands, ask questions with forms,
+and build or measure geometry. They run sandboxed (no network, no files).
+[Writing a plugin](docs/PLUGINS.md), with the built-in
+[Cut list](core/plugins/cutlist/main.js) and [Shelves](core/plugins/shelves/main.js)
+as examples.
 
-The `.skp` importer is a clean-room reader, worked out from sample files for
-interoperability: `core/src/skp.rs` reads the legacy MFC CArchive format and
-`core/src/skp_vff.rs` the modern ZIP + tagged-record format. It skips what it doesn't
-understand (dimensions, text, textures inside the file) rather than guess.
+## Building from source
+
+```sh
+cargo build --release -p sketchcraft-core      # engine and CLI
+cd app && npm ci && npm run tauri build         # the desktop app
+```
+
+Rust (stable) and Node.js 22. The browser dev loop, tests, demo GIF recording
+and releasing: [docs/dev/building.md](docs/dev/building.md).
+
+## How it's built
+
+The model, commands, importers (including clean-room SketchUp readers),
+exporters, a rasterizer and a path tracer live in `core/`; the interface in
+`app/`. [docs/dev/architecture.md](docs/dev/architecture.md) ·
+[renderer](docs/RENDERER.md) · [security](docs/SECURITY.md) ·
+[SketchUp parity](docs/PARITY.md)
+
+## Contributing
+
+Bug reports and ideas: [issues](https://github.com/jasonsutter87/sketchcraft/issues).
+What's planned and what people asked for: [FEATURE-REQUESTS.md](FEATURE-REQUESTS.md).
+What changed in each version: [CHANGELOG.md](CHANGELOG.md).
 
 ## License and trademarks
 
-MIT, see [LICENSE](LICENSE). SketchCraft is an independent, clean-room project:
-it is not affiliated with or endorsed by Trimble or SketchUp, or by ArtCraft.
+MIT, see [LICENSE](LICENSE). SketchCraft is an independent, clean-room project.
+It is not affiliated with or endorsed by Trimble or SketchUp, or by ArtCraft.
