@@ -38,6 +38,11 @@ export function UpdateCard() {
   const [card, setCard] = useState<Card | null>(null);
   const [notes, setNotes] = useState(false);
   const busy = useRef(false);
+  // the portable ZIP updates by downloading the new ZIP, not by installing
+  const portable = useRef(false);
+  useEffect(() => {
+    if (inTauri) invoke<boolean>("portable").then((p) => (portable.current = p), () => {});
+  }, []);
 
   const look = async (manual: boolean) => {
     if (!inTauri || busy.current) return;
@@ -105,12 +110,18 @@ export function UpdateCard() {
       {card.kind === "ready" && (
         <>
           <b>SketchCraft {card.update.version} is ready</b>
-          <p>Your model is saved as you work, so it's safe to update now. Takes about a minute.</p>
+          <p>{portable.current ? "This is the portable copy: unzip the new version over this folder. Your models aren't touched." : "Your model is saved as you work, so it's safe to update now. Takes about a minute."}</p>
           {notes && card.update.body && <pre className="update-notes">{card.update.body}</pre>}
           <div className="row gap">
-            <button className="btn small primary" onClick={() => void install(card.update)}>
-              Update and restart
-            </button>
+            {portable.current ? (
+              <button className="btn small primary" onClick={() => void invoke("open_releases")} title="This is the portable copy: download the new ZIP and unzip it over this folder">
+                Download the new ZIP
+              </button>
+            ) : (
+              <button className="btn small primary" onClick={() => void install(card.update)}>
+                Update and restart
+              </button>
+            )}
             {card.update.body && (
               <button className="btn small ghost" onClick={() => setNotes((n) => !n)}>
                 {notes ? "Hide" : "What's new"}

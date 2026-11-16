@@ -13,7 +13,7 @@ Status: `todo` · `in progress` · `done` · `later` · `won't do`
 | 1 | **Scale figure at the origin**: an original 2D person that always faces the camera, in new models and in the library, for a sense of size | EuphoricPenguin22 (Reddit) | 2026-11-16 | done | 2026-11-16 |
 | 1b | **The beaver as the scale figure**: the mascot with a clipboard, as an option (Document › Scale figure), and on April 1 for everyone | Jason | 2026-11-16 | done | 2026-11-16 |
 | 2 | **Select a vertex and move it**: pick a single point and drag it; the faces around it follow | Just_A_Random_Passer (Reddit) | 2026-11-16 | done | 2026-11-16 |
-| 3 | **Windows portable ZIP**: the desktop app as a ZIP, no installer | mcam (Discord) | 2026-11-16 | todo | |
+| 3 | **Windows portable ZIP**: the desktop app as a ZIP, no installer | mcam (Discord) | 2026-11-16 | done (first build in the next release) | 2026-11-16 |
 | 4 | **Classic layout**: toolbars docked to the edges like SketchUp, no floating margins, more room for the model; the current layout stays | MaiJames (Reddit) | 2026-11-16 | todo | |
 | 5 | **Plugins**: small scripts that add commands and panels, using the same commands as the CLI and MCP | rats4final (Reddit) | 2026-11-16 | todo | |
 | 6 | **Cut list plugin**: plan plywood and lumber cuts from the model (the first plugin) | SoCaFroal (Reddit) | 2026-11-16 | todo | |

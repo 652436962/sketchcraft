@@ -70,6 +70,23 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+      # Windows: the app as a ZIP too, to run from any folder (no installer).
+      # PORTABLE.txt tells it to offer the new ZIP instead of installing updates.
+      - name: Portable ZIP (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $v = (Get-Content app/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force portable/SketchCraft | Out-Null
+          Copy-Item target/release/sketchcraft-app.exe portable/SketchCraft/SketchCraft.exe
+          Set-Content portable/SketchCraft/PORTABLE.txt "SketchCraft runs from this folder: unzip anywhere and open SketchCraft.exe. It needs Microsoft Edge WebView2, which Windows 10 and 11 include. When a new version is out, SketchCraft links to the newest portable ZIP."
+          Compress-Archive -Path portable/SketchCraft -DestinationPath "SketchCraft_${v}_x64_portable.zip"
+      - name: Attach the portable ZIP
+        if: matrix.platform == 'windows-latest' && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: SketchCraft_*_x64_portable.zip
 
   cli:
     strategy:

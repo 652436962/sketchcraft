@@ -52,6 +52,13 @@ fn sync(state: tauri::State<App>) -> bool {
     guarded(|| live.sync(), |_| false)
 }
 
+/// Running from the portable ZIP (a PORTABLE.txt beside the program)? Then
+/// updates are a new ZIP to download, not an installer.
+#[tauri::command]
+fn portable() -> bool {
+    std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("PORTABLE.txt").is_file())).unwrap_or(false)
+}
+
 /// Open the download page in the browser (for installs the updater can't
 /// replace, like a .deb or .rpm). The address is fixed, never from the page.
 #[tauri::command]
@@ -73,7 +80,7 @@ fn main() {
         // signed self-updates from GitHub Releases (see app/src/updater.tsx)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(App(Mutex::new(Live::open(default_doc()))))
-        .invoke_handler(tauri::generate_handler![exec, scene, sync, open_releases])
+        .invoke_handler(tauri::generate_handler![exec, scene, sync, open_releases, portable])
         .run(tauri::generate_context!())
         .expect("error while running SketchCraft");
 }

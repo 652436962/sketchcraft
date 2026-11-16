@@ -16,6 +16,9 @@ What changed in each SketchCraft release, newest first. The format follows
 - **Move a single corner.** With nothing selected, the Move tool grabs the
   corner under the cursor: its edges stretch as you go, and the faces around
   it fold to stay flat (as in SketchUp).
+- **Windows portable ZIP.** `SketchCraft_<version>_x64_portable.zip`: unzip
+  anywhere and open SketchCraft.exe, no installer. When a new version is out,
+  the portable copy links to the new ZIP instead of installing.
 
 ## [0.3.4] - 2026-11-15
 
