@@ -1,5 +1,8 @@
 # Writing a SketchCraft plugin
 
+(Have a SketchUp Ruby extension instead? Many run as they are: see
+[SketchUp Ruby scripts](dev/sketchup-ruby.md).)
+
 A plugin adds commands to SketchCraft. It's a folder with two files:
 
 ```

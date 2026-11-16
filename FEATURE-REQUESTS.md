@@ -34,15 +34,15 @@ buttons, forms and tools.
 | 4 | **Toolbar buttons**: a plugin command can have an icon and sit on the tool bar | Jason | 2026-11-16 | done | 2026-11-16 |
 | 5 | **Interactive tools**: a plugin can add a tool that gets clicks in the model (snapped points, the face under the cursor) and draws previews | Jason | 2026-11-16 | done | 2026-11-16 |
 | 6 | **Example plugins**: stairs generator (form), framing (tool), to show and test the API | Jason | 2026-11-16 | done (Shelves, Stud wall) | 2026-11-16 |
-| 7 | **SketchUp Ruby, a subset**: run .rb scripts and install .rbz files using the core of SketchUp's Ruby API (model, entities, add_face, add_line, pushpull, groups, materials, menus, input boxes) | rats4final (Reddit) | 2026-11-16 | todo | |
-| 8 | **Test with real free SketchUp scripts**, and document what works and what doesn't | Jason | 2026-11-16 | todo | |
+| 7 | **SketchUp Ruby, a subset**: run .rb scripts and install .rbz files using the core of SketchUp's Ruby API (model, entities, add_face, add_line, pushpull, groups, materials, menus, input boxes) | rats4final (Reddit) | 2026-11-16 | done | 2026-11-16 |
+| 8 | **Test with real free SketchUp scripts**, and document what works and what doesn't | Jason | 2026-11-16 | done | 2026-11-16 |
 
 ## Later
 
 | Feature | Asked by | Added | Status | Notes |
 | ------- | -------- | ----- | ------ | ----- |
 | SketchCraft Lite (Android) | RuliAvo25, Lasm998 (Reddit) | 2026-11-16 | later | Its own app; touch-first push/pull |
-| Running SketchUp's own Ruby plugins | rats4final (Reddit) | 2026-11-16 | later | Needs SketchUp's whole Ruby API; SketchCraft plugins (#5) come first |
+| More of SketchUp's Ruby API: mouse tools (Sketchup::Tool), HtmlDialog, observers, followme, textures | rats4final (Reddit) | 2026-11-16 | later | The geometry-building core runs (sprint 2, #7) |
 | Library of scale figures (people, cyclists, cars) for pathways | EuphoricPenguin22 (Reddit) | 2026-11-16 | later | Original art, traced from CC0 photos |
 | 2D drafting done right: a dimension style editor (arrows, text, units, precision) and fonts for text and tables, what people miss in CADCraft | Waste-Affect5021 (r/ArtCraftAI, about CADCraft) | 2026-11-16 | later | Start once plugins are stable (end of sprint 2) |
 

@@ -20,10 +20,21 @@ name in **Shift+S**.
 remove ones you added (they're moved aside, not deleted), and **Install from
 file…** to add a plugin someone sent you as a `.zip`.
 
+## SketchUp Ruby scripts
+
+Many SketchUp extensions that **build** things (stairs, framing, fences,
+shelves, houses) run in SketchCraft. Install the `.rbz` (or `.rb`) with
+**Install from file…**; its menu items appear in **File › Plugins**. Input boxes
+become SketchCraft forms, and what the script builds can be undone.
+
+Extensions that need SketchUp's own windows, mouse tools or files won't run
+yet; they stop with a message saying what's missing.
+[What works](../dev/sketchup-ruby.md).
+
 ## Are plugins safe?
 
 They run in a sandbox: no internet, no access to your files, and a minute at
-most. They can change your model, and **⌘Z** undoes that like anything else.
+most. SketchUp Ruby scripts run in the same sandbox. They can change your model, and **⌘Z** undoes that like anything else.
 
 ## Write your own
 

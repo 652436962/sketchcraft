@@ -14,6 +14,12 @@ What changed in each SketchCraft release, newest first. The format follows
 - **Plugin forms.** `ctx.ask()` shows a form (lengths in the model's units,
   numbers, text, choices, checkboxes) and returns the answers; time spent
   filling it in doesn't count toward the one-minute limit.
+- **SketchUp Ruby scripts.** Many SketchUp extensions that build things run
+  in SketchCraft: install a `.rbz` or `.rb` from the Plugins window and its
+  menu items appear in File › Plugins. Input boxes become forms, lengths are
+  SketchUp's inches, and what a script builds is undoable. It runs in the same
+  sandbox as other plugins; what isn't supported yet stops with a clear
+  message. See docs/dev/sketchup-ruby.md.
 - **Plugin tools.** A plugin can add an interactive tool: it gets snapped
   clicks and moves, draws previews, shows its hint, and keeps going until Esc.
 - **Framing** (a built-in example): the **Stud wall** tool. Click where a wall

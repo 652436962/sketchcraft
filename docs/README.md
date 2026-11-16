@@ -20,6 +20,7 @@ The [guide](guide/README.md), in ten short chapters:
 - [Scripting and the CLI](dev/scripting.md): every command
 - [AI agents over MCP](dev/mcp.md)
 - [Writing a plugin](PLUGINS.md)
+- [SketchUp Ruby scripts](dev/sketchup-ruby.md): what runs, and how
 - [Building, running and testing](dev/building.md)
 - [How SketchCraft is built](dev/architecture.md)
 - [The photoreal renderer](RENDERER.md)
