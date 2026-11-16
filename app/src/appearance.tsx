@@ -3,13 +3,16 @@
 // Customize Workspace dialog: which tools sit on the toolbar, where it docks,
 // which panels show.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ask } from "./ask";
 import { exec } from "./engine";
 import { Icons } from "./icons";
-import { isDark, readSkin, SKINS, TOKEN_LABELS, TOKENS, type Skin, type SkinToken } from "./skins";
+import { iconOk, isDark, readSkin, SKINS, TOKEN_LABELS, TOKENS, type Skin, type SkinToken } from "./skins";
 import type { Tool } from "./Viewport";
 import { TOOL_INFO, WORKSPACES, type Workspace, type WorkspaceEdits } from "./workspace";
+
+/** the tools an icon set can cover (its files are named after these) */
+const TOOL_NAMES = Object.keys(TOOL_INFO);
 
 function Mini({ s }: { s: Skin }) {
   const t = s.tokens;
@@ -52,11 +55,41 @@ export function AppearanceDialog({ current, onPick, onClose, onToast }: { curren
     setEditing(next);
     onPick(next, false);
   };
+  // an icon set: image files named after the tools (line.svg, push.png, ...)
+  const iconInput = useRef<HTMLInputElement>(null);
+  const [showNames, setShowNames] = useState(false);
+  const loadIcons = async (files: FileList | null) => {
+    if (!editing || !files?.length) return;
+    const icons: Record<string, string> = { ...(editing.icons ?? {}) };
+    const skipped: string[] = [];
+    for (const f of Array.from(files)) {
+      const tool = f.name.replace(/\.[^.]+$/, "").toLowerCase();
+      const url = await new Promise<string>((res) => {
+        const fr = new FileReader();
+        fr.onload = () => res(String(fr.result));
+        fr.onerror = () => res("");
+        fr.readAsDataURL(f);
+      });
+      if (TOOL_NAMES.includes(tool) && iconOk(url)) icons[tool] = url;
+      else skipped.push(f.name);
+    }
+    const next = { ...editing, id: "custom", icons };
+    setEditing(next);
+    onPick(next, false);
+    const n = Object.keys(icons).length;
+    onToast(`${n} tool icon${n === 1 ? "" : "s"} in this skin${skipped.length ? `. Skipped ${skipped.slice(0, 4).join(", ")}${skipped.length > 4 ? "…" : ""}: name each file after a tool (SVG, PNG, JPEG or WebP, up to 256 KB)` : ""}.`, skipped.length > 0);
+  };
+  const clearIcons = () => {
+    if (!editing) return;
+    const next = { ...editing, id: "custom", icons: undefined };
+    setEditing(next);
+    onPick(next, false);
+  };
   const save = async () => {
     if (!editing) return;
     const name = await ask("Name this skin", origin.startsWith("file:") ? editing.name : `My ${editing.name}`);
     if (!name) return;
-    const skin = { name, blurb: "Made in SketchCraft", dark: editing.dark, backdrop: editing.backdrop, tokens: editing.tokens };
+    const skin = { name, blurb: "Made in SketchCraft", dark: editing.dark, backdrop: editing.backdrop, tokens: editing.tokens, ...(editing.icons ? { icons: editing.icons } : {}) };
     const r = await exec({ cmd: "save_skin", name, skin });
     if (!r.ok) return onToast(r.error ?? "Couldn't save the skin", true);
     const saved = readSkin(skin, name)!;
@@ -130,6 +163,24 @@ export function AppearanceDialog({ current, onPick, onClose, onToast }: { curren
                 </label>
               )
             )}
+            <div className="skin-icons">
+              <span>
+                Tool icons{editing.icons ? `: ${Object.keys(editing.icons).length} of ${TOOL_NAMES.length} swapped` : ": built in"}
+              </span>
+              <input ref={iconInput} type="file" multiple accept="image/svg+xml,image/png,image/jpeg,image/webp" hidden onChange={(e) => (loadIcons(e.target.files), (e.target.value = ""))} />
+              <button className="btn small ghost" onClick={() => iconInput.current?.click()} title="Pick image files named after the tools: line.svg, push.png, ...">
+                Load icons…
+              </button>
+              {editing.icons && (
+                <button className="btn small ghost" onClick={clearIcons}>
+                  Clear icons
+                </button>
+              )}
+              <button className="btn small ghost" onClick={() => setShowNames((v) => !v)}>
+                {showNames ? "Hide" : "File names"}
+              </button>
+              {showNames && <p className="muted small skin-icon-names">Name each image after its tool: {TOOL_NAMES.map((t) => `${t}.svg`).join(", ")}. Any you leave out keep the built-in icon.</p>}
+            </div>
           </div>
         )}
         <div className="row gap" style={{ marginTop: 14 }}>

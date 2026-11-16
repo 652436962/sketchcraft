@@ -2464,8 +2464,8 @@ impl Engine {
                     let mut files: Vec<_> = rd.flatten().map(|e| e.path()).filter(|p| p.extension().and_then(|x| x.to_str()) == Some("sketchskin")).collect();
                     files.sort();
                     for p in files.into_iter().take(200) {
-                        // small JSON files only
-                        if std::fs::metadata(&p).map(|m| m.len() > 64 * 1024).unwrap_or(true) {
+                        // JSON files only, up to 4 MB (a skin can carry an icon set)
+                        if std::fs::metadata(&p).map(|m| m.len() > 4 << 20).unwrap_or(true) {
                             continue;
                         }
                         if let Some(skin) = std::fs::read_to_string(&p).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {

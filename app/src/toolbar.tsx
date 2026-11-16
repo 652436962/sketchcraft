@@ -4,11 +4,16 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Icons } from "./icons";
 import { TOOL_INFO } from "./workspace";
+import { skinIcon } from "./skins";
 
 type ToolId = keyof typeof TOOL_INFO;
 
 const info = (id: string) => TOOL_INFO[id as ToolId];
-const icon = (id: string) => Icons[id as keyof typeof Icons]?.();
+/** The tool's icon: the worn skin's own image if it has one, else the built-in. */
+const icon = (id: string) => {
+  const img = skinIcon(id);
+  return img ? <img className="skin-icon" src={img} alt="" draggable={false} /> : Icons[id as keyof typeof Icons]?.();
+};
 
 export function Toolbar({
   groups,

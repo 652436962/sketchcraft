@@ -3170,3 +3170,35 @@ input[type="color"]::-moz-color-swatch {
 .plugin-table tr:last-child td {
   border-bottom: 0;
 }
+
+/* a skin's own tool icons (images) */
+.tool .skin-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  pointer-events: none;
+}
+.more-list .skin-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+.skin-icons {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.skin-icons > span {
+  flex: 1;
+}
+.skin-icon-names {
+  flex-basis: 100%;
+  margin: 0;
+  line-height: 1.5;
+}

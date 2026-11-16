@@ -13,6 +13,18 @@ export interface Skin {
   tokens: Record<SkinToken, string>;
   /** a backdrop for the model that suits the skin (applied when you pick it) */
   backdrop?: "default" | "paper" | "blueprint" | "night";
+  /** tool icons it swaps in: tool name -> an image (data: URL, SVG or bitmap) */
+  icons?: Record<string, string>;
+}
+
+/** The icons the skin being worn swaps in (read by the tool bar). */
+let wornIcons: Record<string, string> = {};
+export const skinIcon = (tool: string): string | undefined => wornIcons[tool];
+
+/** An image data URL a skin may carry as an icon: SVG, PNG, JPEG or WebP, up to 256 KB.
+ * (Shown with <img>, so an SVG can't run anything.) */
+export function iconOk(v: unknown): v is string {
+  return typeof v === "string" && v.length <= 350_000 && /^data:image\/(svg\+xml|png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(v);
 }
 
 export const TOKENS = ["bg", "panel", "line", "line-strong", "text", "muted", "faint", "accent", "accent-soft", "accent-ink", "danger", "glass", "radius", "font"] as const;
@@ -114,6 +126,7 @@ export function applySkin(s: Skin) {
     if (k === "font" && v.includes('"Bricolage Grotesque"') && !v.includes("Bricolage Grotesque Variable")) v = v.replace('"Bricolage Grotesque"', '"Bricolage Grotesque Variable", "Bricolage Grotesque"');
     root.style.setProperty(`--${k}`, v);
   }
+  wornIcons = { ...(s.icons ?? {}) };
   root.dataset.skin = s.id;
   root.dataset.dark = s.dark ? "1" : "0";
   root.style.colorScheme = s.dark ? "dark" : "light";
@@ -139,7 +152,15 @@ export function readSkin(raw: unknown, fallbackName: string): Skin | null {
     dark: typeof r.dark === "boolean" ? r.dark : isDark(tokens.panel),
     tokens,
     backdrop: ["default", "paper", "blueprint", "night"].includes(r.backdrop as string) ? r.backdrop : undefined,
+    icons: readIcons((r as { icons?: unknown }).icons),
   };
+}
+
+function readIcons(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) if (/^[a-z][a-z0-9_]{0,30}$/i.test(k) && iconOk(v)) out[k] = v;
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** Rough lightness of a #rrggbb color (dark panels → dark skin). */

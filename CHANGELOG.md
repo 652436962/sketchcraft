@@ -30,6 +30,10 @@ What changed in each SketchCraft release, newest first. The format follows
 - **Cut list** (the first plugin). Lists the parts to cut, grouped by size and
   material, and roughly how many 4×8 sheets and 8 ft boards to buy. Copy the
   table or save it as CSV.
+- **Icons in skins.** A skin can bring its own tool icons: in the skin editor,
+  **Load icons…** takes image files named after the tools (line.svg,
+  push.png…; **File names** lists them). They're saved in the .sketchskin
+  file, so an icon set can be shared like any skin.
 
 ## [0.3.4] - 2026-11-15
 
