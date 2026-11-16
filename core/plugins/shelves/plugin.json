@@ -1,0 +1,9 @@
+{
+  "name": "Shelves",
+  "version": "1.0.0",
+  "author": "SketchCraft",
+  "description": "Builds a shelf unit from a few sizes, every board its own group (ready for Cut list).",
+  "commands": [
+    { "id": "shelves", "label": "Shelf unit…", "hint": "A bookcase from width, depth, height and shelves" }
+  ]
+}

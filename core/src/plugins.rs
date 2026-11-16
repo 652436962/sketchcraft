@@ -13,7 +13,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-const BUILTIN: &[(&str, &str, &str)] = &[("cutlist", include_str!("../plugins/cutlist/plugin.json"), include_str!("../plugins/cutlist/main.js"))];
+const BUILTIN: &[(&str, &str, &str)] = &[
+    ("cutlist", include_str!("../plugins/cutlist/plugin.json"), include_str!("../plugins/cutlist/main.js")),
+    ("shelves", include_str!("../plugins/shelves/plugin.json"), include_str!("../plugins/shelves/main.js")),
+];
 
 /// Where people put their own plugins.
 pub fn dir() -> PathBuf {

@@ -11,6 +11,11 @@ What changed in each SketchCraft release, newest first. The format follows
   plugin with its version and author, turn each on or off, remove yours
   (moved aside, so it can come back), and **Install from file…** for a .zip.
   Installs are checked: safe file names only, plugin files only, size limits.
+- **Plugin forms.** `ctx.ask()` shows a form (lengths in the model's units,
+  numbers, text, choices, checkboxes) and returns the answers; time spent
+  filling it in doesn't count toward the one-minute limit.
+- **Shelves** (a built-in example plugin): a shelf unit from width, depth,
+  height and shelf count, every board its own group, ready for Cut list.
 
 ## [0.3.5] - 2026-11-16
 

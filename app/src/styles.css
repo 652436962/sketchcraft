@@ -3354,3 +3354,15 @@ input[type="color"]::-moz-color-swatch {
 .plugins-dlg .row .btn {
   white-space: nowrap;
 }
+
+/* a plugin's form */
+.sheet.plugin-form {
+  width: min(460px, calc(100vw - 32px));
+}
+.plugin-fields {
+  row-gap: 8px;
+}
+.plugin-form .warn {
+  color: var(--danger);
+  margin: 8px 0 0;
+}

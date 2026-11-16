@@ -5,6 +5,7 @@ import { useRef, useState } from "react";
 import { confirm } from "./ask";
 import { exec, type Reply } from "./engine";
 import { pickSave } from "./files";
+import { formatLength, parseLength } from "./units";
 
 export interface PluginCommand {
   id: string;
@@ -32,6 +33,25 @@ export interface PluginResult {
   title?: string;
   text?: string;
   table?: { columns: string[]; rows: (string | number)[][] };
+}
+
+/** A form a plugin asks you to fill in (ctx.ask). Lengths are in meters. */
+export interface PluginForm {
+  title?: string;
+  text?: string;
+  ok?: string;
+  fields: PluginField[];
+}
+export interface PluginField {
+  id: string;
+  label: string;
+  /** "length" (typed in the model's units, answered in meters), "number", "text", "choice" or "check" */
+  type?: "length" | "number" | "text" | "choice" | "check";
+  value?: string | number | boolean;
+  options?: string[];
+  min?: number;
+  max?: number;
+  hint?: string;
 }
 
 export interface PluginList {
@@ -88,6 +108,7 @@ self.onmessage = async (e) => {
     units: m.units,
     run: (cmd) => new Promise((res) => { const rid = ++__rid; __waiting.set(rid, res); postMessage({ type: "exec", rid, cmd: JSON.parse(JSON.stringify(cmd)) }); }),
     show: (r) => postMessage({ type: "show", result: JSON.parse(JSON.stringify(r)) }),
+    ask: (form) => new Promise((res) => { const rid = ++__rid; __waiting.set(rid, res); postMessage({ type: "ask", rid, form: JSON.parse(JSON.stringify(form)) }); }),
     toast: (t) => postMessage({ type: "toast", text: String(t) }),
   });
   try { await fn(ctx); postMessage({ type: "done" }); }
@@ -107,6 +128,8 @@ export function runPlugin(
     run: (cmd: Record<string, unknown>) => Promise<Reply>;
     show: (r: PluginResult, plugin: Plugin) => void;
     toast: (text: string, bad?: boolean) => void;
+    /** show a form; the answers, or null if cancelled */
+    ask: (form: PluginForm, plugin: Plugin) => Promise<Record<string, unknown> | null>;
   },
 ): Promise<void> {
   return new Promise((resolve) => {
@@ -125,10 +148,15 @@ export function runPlugin(
       URL.revokeObjectURL(url);
       resolve();
     };
-    const timer = setTimeout(() => {
-      env.toast(`${plugin.name} took over a minute, so it was stopped.`, true);
-      finish();
-    }, LIMIT_MS);
+    // a minute of running (time spent filling in its forms doesn't count)
+    let timer = 0 as unknown as ReturnType<typeof setTimeout>;
+    const arm = () => {
+      timer = setTimeout(() => {
+        env.toast(`${plugin.name} took over a minute, so it was stopped.`, true);
+        finish();
+      }, LIMIT_MS);
+    };
+    arm();
     worker.onerror = (e) => {
       env.toast(`${plugin.name}: ${e.message || "it hit an error"}`, true);
       finish();
@@ -139,6 +167,11 @@ export function runPlugin(
         const why = allowed(m.cmd);
         const reply: Reply = why ? { ok: false, error: why } : await env.run(m.cmd);
         worker.postMessage({ type: "reply", rid: m.rid, reply });
+      } else if (m.type === "ask") {
+        clearTimeout(timer);
+        const answers = await env.ask(m.form as PluginForm, plugin);
+        arm();
+        worker.postMessage({ type: "reply", rid: m.rid, reply: answers });
       } else if (m.type === "show") env.show(m.result as PluginResult, plugin);
       else if (m.type === "toast") env.toast(String(m.text));
       else if (m.type === "error") {
@@ -311,6 +344,100 @@ export function PluginsDialog({ list, reload, onClose, onToast }: { list: Plugin
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** A length to put in a form field, without losing millimeters (0.018 m, not 0.02 m). */
+const exactLength = (m: number, units: string) => (units === "m" || !units ? `${+m.toFixed(4)} m` : formatLength(m, units));
+
+/** A plugin's form: fields from ctx.ask, answers back (lengths in meters). */
+export function PluginFormDialog({ form, plugin, units, done }: { form: PluginForm; plugin: Plugin; units: string; done: (answers: Record<string, unknown> | null) => void }) {
+  const fields = (form.fields ?? []).filter((f) => f && typeof f.id === "string").slice(0, 40);
+  const [vals, setVals] = useState<Record<string, string | boolean>>(() =>
+    Object.fromEntries(
+      fields.map((f) => [
+        f.id,
+        f.type === "check" ? !!f.value : f.type === "length" && typeof f.value === "number" ? exactLength(f.value, units) : f.type === "choice" ? String(f.value ?? f.options?.[0] ?? "") : String(f.value ?? ""),
+      ]),
+    ),
+  );
+  const [bad, setBad] = useState<string | null>(null);
+  const submit = () => {
+    const out: Record<string, unknown> = {};
+    for (const f of fields) {
+      const v = vals[f.id];
+      if (f.type === "check") out[f.id] = !!v;
+      else if (f.type === "length" || f.type === "number") {
+        const n = f.type === "length" ? parseLength(String(v), units) : Number(String(v).trim());
+        if (!Number.isFinite(n)) return setBad(`${f.label}: type a ${f.type === "length" ? "length" : "number"}`);
+        if (f.min != null && n < f.min) return setBad(`${f.label}: at least ${f.type === "length" ? formatLength(f.min, units) : f.min}`);
+        if (f.max != null && n > f.max) return setBad(`${f.label}: at most ${f.type === "length" ? formatLength(f.max, units) : f.max}`);
+        out[f.id] = n;
+      } else out[f.id] = String(v);
+    }
+    done(out);
+  };
+  return (
+    <div className="sheet-backdrop" onClick={() => done(null)}>
+      <form
+        className="sheet plugin-form"
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+        onKeyDown={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label={form.title ?? plugin.name}
+      >
+        <div className="sheet-head">
+          <b>{form.title ?? plugin.name}</b>
+          <span className="muted">{plugin.builtin ? "Built-in plugin" : `Plugin: ${plugin.name}`}</span>
+        </div>
+        {form.text && <p className="plugin-text">{form.text}</p>}
+        <div className="kv plugin-fields">
+          {fields.map((f) =>
+            f.type === "check" ? (
+              <label key={f.id} className="field check" style={{ gridColumn: "1 / -1" }} title={f.hint}>
+                <input type="checkbox" checked={!!vals[f.id]} onChange={(e) => setVals((v) => ({ ...v, [f.id]: e.target.checked }))} />
+                <span>{f.label}</span>
+              </label>
+            ) : (
+              <label key={f.id} className="plugin-field" title={f.hint} style={{ display: "contents" }}>
+                <span>{f.label}</span>
+                {f.type === "choice" ? (
+                  <select value={String(vals[f.id])} onChange={(e) => setVals((v) => ({ ...v, [f.id]: e.target.value }))}>
+                    {(f.options ?? []).map((o) => (
+                      <option key={o} value={o}>
+                        {o}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    inputMode={f.type === "number" ? "decimal" : undefined}
+                    value={String(vals[f.id])}
+                    placeholder={f.type === "length" ? `e.g. ${exactLength(1, units)}` : undefined}
+                    onChange={(e) => setVals((v) => ({ ...v, [f.id]: e.target.value }))}
+                  />
+                )}
+              </label>
+            ),
+          )}
+        </div>
+        {bad && <p className="small warn">{bad}</p>}
+        <div className="row gap" style={{ marginTop: 14 }}>
+          <span style={{ flex: 1 }} />
+          <button type="button" className="btn small ghost" onClick={() => done(null)}>
+            Cancel
+          </button>
+          <button type="submit" className="btn small primary">
+            {form.ok ?? "OK"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

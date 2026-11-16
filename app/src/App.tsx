@@ -16,7 +16,7 @@ import { TOOL_INFO, WORKSPACES, withEdits, type WorkspaceEdits, type WorkspaceId
 import { AppearanceDialog, WorkspaceDialog } from "./appearance";
 import { WorkspaceStrip } from "./wsstrip";
 import { Toolbar } from "./toolbar";
-import { loadPlugins, PluginResultDialog, PluginsDialog, runPlugin, type Plugin, type PluginList, type PluginResult } from "./plugins";
+import { loadPlugins, PluginFormDialog, PluginResultDialog, PluginsDialog, runPlugin, type Plugin, type PluginForm, type PluginList, type PluginResult } from "./plugins";
 import { PhotoModeler } from "./photomodel";
 import { RefImageDialog } from "./refimage";
 import { Text3dDialog } from "./text3d";
@@ -279,6 +279,7 @@ export default function App() {
   const [plugins, setPlugins] = useState<PluginList>({ dir: "", plugins: [], problems: [] });
   const [pluginShown, setPluginShown] = useState<{ result: PluginResult; plugin: Plugin } | null>(null);
   const [showPlugins, setShowPlugins] = useState(false);
+  const [pluginForm, setPluginForm] = useState<{ form: PluginForm; plugin: Plugin; done: (a: Record<string, unknown> | null) => void } | null>(null);
   const reloadPlugins = () => loadPlugins().then(setPlugins, () => {});
   // plugins that are on
   const livePlugins = plugins.plugins.filter((p) => p.enabled !== false);
@@ -636,6 +637,17 @@ export default function App() {
       run: (cmd) => run(cmd),
       show: (result, pl) => setPluginShown({ result, plugin: pl }),
       toast: (t, bad) => say(t, bad),
+      ask: (form, pl) =>
+        new Promise((resolve) =>
+          setPluginForm({
+            form,
+            plugin: pl,
+            done: (a) => {
+              setPluginForm(null);
+              resolve(a);
+            },
+          }),
+        ),
     });
 
   const file = {
@@ -1144,6 +1156,7 @@ export default function App() {
         {showRef && scene && <RefImageDialog scene={scene} run={run} onClose={() => setShowRef(false)} onToast={say} />}
         {showPhotoModel && scene && <PhotoModeler scene={scene} run={run} onClose={() => setShowPhotoModel(false)} onToast={say} />}
         {showSkins && <AppearanceDialog current={skin} onPick={wearSkin} onClose={() => setShowSkins(false)} onToast={say} layout={layout} onLayout={setLayout} />}
+        {pluginForm && <PluginFormDialog form={pluginForm.form} plugin={pluginForm.plugin} units={scene?.units || "m"} done={pluginForm.done} />}
         {showPlugins && <PluginsDialog list={plugins} reload={reloadPlugins} onClose={() => setShowPlugins(false)} onToast={say} />}
         {pluginShown && <PluginResultDialog result={pluginShown.result} plugin={pluginShown.plugin} onClose={() => setPluginShown(null)} onToast={say} />}
         {showWs && <WorkspaceDialog ws={ws} onChange={editWs} onReset={() => editWs(null)} onClose={() => setShowWs(false)} />}
