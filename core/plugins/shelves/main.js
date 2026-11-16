@@ -5,7 +5,7 @@
 sketchcraft.command("shelves", async (ctx) => {
   const a = await ctx.ask({
     title: "Shelf unit",
-    text: "Two sides, a top and bottom, shelves spaced evenly between, and an optional back. Built at the origin.",
+    text: "Two sides, a top and bottom, shelves spaced evenly between, and an optional back. Built 1 m to the right of the origin, beside the scale figure.",
     ok: "Build",
     fields: [
       { id: "width", label: "Width", type: "length", value: 0.8, min: 0.2, max: 4 },
@@ -22,8 +22,11 @@ sketchcraft.command("shelves", async (ctx) => {
   const n = Math.round(a.shelves);
   if (W <= 2 * T) return ctx.toast("The unit is too narrow for its boards.");
 
-  // a board: a box from corner a to corner b, as its own group
+  // a board: a box from corner a to corner b, as its own group (1 m along red)
+  const X = 1;
   const board = async (name, [x0, y0, z0], [x1, y1, z1]) => {
+    x0 += X;
+    x1 += X;
     await ctx.run({ cmd: "begin_group", name });
     const f = await ctx.run({ cmd: "polygon", points: [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0]] });
     if (f.ok) await ctx.run({ cmd: "pushpull", face: f.face, distance: z1 - z0 });

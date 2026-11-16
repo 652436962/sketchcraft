@@ -101,6 +101,10 @@ export async function runJsonl(file) {
  *   await h.click(locator)                   ring where it clicks, then the result
  *   await h.clickAt(x, y)                    same, at a point
  *   await h.shot(ms)                         a frame held for ms
+ *   await h.at([x, y, z])                    where a model point is on screen
+ *   await h.glide(x, y, { frames })          move the mouse there, filmed
+ *   await h.type('2.6')                      type (into the Value box), Enter
+ *   await h.key('p', 'Push/Pull')            press a key, with a key badge
  */
 export function recorder(page, dir) {
   let n = 0;
@@ -149,12 +153,61 @@ export function recorder(page, dir) {
       await settle();
       await shot(after);
     },
+    /** A model point (meters) on screen, from the live camera (dev builds). */
+    async at(p) {
+      return page.evaluate((w) => {
+        const T = window.__sketchcraftView.current;
+        const v = T.camera.position.clone().set(w[0], w[1], w[2]).project(T.camera);
+        const r = T.renderer.domElement.getBoundingClientRect();
+        return [r.left + (v.x * 0.5 + 0.5) * r.width, r.top + (-v.y * 0.5 + 0.5) * r.height];
+      }, p);
+    },
+    /** Move the mouse to (x, y) in steps, a frame every step: a live preview. */
+    async glide(x, y, { frames = 10, ms = 70, from } = {}) {
+      const start = from ?? (await page.evaluate(() => window.__demoMouse ?? [0, 0]));
+      for (let i = 1; i <= frames; i++) {
+        const k = i / frames;
+        const px = start[0] + (x - start[0]) * k, py = start[1] + (y - start[1]) * k;
+        await page.mouse.move(px, py);
+        await page.evaluate((p) => (window.__demoMouse = p), [px, py]);
+        await page.waitForTimeout(25);
+        await shot(ms);
+      }
+    },
+    /** Type into whatever has the keyboard (the Value box while a tool runs), then Enter. */
+    async type(text, { enter = true, after = 900 } = {}) {
+      for (const ch of text) {
+        await page.keyboard.type(ch);
+        await shot(110);
+      }
+      if (enter) await page.keyboard.press('Enter');
+      await settle();
+      await shot(after);
+    },
+    /** Press a key, showing it as a badge so viewers see the shortcut. */
+    async key(k, label, { after = 700 } = {}) {
+      await overlay(
+        ({ k, label }) => {
+          const b = document.createElement('div');
+          b.className = 'demo-key';
+          b.textContent = label ? `${k.toUpperCase()} · ${label}` : k.toUpperCase();
+          Object.assign(b.style, { position: 'fixed', right: '24px', top: '64px', padding: '6px 12px', borderRadius: '8px', background: 'rgba(21,19,28,.88)', color: '#fff', font: '700 15px/1.2 -apple-system, system-ui, sans-serif', zIndex: 2147483647, pointerEvents: 'none' });
+          document.body.appendChild(b);
+        },
+        { k, label },
+      );
+      await page.keyboard.press(k);
+      await settle(250);
+      await shot(after);
+      await overlay(() => document.querySelectorAll('.demo-key').forEach((e) => e.remove()));
+    },
     async clickAt(x, y, { hold = 500, after = 600, dbl = false } = {}) {
       await ring({ x, y });
       await shot(hold);
       await clearRing();
       if (dbl) await page.mouse.dblclick(x, y);
       else await page.mouse.click(x, y);
+      await page.evaluate((p) => (window.__demoMouse = p), [x, y]);
       await settle(300);
       await shot(after);
     },

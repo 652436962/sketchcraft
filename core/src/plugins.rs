@@ -230,7 +230,8 @@ pub fn parts(m: &Model, ids: &[Id]) -> Vec<Value> {
     let wanted: Vec<Id> = if ids.is_empty() {
         // every group with nothing grouped inside it, and every component
         let mut v: Vec<Id> = m.groups.iter().filter(|(id, g)| !g.hidden && !m.groups.values().any(|o| o.parent == Some(**id))).map(|(id, _)| *id).collect();
-        v.extend(m.instances.iter().filter(|(_, i)| !i.hidden).map(|(id, _)| *id));
+        // components, but not scale figures (flat people aren't parts)
+        v.extend(m.instances.iter().filter(|(_, i)| !i.hidden && !m.definitions.get(&i.def).is_some_and(|d| d.face_me)).map(|(id, _)| *id));
         v
     } else {
         ids.to_vec()
@@ -284,6 +285,9 @@ pub fn parts(m: &Model, ids: &[Id]) -> Vec<Value> {
             }
             let mut size = [hi.x - lo.x, hi.y - lo.y, hi.z - lo.z];
             size.sort_by(|a, b| b.total_cmp(a));
+            if size[2] < 1e-4 {
+                return None; // flat: a drawing or a figure, not something to cut
+            }
             // the material most of its faces wear
             let mut count: BTreeMap<String, usize> = BTreeMap::new();
             for (.., mat, col) in &faces {

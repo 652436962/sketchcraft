@@ -72,3 +72,15 @@ export async function studioStool() {
   await exec({ cmd: 'paint', ids: [g], material: 'Red lacquer' });
   await exec({ cmd: 'environment', kind: 'studio' });
 }
+
+/** A new, empty model with the person standing at the origin. */
+export async function blank() {
+  await exec({ cmd: 'new', figure: 'person' });
+}
+
+/** A 4 x 3 x 2.6 m box, nothing else. */
+export async function plainBox() {
+  await exec({ cmd: 'new' });
+  const r = await exec({ cmd: 'rect', from: [0, 0, 0], to: [4, 3, 0] });
+  await exec({ cmd: 'pushpull', face: r.face, distance: 2.6 });
+}

@@ -1,0 +1,67 @@
+# Building, running and testing
+
+## You need
+
+- Rust (stable)
+- Node.js 22
+- On Linux, the Tauri system packages (WebKitGTK and friends); see the
+  [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
+
+## Build
+
+```sh
+cargo build --release -p sketchcraft-core      # the engine and CLI: target/release/sketchcraft
+cd app && npm ci && npm run tauri build         # the desktop app and its installers
+```
+
+## Develop the app in a browser
+
+The quickest loop: the engine as a local bridge, the interface from Vite.
+
+```sh
+cargo build --release && ./target/release/sketchcraft bridge   # 127.0.0.1:5175
+cd app && npm run dev                                          # 127.0.0.1:5174
+```
+
+Open http://127.0.0.1:5174. Both listen on localhost only. After changing the
+engine, rebuild and restart the bridge. Dev builds expose the tool state as
+`window.__sketchcraft` and the view as `window.__sketchcraftView` for debugging.
+
+## Tests
+
+```sh
+cargo test --release -p sketchcraft-core    # modeling, importers (fuzzed), plugins
+cd app && npx tsc --noEmit -p .             # the interface's types
+```
+
+The importers are fuzzed (`core/tests/fuzz.rs`): thousands of corrupted files
+each, no panics, with parse deadlines.
+
+## Demo GIFs
+
+The GIFs in the docs and the in-app Learn center are recorded from the real
+app, so they stay true:
+
+```sh
+node tools/demos/capture.mjs --list          # what there is
+node tools/demos/capture.mjs all             # record every one
+node tools/demos/capture.mjs first-model     # or some
+```
+
+Each demo is a short script in `tools/demos/demos/`: a starting model, then
+clicks, keys and captions. It writes `docs/demos/<name>.gif` and `.mp4`, and
+`app/public/learn/<name>.gif` plus `demos.json` for the Learn center.
+
+## Releasing
+
+Bump the version in `core/Cargo.toml`, `app/src-tauri/Cargo.toml`,
+`app/src-tauri/tauri.conf.json` and `app/package.json`, move the CHANGELOG's
+Unreleased notes under the new version, then tag:
+
+```sh
+git tag -a v0.3.6 -m "SketchCraft 0.3.6" && git push origin v0.3.6
+```
+
+The Release workflow builds every installer, the portable Windows ZIP and the
+CLI into a draft release, with signed update files (`latest.json`). Publish the
+draft and installed copies offer the update. Signing: [SIGNING.md](../SIGNING.md).

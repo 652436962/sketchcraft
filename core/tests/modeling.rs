@@ -1265,6 +1265,8 @@ fn parts_measure_boards_along_their_faces_and_plugins_list() {
     run(&mut e, json!({"cmd":"rotate","ids":[g],"center":[0,0,0],"axis":[0,0,1],"angle":30}));
     run(&mut e, json!({"cmd":"rotate","ids":[g],"center":[0,0,0],"axis":[1,0,0],"angle":90}));
     box_group(&mut e, [3.0, 0.0, 0.0], [3.038, 0.089, 2.0], "Post");
+    // a scale figure isn't a part
+    run(&mut e, json!({"cmd":"insert","asset":"person","at":[5,0,0]}));
     let r = run(&mut e, json!({"cmd":"parts"}));
     let parts = r["parts"].as_array().unwrap();
     assert_eq!(parts.len(), 2);

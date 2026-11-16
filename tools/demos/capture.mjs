@@ -39,11 +39,17 @@ try {
     const t0 = Date.now();
     await d.setup();
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 760 }, deviceScaleFactor: 1 });
-    // the same starting look every time: Workshop skin, Model workspace
+    // the same starting look every time: what a new user sees (the Classic
+    // theme and layout), Model workspace, the on-screen coach off
     await ctx.addInitScript((ws) => {
       try {
-        localStorage.setItem('sketchcraft.skin', 'workshop');
+        if (sessionStorage.getItem('demo-started')) return; // keep changes a demo makes
+        sessionStorage.setItem('demo-started', '1');
+        localStorage.setItem('sketchcraft.skin', 'classic');
         localStorage.removeItem('sketchcraft.skinData');
+        localStorage.setItem('sketchcraft.layout', 'classic');
+        localStorage.setItem('sketchcraft.help', 'off');
+        localStorage.setItem('sketchcraft.figure', 'person');
         localStorage.setItem('sketchcraft.workspace', ws);
         localStorage.removeItem('sketchcraft.workspaceEdits');
       } catch {
