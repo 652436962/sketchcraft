@@ -13,6 +13,7 @@
 use sketchcraft::live::{default_doc, Live};
 use serde_json::Value;
 use std::sync::Mutex;
+use tauri::Manager;
 
 struct App(Mutex<Live>);
 
@@ -135,6 +136,17 @@ fn main() {
         // (and only newer than this copy, from the matching release: see release_files_ok)
         .plugin(tauri_plugin_updater::Builder::new().default_version_comparator(|current, release| release.version > current && release_files_ok(&release)).build())
         .manage(App(Mutex::new(Live::open(default_doc()))))
+        .setup(|app| {
+            // closes a plugin run nobody ended (the 150 s limit) and saves it, even when the page is silent
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                let state = handle.state::<App>();
+                let mut live = engine(&state);
+                guarded(|| live.housekeeping(), |_| ());
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![exec, scene, sync, open_releases, portable, open_guide])
         .run(tauri::generate_context!())
         .expect("error while running SketchCraft");
