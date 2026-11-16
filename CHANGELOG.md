@@ -36,6 +36,11 @@ What changed in each SketchCraft release, newest first. The format follows
   file, so an icon set can be shared like any skin.
 
 ### Changed
+- **Classic is the new default.** New installs start in the Classic skin
+  (neutral greys, a blue accent) with the tool bars docked above the model,
+  at home for SketchUp users. SketchCraft's own Workshop look and floating
+  tool bars, and every other skin, are in the skin gallery; picking a skin
+  brings its layout. Your current skin is kept.
 - The Skins button at the top right says **Skins** (the brush alone looked
   like a pencil).
 

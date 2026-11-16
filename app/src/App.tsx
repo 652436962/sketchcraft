@@ -216,10 +216,27 @@ export default function App() {
     store.set("sketchcraft.skin", s.id);
     store.set("sketchcraft.skinData", JSON.stringify(s));
     if (useBackdrop) setStyles((st) => ({ ...st, background: s.backdrop ?? "default" }));
+    // picked from the gallery: it brings its layout (Classic docks, ours float)
+    if (useBackdrop && s.layout) setLayout(s.layout);
   };
   const [wsId, setWsId] = useState<WorkspaceId>(() => (WORKSPACES.some((w) => w.id === store.get("sketchcraft.workspace")) ? (store.get("sketchcraft.workspace") as WorkspaceId) : "model"));
   const [wsEdits, setWsEdits] = useState(rememberedEdits);
-  const ws = withEdits(WORKSPACES.find((w) => w.id === wsId)!, wsEdits[wsId]);
+  // classic (docked, SketchUp-like, the default) or floating (SketchCraft's own)
+  const [layout, setLayoutState] = useState<"classic" | "floating">(() => {
+    const v = store.get("sketchcraft.layout");
+    return v === "classic" || v === "floating" ? v : (rememberedSkin().layout ?? "classic");
+  });
+  const setLayout = (l: "classic" | "floating") => {
+    setLayoutState(l);
+    store.set("sketchcraft.layout", l);
+    // the layout applies everywhere: drop per-workspace tool bar placements
+    setWsEdits((all) => {
+      const next = Object.fromEntries(Object.entries(all).map(([k, v]) => [k, v ? (({ dock: _d, ...rest }) => rest)(v) : v]));
+      store.set("sketchcraft.workspaceEdits", JSON.stringify(next));
+      return next;
+    });
+  };
+  const ws = withEdits(WORKSPACES.find((w) => w.id === wsId)!, wsEdits[wsId], layout);
   const editWs = (e: WorkspaceEdits | null) => {
     const next = { ...wsEdits };
     if (e) next[wsId] = { ...next[wsId], ...e };
@@ -731,8 +748,8 @@ export default function App() {
       ...plugins.plugins.flatMap((pl) => pl.commands.map((c) => ({ label: c.label, hint: `Plugin · ${c.hint ?? pl.name}`, run: () => void runPluginCommand(pl, c.id) }))),
       {
         label: ws.dock === "classic" ? "Floating layout" : "Classic layout",
-        hint: ws.dock === "classic" ? "Tool bar floating over the model again" : "Tool bars docked above the model, like SketchUp",
-        run: () => editWs({ dock: ws.dock === "classic" ? "bottom" : "classic" }),
+        hint: ws.dock === "classic" ? "SketchCraft's floating tool bars" : "Tool bars docked above the model, like SketchUp",
+        run: () => setLayout(ws.dock === "classic" ? "floating" : "classic"),
       },
       { label: "Keyboard shortcuts", hint: "Help", key: "?", run: () => setShowKeys(true) },
       ...(inTauri ? [{ label: "Check for updates…", hint: "Help", run: checkForUpdatesNow }] : []),

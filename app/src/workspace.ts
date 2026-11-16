@@ -119,6 +119,9 @@ export const WORKSPACES: Workspace[] = [
 /** your changes to a workspace (only what differs) */
 export type WorkspaceEdits = Partial<Pick<Workspace, "tools" | "showLeft" | "showRight" | "dock" | "leftTab">>;
 
-export function withEdits(w: Workspace, e: WorkspaceEdits | undefined): Workspace {
-  return e ? { ...w, ...e } : w;
+/** A workspace with your changes. `layout` "classic" docks every workspace's
+ * tool bar above the model unless you chose otherwise for that workspace. */
+export function withEdits(w: Workspace, e: WorkspaceEdits | undefined, layout: "classic" | "floating" = "floating"): Workspace {
+  const base = layout === "classic" ? { ...w, dock: "classic" as Dock } : w;
+  return e ? { ...base, ...e } : base;
 }

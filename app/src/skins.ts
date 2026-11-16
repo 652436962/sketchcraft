@@ -13,6 +13,9 @@ export interface Skin {
   tokens: Record<SkinToken, string>;
   /** a backdrop for the model that suits the skin (applied when you pick it) */
   backdrop?: "default" | "paper" | "blueprint" | "night";
+  /** the layout it comes with when picked from the gallery: "classic" (tool
+   * bars docked above the model, like SketchUp) or "floating" (SketchCraft's own) */
+  layout?: "classic" | "floating";
   /** tool icons it swaps in: tool name -> an image (data: URL, SVG or bitmap) */
   icons?: Record<string, string>;
 }
@@ -55,11 +58,20 @@ const BRICOLAGE = `"Bricolage Grotesque Variable", "Bricolage Grotesque", "Aveni
 
 export const SKINS: Skin[] = [
   {
+    id: "classic",
+    name: "Classic",
+    blurb: "Neutral greys, a blue accent and docked tool bars: at home if you know SketchUp. The default.",
+    dark: false,
+    tokens: { bg: "#ececec", panel: "#f7f7f7", line: "#dcdcdc", "line-strong": "#c2c2c2", text: "#1f1f1f", muted: "#575757", faint: "#999999", accent: "#1e6fd9", "accent-soft": "#e2edfb", "accent-ink": "#1557ad", danger: "#d23c3c", glass: "rgba(247,247,247,0.97)", radius: "4px", font: SYSTEM },
+    layout: "classic",
+  },
+  {
     id: "workshop",
     name: "Workshop",
-    blurb: "SketchCraft's own: drafting paper, ink and beaver violet. The default.",
+    blurb: "SketchCraft's own: drafting paper, ink and beaver violet, with floating tool bars.",
     dark: false,
     tokens: { bg: "#f6f1e4", panel: "#fffdf7", line: "#e9e1cc", "line-strong": "#d8cfb8", text: "#15131c", muted: "#4b4658", faint: "#958d7a", accent: "#6f4df0", "accent-soft": "#ece6ff", "accent-ink": "#4a2fc4", danger: "#c8372d", glass: "rgba(255,253,247,0.95)", radius: "10px", font: BRICOLAGE },
+    layout: "floating",
   },
   {
     id: "studio",
@@ -67,6 +79,7 @@ export const SKINS: Skin[] = [
     blurb: "Light, cool and roomy.",
     dark: false,
     tokens: { bg: "#f3f4f8", panel: "#ffffff", line: "#e7e8ef", "line-strong": "#d9dbe5", text: "#1d1e24", muted: "#6c6f7d", faint: "#a3a6b4", accent: "#6b5cff", "accent-soft": "#efedff", "accent-ink": "#4a3df0", danger: "#e5484d", glass: "rgba(255,255,255,0.94)", radius: "10px", font: SYSTEM },
+    layout: "floating",
   },
   {
     id: "midnight",
@@ -74,6 +87,7 @@ export const SKINS: Skin[] = [
     blurb: "Dark panels, easy on the eyes at night.",
     dark: true,
     tokens: { bg: "#14151a", panel: "#1c1d23", line: "#2a2c34", "line-strong": "#363945", text: "#e8e9ee", muted: "#9a9dab", faint: "#5f6270", accent: "#8b7fff", "accent-soft": "#2a2648", "accent-ink": "#b4abff", danger: "#ff6369", glass: "rgba(28,29,35,0.94)", radius: "10px", font: SYSTEM },
+    layout: "floating",
     backdrop: "night",
   },
   {
@@ -82,6 +96,7 @@ export const SKINS: Skin[] = [
     blurb: "Drafting-room blue, white linework, mono type.",
     dark: true,
     tokens: { bg: "#173a6b", panel: "#1e4a85", line: "#2f5f9e", "line-strong": "#4a78b5", text: "#f2f6ff", muted: "#b9cbe8", faint: "#7f9cc8", accent: "#ffffff", "accent-soft": "#2b5a98", "accent-ink": "#ffffff", danger: "#ff8a8a", glass: "rgba(30,74,133,0.95)", radius: "2px", font: MONO },
+    layout: "floating",
     backdrop: "blueprint",
   },
   {
@@ -90,6 +105,7 @@ export const SKINS: Skin[] = [
     blurb: "Warm paper and ink, square corners.",
     dark: false,
     tokens: { bg: "#ece6d8", panel: "#f8f4ea", line: "#ddd4c0", "line-strong": "#c9bea6", text: "#2b2721", muted: "#6f6656", faint: "#a89e8a", accent: "#b5532f", "accent-soft": "#f3e2d6", "accent-ink": "#8e3d1f", danger: "#b3261e", glass: "rgba(248,244,234,0.95)", radius: "3px", font: `Georgia, "Iowan Old Style", serif` },
+    layout: "floating",
     backdrop: "paper",
   },
   {
@@ -98,6 +114,7 @@ export const SKINS: Skin[] = [
     blurb: "Brushed metal, bevelled buttons and a green LCD. Turn it up.",
     dark: true,
     tokens: { bg: "#23262d", panel: "#2e323b", line: "#1a1c21", "line-strong": "#4a5060", text: "#d8dde6", muted: "#9aa3b2", faint: "#6a7180", accent: "#39ff6a", "accent-soft": "#1d3a25", "accent-ink": "#39ff6a", danger: "#ff5050", glass: "rgba(46,50,59,0.97)", radius: "0px", font: `"Tahoma", "Verdana", ${SYSTEM}` },
+    layout: "floating",
     backdrop: "night",
   },
   {
@@ -106,6 +123,7 @@ export const SKINS: Skin[] = [
     blurb: "Midnight purple with neon pink and cyan.",
     dark: true,
     tokens: { bg: "#160b2e", panel: "#20123f", line: "#33205c", "line-strong": "#4b3080", text: "#f6e9ff", muted: "#c2a8e8", faint: "#7d64a8", accent: "#ff3fb4", "accent-soft": "#3d1550", "accent-ink": "#5ef2ff", danger: "#ff5c7a", glass: "rgba(32,18,63,0.95)", radius: "12px", font: SYSTEM },
+    layout: "floating",
     backdrop: "night",
   },
   {
@@ -114,6 +132,7 @@ export const SKINS: Skin[] = [
     blurb: "Black on white, strong borders, nothing faint.",
     dark: false,
     tokens: { bg: "#ffffff", panel: "#ffffff", line: "#000000", "line-strong": "#000000", text: "#000000", muted: "#1a1a1a", faint: "#333333", accent: "#0040ff", "accent-soft": "#dfe6ff", "accent-ink": "#0030c0", danger: "#c00000", glass: "rgba(255,255,255,1)", radius: "4px", font: SYSTEM },
+    layout: "floating",
   },
 ];
 
