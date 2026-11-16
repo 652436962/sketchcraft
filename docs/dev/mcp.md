@@ -33,9 +33,16 @@ in an imported file can read like instructions). So an agent gets less than the
 person at the keyboard:
 
 - modeling, inspection and rendering, and file import/export, but only **inside
-  a workspace folder**: the model's folder by default, `--workspace DIR` to
-  choose another, `--any-path` to lift the limit. Relative paths start there;
-  hidden files, `Backups/` and `Plugins/` are off limits;
+  a workspace folder**: the folder of the `--doc` model file, or `--workspace DIR`
+  to choose another (`--any-path` lifts the limit). There is no fallback to the
+  current folder: with neither flag the server won't start, and a home folder or
+  drive root is refused. Relative paths start in the workspace; hidden files,
+  `Backups/` and `Plugins/` are off limits;
+- it writes files with the right extension for the command (`.obj` for
+  `export_obj`, `.png` for `save_image`, and so on), and never replaces a file it
+  didn't make itself in that session: it writes new file names. `save_image`
+  only writes images it can decode. The library an agent uses is `Library/` in
+  its workspace;
 - never: installing, enabling or removing plugins, `save_text` (writing any text
   to any file), `reveal`, `skins`, `video_frame`/`video_finish`;
 - numbers outside +/-1e9, over-long strings and URL or pipe paths are refused

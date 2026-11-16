@@ -53,17 +53,51 @@ pub enum Caller {
 #[derive(Clone, Debug)]
 pub struct Workspace {
     pub root: Option<PathBuf>,
+    /// files this agent created in this session: the only existing files it may write again
+    made: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<PathBuf>>>,
 }
 
 impl Workspace {
     pub fn at(dir: impl AsRef<Path>) -> Self {
         let d = dir.as_ref();
-        Workspace { root: Some(std::fs::canonicalize(d).unwrap_or_else(|_| lexical(d))) }
+        Workspace { root: Some(std::fs::canonicalize(d).unwrap_or_else(|_| lexical(d))), made: Default::default() }
     }
     pub fn anywhere() -> Self {
-        Workspace { root: None }
+        Workspace { root: None, made: Default::default() }
+    }
+    /// A folder an agent shouldn't be handed whole: the filesystem root, a drive root, or a home folder.
+    pub fn too_wide(&self) -> bool {
+        let Some(root) = &self.root else { return false };
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(|h| std::fs::canonicalize(&h).unwrap_or_else(|_| PathBuf::from(h)));
+        root.parent().is_none() || root.components().count() <= 1 || home.as_ref().is_some_and(|h| h == root)
     }
 }
+
+/// What an agent may write, command by command: the key that names the file and the
+/// extensions it must have. An agent never creates `build.sh`, `.command` or a
+/// `package.json` this way, and never replaces a file it didn't make itself.
+const WRITES: &[(&str, &str, &[&str])] = &[
+    ("save", "path", &["sketchcraft"]),
+    ("export_obj", "path", &["obj"]),
+    ("export_glb", "path", &["glb"]),
+    ("export_stl", "path", &["stl"]),
+    ("export_dae", "path", &["dae"]),
+    ("export_dxf", "path", &["dxf"]),
+    ("export_dwg", "path", &["dwg"]),
+    ("export_pdf", "path", &["pdf"]),
+    ("export_ifc", "path", &["ifc", "ifczip"]),
+    ("save_image", "path", &["png"]),
+    ("render", "out", &["png", "jpg", "jpeg"]),
+    ("photoreal", "out", &["png", "jpg", "jpeg"]),
+    ("animate", "path", &["mp4", "mov", "gif"]),
+    ("sheets", "path", &["pdf"]),
+    ("blueprint", "path", &["pdf"]),
+    ("report", "path", &["csv"]),
+    ("section", "path", &["svg", "dxf"]),
+];
+
+/// Commands that use the library folder when no `dir` is given.
+const LIBRARY: [&str; 3] = ["library", "save_to_library", "library_add"];
 
 /// Commands that only change or inspect the model: safe for plugins.
 const MODEL: &[&str] = &[
@@ -264,6 +298,28 @@ pub fn vet(caller: &Caller, cmd: &mut Value) -> Result<(), String> {
         }
         if let Caller::Mcp(ws) = caller {
             *v = Value::String(confine(s, ws)?);
+        }
+    }
+    if let Caller::Mcp(ws) = caller {
+        // the library an agent works in is the workspace's own, not the person's
+        if LIBRARY.contains(&name.as_str()) && cmd.get("dir").is_none_or(Value::is_null) {
+            if let (Some(root), Some(o)) = (&ws.root, cmd.as_object_mut()) {
+                o.insert("dir".into(), Value::String(root.join("Library").to_string_lossy().into_owned()));
+            }
+        }
+        for (c, key, exts) in WRITES.iter().filter(|(c, ..)| *c == name) {
+            let Some(path) = cmd.get(*key).and_then(Value::as_str).map(str::to_string) else { continue };
+            let p = Path::new(&path);
+            let ext = p.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+            if !exts.contains(&ext.as_str()) {
+                return Err(format!("\"{c}\" writes .{} files: {path:?} has the wrong extension", exts.join(" or .")));
+            }
+            let resolved = resolve(p);
+            let mut made = ws.made.lock().unwrap_or_else(|e| e.into_inner());
+            if resolved.exists() && !made.contains(&resolved) {
+                return Err(format!("{path:?} already exists and wasn't made by this agent: an agent writes new file names, it doesn't replace the person's files"));
+            }
+            made.insert(resolved);
         }
     }
     Ok(())

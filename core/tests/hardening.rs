@@ -500,7 +500,7 @@ fn repeated_new_cannot_erase_the_last_good_backup() {
     }
     let b2 = backups(&dir);
     assert!(b2.contains(&old), "the older good backup survived the flood");
-    assert!(first.iter().filter(|p| **p != old).min().is_none_or(|p| b2.contains(p)), "so did the first backup of the burst");
+    assert!(first.iter().filter(|p| **p != old).min_by_key(|p| { let n = p.file_stem().unwrap().to_string_lossy().into_owned(); let mut it = n.rsplit('-'); let (a, b) = (it.next().and_then(|x| x.parse::<u64>().ok()), it.next().and_then(|x| x.parse::<u64>().ok())); match (a, b) { (Some(n), Some(t)) => (t, n), (Some(t), None) => (t, 0), _ => (0, 0) } }).is_none_or(|p| b2.contains(p)), "so did the first backup of the burst");
     assert!(b2.len() <= 12, "{} backups", b2.len());
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -585,4 +585,84 @@ fn subdividing_a_partial_group_works() {
     for f in e.model.faces.values() {
         assert!(f.loops().flatten().all(|v| e.model.vertices.contains_key(v)));
     }
+}
+
+fn agent(ws: &std::path::Path) -> Caller {
+    Caller::Mcp(Workspace::at(ws))
+}
+
+/// R2-MBK-001: `library_add` copies an OBJ's material file only when it is a bare name beside the OBJ.
+#[test]
+fn library_add_cannot_be_steered_by_the_objs_material_line() {
+    let base = scratch("libadd");
+    let ws = base.join("ws");
+    std::fs::create_dir_all(ws.join("a")).unwrap();
+    let victim = base.join("victim.txt");
+    std::fs::write(&victim, b"important").unwrap();
+    let obj = |mtl: &str| format!("mtllib {mtl}\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    let mut e = Engine::new();
+    // absolute path to a file outside: it must not be touched
+    std::fs::write(ws.join("a/m.obj"), obj(&victim.to_string_lossy())).unwrap();
+    e.exec_json_as(&agent(&ws), &json!({"cmd": "library_add", "paths": ["a/m.obj"]}).to_string());
+    assert_eq!(std::fs::read(&victim).unwrap(), b"important");
+    // a relative path out of the folder: nothing lands outside the library
+    std::fs::create_dir_all(base.join("escape")).unwrap();
+    std::fs::write(ws.join("escape.txt"), b"payload").unwrap();
+    std::fs::write(ws.join("a/n.obj"), obj("../../escape.txt")).unwrap();
+    e.exec_json_as(&agent(&ws), &json!({"cmd": "library_add", "paths": ["a/n.obj"]}).to_string());
+    assert!(!base.join("escape.txt").exists() && !ws.join("Library/../../escape.txt").exists());
+    // the library an agent uses is inside its workspace
+    assert!(ws.join("Library/m.obj").exists());
+    // and the same through the engine directly (the person's own add): still no truncation
+    let lib = base.join("lib");
+    sketchcraft::library::add_files(&lib, &[ws.join("a/m.obj").to_string_lossy().into_owned()], "").unwrap();
+    assert_eq!(std::fs::read(&victim).unwrap(), b"important");
+    std::fs::remove_dir_all(&base).ok();
+}
+
+/// R2-MBK-002: `save_image` writes only real PNGs, with a `.png` name, and never over someone else's file.
+#[test]
+fn agents_write_only_the_right_kind_of_file_and_never_replace_the_persons() {
+    use base64::Engine as _;
+    let base = scratch("agentwrite");
+    let ws = base.join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    let mut e = Engine::new();
+    let b64 = |b: &[u8]| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(b));
+    // a shell script dressed as an image
+    let r = e.exec_json_as(&agent(&ws), &json!({"cmd": "save_image", "path": "build.sh", "data": b64(b"#!/bin/sh\necho hi\n")}).to_string());
+    assert_eq!(r["ok"], false);
+    let r = e.exec_json_as(&agent(&ws), &json!({"cmd": "save_image", "path": "x.png", "data": b64(b"#!/bin/sh\necho hi\n")}).to_string());
+    assert_eq!(r["ok"], false, "not decodable: {r}");
+    assert!(!ws.join("x.png").exists() && !ws.join("build.sh").exists());
+    // a real image is written
+    let mut png = vec![];
+    image::DynamicImage::new_rgb8(4, 4).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let r = e.exec_json_as(&agent(&ws), &json!({"cmd": "save_image", "path": "x.png", "data": b64(&png)}).to_string());
+    assert_eq!(r["ok"], true, "{r}");
+    // the person's own file is not replaced, whatever the command
+    std::fs::write(ws.join("mine.obj"), b"the person's model").unwrap();
+    let a = agent(&ws);
+    for cmd in [json!({"cmd": "export_obj", "path": "mine.obj"}), json!({"cmd": "save", "path": "mine.obj"}), json!({"cmd": "export_obj", "path": "notes.txt"})] {
+        let r = e.exec_json_as(&a, &cmd.to_string());
+        assert_eq!(r["ok"], false, "{cmd} -> {r}");
+    }
+    assert_eq!(std::fs::read(ws.join("mine.obj")).unwrap(), b"the person's model");
+    // a file the agent made itself may be written again
+    run_as(&mut e, &a, json!({"cmd": "rect", "from": [0, 0, 0], "to": [2, 2, 0]}));
+    run_as(&mut e, &a, json!({"cmd": "export_obj", "path": "mine2.obj"}));
+    run_as(&mut e, &a, json!({"cmd": "export_obj", "path": "mine2.obj"}));
+    // a workspace is never a drive root or home folder
+    assert!(Workspace::at("/").too_wide());
+    if let Some(h) = std::env::var_os("HOME") {
+        assert!(Workspace::at(h).too_wide());
+    }
+    assert!(!Workspace::at(&ws).too_wide());
+    std::fs::remove_dir_all(&base).ok();
+}
+
+fn run_as(e: &mut Engine, c: &Caller, v: Value) -> Value {
+    let r = e.exec_json_as(c, &v.to_string());
+    assert_eq!(r["ok"], true, "{v} -> {r}");
+    r
 }

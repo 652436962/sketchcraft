@@ -211,6 +211,7 @@ pub fn thumbnail_of_file(path: &str, px: u32) -> Result<Vec<u8>> {
 pub fn add_files(dir: &Path, paths: &[String], collection: &str) -> Result<Vec<String>> {
     let to = if collection.trim().is_empty() { dir.to_path_buf() } else { dir.join(safe(collection)) };
     std::fs::create_dir_all(&to)?;
+    let to_real = std::fs::canonicalize(&to)?;
     let mut added = Vec::new();
     for p in paths {
         let src = Path::new(p);
@@ -218,14 +219,17 @@ pub fn add_files(dir: &Path, paths: &[String], collection: &str) -> Result<Vec<S
         if !EXTS.contains(&ext.as_str()) {
             bail!("{} isn't a model file ({})", src.display(), EXTS.join(", "));
         }
-        let dest = to.join(src.file_name().context("no file name")?);
-        std::fs::copy(src, &dest)?;
+        let name = src.file_name().context("no file name")?;
+        let dest = to.join(name);
+        copy_into(src, &dest, &to_real)?;
         if ext == "obj" {
             if let Ok(text) = std::fs::read_to_string(src) {
                 for line in text.lines().filter(|l| l.starts_with("mtllib")) {
+                    // the material file sits beside the OBJ: a bare file name, never a path out of its folder
                     let mtl = line[6..].trim();
-                    if let Some(parent) = src.parent() {
-                        std::fs::copy(parent.join(mtl), to.join(mtl)).ok();
+                    let plain = !mtl.is_empty() && Path::new(mtl).file_name().is_some_and(|n| n == std::ffi::OsStr::new(mtl)) && !mtl.contains(['/', '\\', ':']);
+                    if let (true, Some(parent)) = (plain && mtl.to_ascii_lowercase().ends_with(".mtl"), src.parent()) {
+                        copy_into(&parent.join(mtl), &to.join(mtl), &to_real).ok();
                     }
                 }
             }
@@ -233,6 +237,26 @@ pub fn add_files(dir: &Path, paths: &[String], collection: &str) -> Result<Vec<S
         added.push(dest.to_string_lossy().to_string());
     }
     Ok(added)
+}
+
+/// Copy `src` to `dest` (inside `to_real`, the folder it must stay in); never onto itself (a copy
+/// of a file onto itself empties it).
+fn copy_into(src: &Path, dest: &Path, to_real: &Path) -> Result<()> {
+    let parent = dest.parent().context("no folder")?;
+    if std::fs::canonicalize(parent)? != to_real {
+        bail!("{} isn't inside the library folder", dest.display());
+    }
+    if let (Ok(a), Ok(b)) = (std::fs::canonicalize(src), std::fs::canonicalize(dest)) {
+        if a == b {
+            return Ok(());
+        }
+    }
+    // a symlink at the destination would send the copy elsewhere
+    if std::fs::symlink_metadata(dest).is_ok_and(|m| m.file_type().is_symlink()) {
+        bail!("{} is a link", dest.display());
+    }
+    std::fs::copy(src, dest)?;
+    Ok(())
 }
 
 /// A file or folder name made safe ("My: lamps/v2" -> "My lamps v2").

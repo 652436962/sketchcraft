@@ -2651,10 +2651,15 @@ impl Engine {
                 use base64::Engine as _;
                 let b64 = data.strip_prefix("data:image/png;base64,").ok_or_else(|| anyhow::anyhow!("expected a PNG data URL"))?;
                 let bytes = base64::engine::general_purpose::STANDARD.decode(b64)?;
+                // only a real picture is written: decode it (this also bounds its size)
+                let img = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).map_err(|e| anyhow::anyhow!("that isn't a PNG image: {e}"))?;
+                if img.width() > 16384 || img.height() > 16384 {
+                    bail!("that image is too large");
+                }
                 if let Some(dir) = std::path::Path::new(&path).parent() {
                     std::fs::create_dir_all(dir).ok();
                 }
-                std::fs::write(&path, bytes)?;
+                crate::safety::write_atomic(std::path::Path::new(&path), &bytes)?;
                 json!({"path": path})
             }
             Command::Intersect { ids, with } => json!({"lines": m.intersect(&ids, with != "selection")?}),

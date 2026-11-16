@@ -14,7 +14,9 @@
 //!   sketchcraft mcp [--doc model.sketchcraft] [--workspace DIR | --any-path]
 //!       MCP server on stdio for AI agents. With --doc, the model is loaded
 //!       from FILE (if it exists) and saved back after every change. The
-//!       agent's files stay in the workspace (default: the model's folder).
+//!       agent's files stay in the workspace: --workspace DIR, else the model's
+//!       own folder; without --doc or --workspace it won't start (--any-path
+//!       lifts the limit). A home folder or drive root is refused.
 
 use sketchcraft::Engine;
 use serde_json::json;
@@ -101,12 +103,19 @@ fn main() {
             let workspace = if args.iter().any(|a| a == "--any-path") {
                 sketchcraft::policy::Workspace::anywhere()
             } else {
-                let dir = flag(&args, "--workspace")
-                    .map(std::path::PathBuf::from)
-                    .or_else(|| doc.as_ref().and_then(|d| std::path::Path::new(d).parent().filter(|p| !p.as_os_str().is_empty()).map(|p| p.to_path_buf())))
-                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                // never guess: the folder is the one asked for, or the model file's own
+                let dir = flag(&args, "--workspace").map(std::path::PathBuf::from).or_else(|| doc.as_ref().and_then(|d| std::path::Path::new(d).parent().filter(|p| !p.as_os_str().is_empty()).map(|p| p.to_path_buf())));
+                let Some(dir) = dir else {
+                    eprintln!("sketchcraft mcp: say where the agent may work: --workspace DIR, or --doc FILE inside a folder of its own (or --any-path to allow every folder)");
+                    std::process::exit(2);
+                };
                 std::fs::create_dir_all(&dir).ok();
-                sketchcraft::policy::Workspace::at(dir)
+                let ws = sketchcraft::policy::Workspace::at(dir);
+                if ws.too_wide() {
+                    eprintln!("sketchcraft mcp: {} is too wide a folder to hand to an agent (a drive root or your home folder). Use a folder of its own with --workspace DIR, or --any-path if you mean it", ws.root.as_ref().map(|r| r.display().to_string()).unwrap_or_default());
+                    std::process::exit(2);
+                }
+                ws
             };
             if let Some(root) = &workspace.root {
                 eprintln!("sketchcraft mcp: files limited to {}", root.display());
