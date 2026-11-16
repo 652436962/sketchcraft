@@ -237,7 +237,8 @@ export const execPlugin = (cmd: Record<string, unknown>) => (inTauri ? invoke<Re
 export const loadScene = () => (inTauri ? invoke<Scene>("scene") : http<Scene>("/scene"));
 export const sync = () => (inTauri ? invoke<boolean>("sync") : http<boolean>("/sync"));
 
-export const ASSETS = [
+/** The built-in library. `figure`: a scale figure (people, cyclists, flat cars), listed on its own. */
+export const ASSETS: readonly { key: string; name: string; figure?: boolean }[] = [
   { key: "door", name: "Door" },
   { key: "window", name: "Window" },
   { key: "garage_door", name: "Garage" },
@@ -247,9 +248,19 @@ export const ASSETS = [
   { key: "streetlight", name: "Streetlight" },
   { key: "bench", name: "Bench" },
   { key: "hydrant", name: "Hydrant" },
-  { key: "person", name: "Person" },
-  { key: "beaver", name: "Beaver" },
-] as const;
+  { key: "person", name: "Person", figure: true },
+  { key: "walker", name: "Walker", figure: true },
+  { key: "shopper", name: "Shopper", figure: true },
+  { key: "jogger", name: "Jogger", figure: true },
+  { key: "child", name: "Child", figure: true },
+  { key: "dog_walker", name: "Dog walker", figure: true },
+  { key: "stroller", name: "Stroller", figure: true },
+  { key: "wheelchair", name: "Wheelchair user", figure: true },
+  { key: "cyclist", name: "Cyclist", figure: true },
+  { key: "car_flat", name: "Car (flat)", figure: true },
+  { key: "suv_flat", name: "SUV (flat)", figure: true },
+  { key: "beaver", name: "Beaver", figure: true },
+];
 
 export interface CamSpec {
   eye: Vec3;

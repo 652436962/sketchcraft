@@ -64,7 +64,10 @@ export function Library({ scene, place, placing, run, onToast }: { scene: Scene;
   const parts = scene.components.filter((c) => c.placed === 0 && (c.inside ?? 0) > 0).length;
   const collections = new Map<string, LibEntry[]>();
   for (const e of lib?.entries ?? []) if (match(e.name)) collections.set(e.collection, [...(collections.get(e.collection) ?? []), e]);
-  const starter = ASSETS.filter((a) => match(a.name));
+  // "people", "scale figure" and the like find every figure
+  const figureWords = /^(people|person|scale|figure|scale figures?|figures)$/;
+  const starter = ASSETS.filter((a) => !a.figure && match(a.name));
+  const figures = ASSETS.filter((a) => a.figure && (match(a.name) || figureWords.test(q.trim().toLowerCase())));
 
   const tile = (key: string, name: string, thumbKey: string, req: Record<string, unknown>, title: string, extra?: React.ReactNode) => (
     <div key={key} className={`tile comp ${placing === key ? "on" : ""}`} title={title}>
@@ -162,6 +165,12 @@ export function Library({ scene, place, placing, run, onToast }: { scene: Scene;
         <details className="collection" open={!lib?.entries.length}>
           <summary>Starter</summary>
           <div className="tiles">{starter.map((a) => tile(a.key, a.name, `a:${a.key}`, { asset: a.key }, `Place ${a.name}: click in the model`))}</div>
+        </details>
+      )}
+      {figures.length > 0 && (
+        <details className="collection" open={!lib?.entries.length}>
+          <summary title="People, cyclists and flat cars for a sense of size along paths and streets">Scale figures</summary>
+          <div className="tiles">{figures.map((a) => tile(a.key, a.name, `a:${a.key}`, { asset: a.key }, `Place ${a.name}: click in the model${a.key.endsWith("_flat") ? ". Flat, for elevations: rotate it to line up with the road" : ". It always turns to face you"}`))}</div>
         </details>
       )}
       <p className="hint-text">Components share their geometry: edit one (double-click it) and every copy changes.</p>

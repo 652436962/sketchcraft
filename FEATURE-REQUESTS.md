@@ -74,7 +74,7 @@ Tracked on GitHub as the **0.3.8 — Texturing** milestone.
 | ------- | -------- | ----- | ------ | ----- |
 | SketchCraft Lite (Android) | RuliAvo25, Lasm998 (Reddit) | 2026-11-16 | later | Its own app; touch-first push/pull |
 | More of SketchUp's Ruby API: mouse tools (Sketchup::Tool), HtmlDialog, observers, followme, textures | rats4final (Reddit) | 2026-11-16 | later | The geometry-building core runs (sprint 2, #7) |
-| Library of scale figures (people, cyclists, cars) for pathways | EuphoricPenguin22 (Reddit) | 2026-11-16 | later | Original art, traced from CC0 photos |
+| Library of scale figures (people, cyclists, cars) for pathways | EuphoricPenguin22 (Reddit) | 2026-11-16 | done (2026-11-16) | Ten figures in Library › Scale figures; original art drawn from simple shapes by tools/scale_figures/scale_figures.py, not traced from photos |
 | 2D drafting done right: a dimension style editor (arrows, text, units, precision) and fonts for text and tables, what people miss in CADCraft | Waste-Affect5021 (r/ArtCraftAI, about CADCraft) | 2026-11-16 | in 0.3.7 | Part of sprint 3 (drafting) |
 
 ## Done before this list

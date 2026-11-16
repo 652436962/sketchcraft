@@ -146,6 +146,12 @@ What changed in each SketchCraft release, newest first. The format follows
   never the other program's work. If the other program changed or built on the same
   objects, Undo says so and keeps that step (press Undo again to skip it) instead of guessing. A plugin run is
   still one step.
+- **A library of scale figures** for paths and streets (Library › Scale
+  figures): a walker, a shopper with a tote bag, a jogger, a child, a dog
+  walker, someone pushing a stroller, a wheelchair user and a cyclist, all flat
+  and always turning to face you, plus a flat car and a flat SUV in profile for
+  elevations and sections (those stay put; rotate them along the road). Search
+  "people" to find them all. Scripts can `insert` them by name.
 - **Plugins window** (File › Plugins ▸ Manage plugins…, or Shift+S): every
   plugin with its version and author, turn each on or off, remove yours
   (moved aside, so it can come back), and **Install from file…** for a .zip.

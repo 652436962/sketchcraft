@@ -405,6 +405,29 @@ fn every_asset_builds_and_places() {
 }
 
 #[test]
+fn scale_figures_stand_on_the_ground_at_their_size() {
+    // (key, height in meters, faces the camera)
+    let figures = [
+        ("person", 1.75, true), ("walker", 1.78, true), ("shopper", 1.66, true), ("jogger", 1.70, true), ("child", 1.15, true),
+        ("dog_walker", 1.75, true), ("stroller", 1.70, true), ("wheelchair", 1.30, true), ("cyclist", 1.70, true),
+        ("car_flat", 1.48, false), ("suv_flat", 1.75, false),
+    ];
+    for (key, height, face_me) in figures {
+        let a = sketchcraft::assets::find(key).unwrap_or_else(|| panic!("no asset {key}"));
+        assert_eq!(a.face_me, face_me, "{key}");
+        let m = sketchcraft::assets::build(a).unwrap();
+        let (lo, hi) = m.bounds().unwrap();
+        assert!(lo.z.abs() < 0.01, "{key} stands on the ground: {lo}");
+        assert!((hi.z - height).abs() < 0.04, "{key} is {height} m tall, not {}", hi.z);
+        assert!(hi.y - lo.y < 0.05, "{key} is flat: {lo} {hi}");
+        assert!(lo.x < 0.0 && hi.x > 0.0, "{key} is placed by its middle");
+        assert!(!m.faces.is_empty(), "{key} has faces");
+    }
+    // the app finds them by name too
+    assert_eq!(sketchcraft::assets::find("Dog walker").unwrap().key, "dog_walker");
+}
+
+#[test]
 fn glb_stl_and_obj_round_trip() {
     let dir = std::env::temp_dir().join(format!("sketchcraft-io-{}", std::process::id()));
     let p = |n: &str| dir.join(n).to_string_lossy().to_string();

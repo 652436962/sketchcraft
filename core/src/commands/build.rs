@@ -48,7 +48,7 @@ impl Engine {
                 let opening = place_cut(m, instance, host);
                 json!({"instance": instance, "component": def, "opening": opening})
             }
-            Command::Assets => json!({"assets": crate::assets::ASSETS.iter().map(|a| json!({"key": a.key, "name": a.name, "about": a.about})).collect::<Vec<_>>()}),
+            Command::Assets => json!({"assets": crate::assets::ASSETS.iter().map(|a| json!({"key": a.key, "name": a.name, "about": a.about, "face_me": a.face_me})).collect::<Vec<_>>()}),
             other => unreachable!("command routed to the wrong group: {other:?}"),
         })
     }
