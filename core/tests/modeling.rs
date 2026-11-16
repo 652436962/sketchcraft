@@ -1234,6 +1234,30 @@ fn photoreal_settings_backdrop_ground_sky_warmth() {
 }
 
 #[test]
+fn moving_one_corner_folds_the_faces_around_it() {
+    let mut e = Engine::new();
+    let r = run(&mut e, json!({"cmd":"rect","from":[0,0,0],"to":[4,3,0]}));
+    run(&mut e, json!({"cmd":"pushpull","face":r["face"],"distance":2}));
+    // the scene names each edge's two points, so a viewer can grab one
+    let s = sketchcraft::scene::build(&e.model, None);
+    let v = s["edgeList"].as_array().unwrap().iter().find_map(|ed| {
+        let a = &ed["a"];
+        (a[0] == 4.0 && a[1] == 0.0 && a[2] == 2.0).then(|| ed["va"].as_u64().unwrap()).or_else(|| {
+            let b = &ed["b"];
+            (b[0] == 4.0 && b[1] == 0.0 && b[2] == 2.0).then(|| ed["vb"].as_u64().unwrap())
+        })
+    });
+    let v = v.expect("the corner (4, 0, 2) is listed");
+    run(&mut e, json!({"cmd":"move","ids":[v],"by":[0,0,1.5]}));
+    let s = sketchcraft::scene::build(&e.model, None);
+    let pts: Vec<Vec<f64>> = s["edgeList"].as_array().unwrap().iter().flat_map(|ed| [ed["a"].clone(), ed["b"].clone()]).map(|p| p.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect()).collect();
+    assert!(pts.iter().any(|p| (p[0] - 4.0).abs() < 1e-9 && p[1].abs() < 1e-9 && (p[2] - 3.5).abs() < 1e-9), "the corner moved up");
+    assert!(!pts.iter().any(|p| (p[0] - 4.0).abs() < 1e-9 && p[1].abs() < 1e-9 && (p[2] - 2.0).abs() < 1e-9), "and isn't left behind");
+    // the faces that got bent are split flat again (a box has 6; now more)
+    assert!(faces(&mut e).len() > 6);
+}
+
+#[test]
 fn scale_figures_face_the_camera() {
     let mut e = Engine::new();
     box_group(&mut e, [3.0, 0.0, 0.0], [5.0, 2.0, 2.0], "Block");

@@ -416,7 +416,7 @@ type Op =
   | { t: "axes"; o: THREE.Vector3; x: THREE.Vector3 | null; cur: THREE.Vector3 }
   | { t: "push"; face: FaceInfo; origin: THREE.Vector3; n: THREE.Vector3; d: number; dragged: boolean }
   | { t: "offset"; face: FaceInfo; start: THREE.Vector3; d: number }
-  | { t: "move"; base: THREE.Vector3; ids: number[]; delta: THREE.Vector3; copy: boolean }
+  | { t: "move"; base: THREE.Vector3; ids: number[]; delta: THREE.Vector3; copy: boolean; vertex?: { far: THREE.Vector3[] } }
   | { t: "rotate"; center: THREE.Vector3; n: THREE.Vector3; ref: THREE.Vector3 | null; angle: number; ids: number[]; copy?: boolean }
   | { t: "scale"; center: THREE.Vector3; start: THREE.Vector3; factor: number; ids: number[] }
   | { t: "tape"; p0: THREE.Vector3; along: THREE.Vector3 | null; cur: THREE.Vector3 }
@@ -1380,6 +1380,29 @@ export default function Viewport(props: Props) {
     if (!hit || hit.faceIndex == null) return null;
     const owner = hit.object.userData.owner != null ? (hit.object.userData.owner as number) : hit.object === T.editMesh ? s.editTriFace[hit.faceIndex] : s.triFace[hit.faceIndex];
     return { face: faceById(owner), owner, point: hit.point.clone(), distance: hit.distance };
+  }
+
+  /** A corner of loose geometry (or of the open group) under the cursor, for
+   * Move: its vertex id, where it is, and the far ends of its edges. */
+  function vertexUnder(e: { clientX: number; clientY: number }): { id: number; p: THREE.Vector3; far: THREE.Vector3[] } | null {
+    const s = sceneNow();
+    if (s.editing != null) return null;
+    const sn = infer(env(), e, {});
+    if (sn.kind !== "endpoint") return null;
+    const open = s.activeGroup ?? null;
+    let id: number | null = null;
+    const far: THREE.Vector3[] = [];
+    for (const ed of s.edgeList) {
+      if ((ed.group ?? null) !== open || ed.va == null || ed.vb == null) continue;
+      if (V(ed.a).distanceTo(sn.p) < 1e-6) {
+        id = ed.va;
+        far.push(V(ed.b));
+      } else if (V(ed.b).distanceTo(sn.p) < 1e-6) {
+        id = ed.vb;
+        far.push(V(ed.a));
+      }
+    }
+    return id == null ? null : { id, p: sn.p.clone(), far };
   }
 
   /** The whole curve an edge belongs to (an arc, a circle, a welded run). */
@@ -2662,7 +2685,10 @@ export default function Viewport(props: Props) {
           const sn = infer(E, e, { anchor: op.base, lock });
           op.delta = sn.p.clone().sub(op.base);
           T.preview.add(polyline([op.base, sn.p], axisColor(sn)));
-          ghost(new THREE.Matrix4().makeTranslation(op.delta.x, op.delta.y, op.delta.z));
+          if (op.vertex) {
+            // the point's edges, stretched to where it's going
+            for (const q of op.vertex.far) T.preview.add(polyline([q, sn.p], ACCENT));
+          } else ghost(new THREE.Matrix4().makeTranslation(op.delta.x, op.delta.y, op.delta.z));
           showSnap(sn);
           setLive([{ p: op.base.clone().add(sn.p).multiplyScalar(0.5), text: fmt(op.delta.length()) }]);
           L.onMeasure(op.copy ? "Copy" : "Distance", fmt(op.delta.length()));
@@ -2980,6 +3006,14 @@ export default function Viewport(props: Props) {
             const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(op.n, op.center), new THREE.Vector3());
             if (q && q.distanceTo(op.center) > 1e-4) op.ref = q;
             return;
+          }
+          // nothing selected, Move on a corner: grab just that point (the faces around it follow)
+          if (L.tool === "move" && selIds(sel).length === 0 && !e.altKey && !e.ctrlKey) {
+            const v = vertexUnder(e);
+            if (v) {
+              st.current.op = { t: "move", base: v.p, ids: [v.id], delta: new THREE.Vector3(), copy: false, vertex: { far: v.far } };
+              return;
+            }
           }
           // nothing selected: grab what's under the cursor
           let s2 = sel;

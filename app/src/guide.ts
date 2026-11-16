@@ -70,7 +70,7 @@ export function guide(tool: Tool, c: GuideCtx): Guide {
       return g("Follow Me", "Select the path first (edges, or a face to go around), then click the profile face to sweep it along.", []);
     case "move":
       if (busy) return g("Move", "Click where it goes.", [["Type", "a distance, then Enter"], ["Option / Ctrl", "leave a copy (then type x5)"], LOCK, ESC]);
-      return g("Move", c.selected ? "Click a point on the selection to pick it up there." : "Click something to grab it, or select first.", [["Option / Ctrl", "copy instead of move"]]);
+      return g("Move", c.selected ? "Click a point on the selection to pick it up there." : "Click something to grab it, or a corner to move just that point; the faces around it follow.", [["Option / Ctrl", "copy instead of move"]]);
     case "rotate":
       if (!busy) return g("Rotate", "Click the center of rotation (on a face, it turns in that face's plane).", [["Option / Ctrl", "rotate a copy"]]);
       return c.stage === 1 ? g("Rotate", "Click a point to start the angle from.", [ESC]) : g("Rotate", "Swing it around and click.", [["Type", "degrees, then Enter"], ESC]);

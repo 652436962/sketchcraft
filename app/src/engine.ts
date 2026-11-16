@@ -21,6 +21,9 @@ export interface EdgeInfo {
   id: number;
   a: Vec3;
   b: Vec3;
+  /** the two points' vertex ids (Move can grab one) */
+  va?: number;
+  vb?: number;
   soft: boolean;
   group: number | null;
   /** edges of one arc, circle or welded curve share this */

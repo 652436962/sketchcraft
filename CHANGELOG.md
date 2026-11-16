@@ -13,6 +13,9 @@ What changed in each SketchCraft release, newest first. The format follows
   SketchCraft beaver with a clipboard, or nobody. On April 1, the beaver
   clocks in. Both are in the Library, renders turn them to the camera too,
   and any component can be set to **Always face the camera**.
+- **Move a single corner.** With nothing selected, the Move tool grabs the
+  corner under the cursor: its edges stretch as you go, and the faces around
+  it fold to stay flat (as in SketchUp).
 
 ## [0.3.4] - 2026-11-15
 
