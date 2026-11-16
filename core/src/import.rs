@@ -70,7 +70,9 @@ pub fn import_obj(m: &mut Model, text: &str, dir: Option<&Path>, name: &str, y_u
             }
             Some("mtllib") => {
                 let file = it.collect::<Vec<_>>().join(" ");
-                if let Some(t) = dir.and_then(|d| std::fs::read_to_string(d.join(&file)).ok()) {
+                // the material file sits beside the OBJ: a bare file name, never a path out of its folder
+                let plain = !file.is_empty() && std::path::Path::new(&file).file_name().is_some_and(|n| n == std::ffi::OsStr::new(&file)) && !file.contains(['/', '\\', ':']);
+                if let Some(t) = dir.filter(|_| plain).and_then(|d| std::fs::read_to_string(d.join(&file)).ok()) {
                     colors.extend(parse_mtl(&t));
                 }
             }

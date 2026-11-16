@@ -55,12 +55,24 @@ fn install_turn_off_and_remove_a_plugin() {
     assert_eq!(list["plugins"].as_array().unwrap().iter().find(|p| p["id"] == "stair-maker").unwrap()["enabled"], false);
     run(&mut e, json!({"cmd":"plugin_enable","id":"stair-maker","on":true}));
 
-    // installing again replaces it (the old one is kept aside), and turns it on
+    // installing again never replaces silently: it needs `replace`, and a preview says what it is
     run(&mut e, json!({"cmd":"plugin_enable","id":"stair-maker","on":false}));
     let r = run(&mut e, json!({"cmd":"install_plugin","data": b64(&z)}));
-    assert_eq!(r["replaced"], true);
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r["error"].as_str().unwrap().contains("already installed"));
+    let p = run(&mut e, json!({"cmd":"install_plugin","data": b64(&z),"preview":true}));
+    assert_eq!(p["ok"], true, "{p}");
+    assert_eq!(p["preview"], true);
+    assert_eq!(p["name"], "Stair Maker");
+    assert_eq!(p["installed"]["version"], "1.2.0");
+    assert_eq!(p["sha256"].as_str().unwrap().len(), 64);
+    assert!(p["files"].as_array().unwrap().iter().any(|f| f["name"] == "main.js"));
+    // the old one is kept aside, and what the person chose (off) is kept
+    let r = run(&mut e, json!({"cmd":"install_plugin","data": b64(&z),"replace":true}));
+    assert_eq!(r["replaced"], true, "{r}");
     let list = run(&mut e, json!({"cmd":"plugins"}));
-    assert_eq!(list["plugins"].as_array().unwrap().iter().find(|p| p["id"] == "stair-maker").unwrap()["enabled"], true);
+    assert_eq!(list["plugins"].as_array().unwrap().iter().find(|p| p["id"] == "stair-maker").unwrap()["enabled"], false);
+    run(&mut e, json!({"cmd":"plugin_enable","id":"stair-maker","on":true}));
 
     // a zip that reaches outside its folder is refused, and nothing is written
     let evil = zip_of(&[("plugin.json", r#"{"name":"Evil","commands":[]}"#), ("main.js", ""), ("../../escape.js", "x")]);
@@ -99,6 +111,15 @@ fn install_turn_off_and_remove_a_plugin() {
     assert!(sm["files"].get("stairs_maker/readme.txt").is_none(), "only .rb files are sent");
     let mb = list["plugins"].as_array().unwrap().iter().find(|p| p["id"] == "make-box").unwrap().clone();
     assert!(mb["files"]["make_box.rb"].as_str().unwrap().contains("add_face"));
+
+    // .removed doesn't grow without end
+    for i in 0..30 {
+        let z = zip_of(&[("plugin.json", &format!(r#"{{"name":"Churn","version":"{i}","commands":[]}}"#)), ("main.js", "")]);
+        let r = run(&mut e, json!({"cmd":"install_plugin","data": b64(&z),"replace": true}));
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    let kept = std::fs::read_dir(home.join("Plugins/.removed")).unwrap().count();
+    assert!(kept <= 20, "{kept} folders kept in .removed");
 
     std::fs::remove_dir_all(&home).ok();
 }

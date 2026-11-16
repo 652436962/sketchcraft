@@ -333,3 +333,45 @@ fn undo_history_is_bounded_by_size() {
     assert!(e.undo_depth() >= 1);
     run(&mut e, json!({"cmd": "undo"}));
 }
+
+// ---- OBJ import and export --------------------------------------------------------------
+
+#[test]
+fn obj_material_files_come_from_the_objs_own_folder_only() {
+    let dir = scratch("mtllib");
+    let secret = dir.join("secret.mtl");
+    std::fs::write(&secret, "newmtl Hidden\nKd 0.125 0.625 0.875\n").unwrap();
+    let sub = dir.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(sub.join("beside.mtl"), "newmtl Beside\nKd 0.25 0.5 0.75\n").unwrap();
+    for (mtl, expect_color) in [("../secret.mtl", false), ("beside.mtl", true)] {
+        let obj = sub.join("t.obj");
+        std::fs::write(&obj, format!("mtllib {mtl}\nv 0 0 0\nv 1 0 0\nv 1 1 0\nusemtl Hidden\nusemtl Beside\nf 1 2 3\n")).unwrap();
+        let mut e = Engine::new();
+        run(&mut e, json!({"cmd": "import_obj", "path": obj}));
+        let has_color = serde_json::to_string(&e.model).unwrap().contains("0.25,0.5,0.75");
+        assert_eq!(has_color, expect_color, "{mtl}");
+    }
+    // an absolute path is no different
+    let obj = sub.join("abs.obj");
+    std::fs::write(&obj, format!("mtllib {}\nv 0 0 0\nv 1 0 0\nv 1 1 0\nf 1 2 3\n", secret.display())).unwrap();
+    let mut e = Engine::new();
+    run(&mut e, json!({"cmd": "import_obj", "path": obj}));
+    assert!(!serde_json::to_string(&e.model).unwrap().contains("0.125,0.625,0.875"));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn obj_export_names_cannot_start_new_lines() {
+    let dir = scratch("objnames");
+    let mut e = Engine::new();
+    let f = run(&mut e, json!({"cmd": "rect", "from": [0, 0, 0], "to": [4, 4, 0]}))["face"].as_u64().unwrap();
+    let g = run(&mut e, json!({"cmd": "group", "ids": [f]}))["group"].as_u64().unwrap();
+    run(&mut e, json!({"cmd": "rename", "id": g, "name": "wall\nmtllib /etc/passwd\ro x"}));
+    let out = dir.join("m.obj");
+    run(&mut e, json!({"cmd": "export_obj", "path": out}));
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(!text.lines().any(|l| l.starts_with("mtllib /etc")), "{text}");
+    assert!(text.lines().all(|l| !l.contains('\r')));
+    std::fs::remove_dir_all(&dir).ok();
+}

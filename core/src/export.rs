@@ -54,7 +54,7 @@ pub fn write_obj(m: &Model, path: &str) -> Result<usize> {
     let mut tex_mats: std::collections::BTreeMap<String, String> = Default::default();
     let mut vt = 0usize;
     for (name, faces) in objects {
-        writeln!(obj, "o {}", name.replace(' ', "_"))?;
+        writeln!(obj, "o {}", obj_token(&name))?;
         for f in faces {
             let n = f.normal;
             let tex = crate::texmap::of_face(m, &f).and_then(|(mname, t)| {
@@ -103,8 +103,14 @@ pub fn write_obj(m: &Model, path: &str) -> Result<usize> {
     Ok(count)
 }
 
+/// One OBJ token: no spaces or control characters, so a name from the model
+/// can't start a new line (and a new directive) in the file.
+fn obj_token(name: &str) -> String {
+    name.chars().map(|c| if c.is_whitespace() || c.is_control() { '_' } else { c }).collect()
+}
+
 fn mat_id(name: &str) -> String {
-    name.replace('#', "c_")
+    obj_token(&name.replace('#', "c_"))
 }
 
 /// Materials are named by color, so the same color from a component and

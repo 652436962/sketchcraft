@@ -161,6 +161,12 @@ pub enum Command {
         /// the file's name, when sending `data` (a .rb script is told apart by it)
         #[serde(default)]
         name: Option<String>,
+        /// only describe the plugin (what it is, its files, what it would replace); install nothing
+        #[serde(default)]
+        preview: bool,
+        /// allow replacing a plugin that's already installed (the person has been asked)
+        #[serde(default)]
+        replace: bool,
     },
     /// Remove a plugin you installed (moved aside to Plugins/.removed, not deleted).
     RemovePlugin { id: String },
@@ -1838,7 +1844,7 @@ impl Engine {
             Command::Parts { ids } => json!({"parts": crate::plugins::parts(m, &ids), "units": m.units}),
             Command::Plugins => crate::plugins::list(),
             Command::PluginEnable { id, on } => crate::plugins::enable(&id, on)?,
-            Command::InstallPlugin { path, data, name } => {
+            Command::InstallPlugin { path, data, name, preview, replace } => {
                 let name = name.or_else(|| path.clone());
                 let bytes = match (path, data) {
                     (Some(p), _) => std::fs::read(&p)?,
@@ -1848,7 +1854,7 @@ impl Engine {
                     }
                     _ => bail!("install_plugin needs a path or data"),
                 };
-                crate::plugins::install(&bytes, name.as_deref())?
+                crate::plugins::install(&bytes, name.as_deref(), &crate::plugins::InstallOpts { preview, replace })?
             }
             Command::RemovePlugin { id } => crate::plugins::remove(&id)?,
             Command::SaveText { path, text } => {
@@ -2599,8 +2605,9 @@ impl Engine {
                     let bundle = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("app"));
                     if p.is_dir() && !bundle { std::process::Command::new("open").arg(&p).status() } else { std::process::Command::new("open").arg("-R").arg(&p).status() }
                 };
+                // never `explorer <file>`: that opens (runs) the file. Folders open; a file is only selected.
                 #[cfg(target_os = "windows")]
-                let r = std::process::Command::new("explorer").arg(&p).status();
+                let r = if p.is_dir() { std::process::Command::new("explorer").arg(&p).status() } else { std::process::Command::new("explorer").arg(format!("/select,{}", p.display())).status() };
                 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
                 let r = std::process::Command::new("xdg-open").arg(if p.is_dir() { &p } else { p.parent().unwrap_or(&p) }).status();
                 anyhow::Context::context(r, "couldn't open the file browser")?;

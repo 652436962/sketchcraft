@@ -126,12 +126,57 @@ fn slug(s: &str) -> String {
 const MAX_ZIP: usize = 8 << 20;
 const MAX_FILES: usize = 64;
 const MAX_UNPACKED: u64 = 16 << 20;
+/// How many set-aside plugins `.removed` keeps (the newest).
+const KEEP_REMOVED: usize = 20;
+
+/// What installing would do, and what the plugin is: shown to the person
+/// before anything is written.
+pub struct InstallOpts {
+    /// describe it, install nothing
+    pub preview: bool,
+    /// allow replacing a plugin of the same name
+    pub replace: bool,
+}
+
+/// A fingerprint of a plugin's files (names and contents).
+fn files_hash(files: &[(String, Vec<u8>)]) -> String {
+    let mut sorted: Vec<&(String, Vec<u8>)> = files.iter().collect();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut all = Vec::new();
+    for (n, b) in sorted {
+        all.extend_from_slice(n.as_bytes());
+        all.push(0);
+        all.extend_from_slice(&(b.len() as u64).to_le_bytes());
+        all.extend_from_slice(b);
+    }
+    crate::safety::sha256_hex(&all)
+}
+
+/// The installed copy of `id`: its version and fingerprint, if there is one.
+fn installed(id: &str) -> Option<Value> {
+    let folder = dir().join(id);
+    if !folder.is_dir() {
+        return None;
+    }
+    let manifest: Value = std::fs::read_to_string(folder.join("plugin.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+    let mut files = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&folder) {
+        for e in rd.flatten().take(MAX_FILES) {
+            if e.path().is_file() {
+                if let Ok(b) = std::fs::read(e.path()) {
+                    files.push((e.file_name().to_string_lossy().into_owned(), b));
+                }
+            }
+        }
+    }
+    Some(json!({"version": manifest["version"], "author": manifest["author"], "sha256": files_hash(&files)}))
+}
 
 /// Install a plugin from a .zip's bytes: plugin.json and main.js at its top,
 /// or in one folder inside. Only plain files with safe names are unpacked
 /// (no paths out of the folder, no hidden files, size limits). Replaces an
 /// older copy of the same plugin, which is kept in .removed.
-pub fn install(bytes: &[u8], file_name: Option<&str>) -> Result<Value> {
+pub fn install(bytes: &[u8], file_name: Option<&str>, opts: &InstallOpts) -> Result<Value> {
     if bytes.len() > MAX_ZIP {
         bail!("that plugin is over 8 MB");
     }
@@ -139,7 +184,7 @@ pub fn install(bytes: &[u8], file_name: Option<&str>) -> Result<Value> {
     if file_name.is_some_and(|n| n.to_ascii_lowercase().ends_with(".rb")) {
         let name = Path::new(file_name.unwrap()).file_name().and_then(|n| n.to_str()).unwrap_or("script.rb").to_string();
         let text = std::str::from_utf8(bytes).context("that .rb file isn't text")?;
-        return install_ruby(vec![(name, text.as_bytes().to_vec())]);
+        return install_ruby(vec![(name, text.as_bytes().to_vec())], opts);
     }
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).context("that isn't a .zip, .rbz or .rb file")?;
     if z.len() > MAX_FILES {
@@ -174,16 +219,17 @@ pub fn install(bytes: &[u8], file_name: Option<&str>) -> Result<Value> {
         if !matches!(ext.as_str(), "json" | "js" | "svg" | "png" | "md" | "txt" | "rb") {
             continue; // other files aren't needed
         }
-        total += f.size();
+        // count what is really there, not what the header says it will be
+        let mut b = Vec::new();
+        f.by_ref().take(MAX_UNPACKED - total + 1).read_to_end(&mut b)?;
+        total += b.len() as u64;
         if total > MAX_UNPACKED {
             bail!("that plugin unpacks to over 16 MB");
         }
-        let mut b = Vec::new();
-        f.by_ref().take(MAX_UNPACKED).read_to_end(&mut b)?;
         files.push((rel.to_string(), b));
     }
     if ruby {
-        return install_ruby(files);
+        return install_ruby(files, opts);
     }
     let manifest = files.iter().find(|(n, _)| n == "plugin.json").map(|(_, b)| b.clone()).ok_or_else(|| anyhow::anyhow!("no plugin.json"))?;
     if !files.iter().any(|(n, _)| n == "main.js") {
@@ -198,18 +244,59 @@ pub fn install(bytes: &[u8], file_name: Option<&str>) -> Result<Value> {
     if id.is_empty() || BUILTIN.iter().any(|(b, ..)| *b == id) {
         bail!("pick another name for this plugin");
     }
+    let about = describe(&id, name, Some(&m), false, &files);
+    if let Some(done) = gate(&about, opts)? {
+        return Ok(done);
+    }
     let replaced = write_plugin(&id, &files)?;
-    // installing it means you want it: on, even if an older copy was off
-    if disabled().contains(&id) {
+    // a brand-new plugin is on; a replaced one keeps whatever the person chose for it
+    if !replaced && disabled().contains(&id) {
         enable(&id, true)?;
     }
-    Ok(json!({"id": id, "name": name, "files": files.len(), "replaced": replaced}))
+    Ok(json!({"id": id, "name": name, "files": files.len(), "replaced": replaced, "sha256": about["sha256"]}))
+}
+
+/// What a plugin is, for the person deciding whether to install it.
+fn describe(id: &str, name: &str, manifest: Option<&Value>, ruby: bool, files: &[(String, Vec<u8>)]) -> Value {
+    let field = |k: &str| manifest.and_then(|m| m.get(k)).and_then(Value::as_str).map(str::to_string);
+    let commands: Vec<String> = manifest.and_then(|m| m["commands"].as_array()).map(|a| a.iter().filter_map(|c| c["label"].as_str().map(str::to_string)).collect()).unwrap_or_default();
+    json!({
+        "id": id,
+        "name": name,
+        "version": field("version"),
+        "author": field("author"),
+        "description": field("description"),
+        "kind": if ruby { "SketchUp Ruby extension" } else { "JavaScript plugin" },
+        "ruby": ruby,
+        "commands": commands,
+        "files": files.iter().map(|(n, b)| json!({"name": n, "bytes": b.len()})).collect::<Vec<_>>(),
+        "sha256": files_hash(files),
+        "installed": installed(id),
+    })
+}
+
+/// A preview answers with what it is; an install over an existing plugin
+/// needs `replace`. Returns the reply to give now, or None to go ahead.
+fn gate(about: &Value, opts: &InstallOpts) -> Result<Option<Value>> {
+    if opts.preview {
+        let mut v = about.clone();
+        v["preview"] = json!(true);
+        return Ok(Some(v));
+    }
+    if !about["installed"].is_null() && !opts.replace {
+        bail!(
+            "{} is already installed (version {}). Installing this would replace it; ask the person first, then use replace: true.",
+            about["name"].as_str().unwrap_or("that plugin"),
+            about["installed"]["version"].as_str().unwrap_or("unknown")
+        );
+    }
+    Ok(None)
 }
 
 /// A SketchUp Ruby extension: its .rb files (the top-level ones load it),
 /// with a plugin.json written for it. Its commands are the menu items it adds
 /// when it loads (the app finds them by running it).
-fn install_ruby(files: Vec<(String, Vec<u8>)>) -> Result<Value> {
+fn install_ruby(files: Vec<(String, Vec<u8>)>, opts: &InstallOpts) -> Result<Value> {
     let entries: Vec<String> = files.iter().filter(|(n, _)| !n.contains('/') && n.to_ascii_lowercase().ends_with(".rb")).map(|(n, _)| n.clone()).collect();
     let Some(first) = entries.first() else { bail!("no .rb file at the top of it (a SketchUp extension loads from one)") };
     let stem = first.trim_end_matches(".rb").trim_end_matches(".RB");
@@ -225,12 +312,15 @@ fn install_ruby(files: Vec<(String, Vec<u8>)>) -> Result<Value> {
     all.retain(|(n, _)| n != "plugin.json");
     let manifest = json!({"name": name, "ruby": true, "entry": entries, "description": "A SketchUp Ruby extension", "commands": []});
     all.push(("plugin.json".into(), serde_json::to_vec_pretty(&manifest)?));
-    let replaced = dir().join(&id).exists();
-    write_plugin(&id, &all)?;
-    if disabled().contains(&id) {
+    let about = describe(&id, &name, Some(&manifest), true, &all);
+    if let Some(done) = gate(&about, opts)? {
+        return Ok(done);
+    }
+    let replaced = write_plugin(&id, &all)?;
+    if !replaced && disabled().contains(&id) {
         enable(&id, true)?;
     }
-    Ok(json!({"id": id, "name": name, "files": all.len(), "replaced": replaced, "ruby": true}))
+    Ok(json!({"id": id, "name": name, "files": all.len(), "replaced": replaced, "ruby": true, "sha256": about["sha256"]}))
 }
 
 /// Write a plugin's files into Plugins/<id> (an older copy goes to .removed).
@@ -264,7 +354,19 @@ fn set_aside(folder: &Path, id: &str) -> Result<PathBuf> {
     }
     std::fs::create_dir_all(away.parent().unwrap())?;
     std::fs::rename(folder, &away)?;
+    prune_removed();
     Ok(away)
+}
+
+/// Keep only the newest `KEEP_REMOVED` folders in `.removed`.
+fn prune_removed() {
+    let root = dir().join(".removed");
+    let Ok(rd) = std::fs::read_dir(&root) else { return };
+    let mut all: Vec<(std::time::SystemTime, PathBuf)> = rd.flatten().filter(|e| e.path().is_dir()).map(|e| (e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH), e.path())).collect();
+    all.sort();
+    while all.len() > KEEP_REMOVED {
+        std::fs::remove_dir_all(all.remove(0).1).ok();
+    }
 }
 
 /// Move one of your plugins aside (to Plugins/.removed), so it can be put back.
