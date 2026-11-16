@@ -65,16 +65,23 @@ from this repository's Releases page.
 
 What the workflow does for you: releases build only from a `v*` tag on a commit
 that's on `main` and matches the app's version, after CI passes; actions are
-pinned to commit SHAs; the signing secrets are only given to the build steps,
-never written to the job environment, and npm install scripts don't run there.
+pinned to commit SHAs; npm install scripts don't run; and compiling is kept apart from
+signing. The `build` job compiles with `--locked`, holds no update key and only a
+read-only token (so no dependency's build script or proc-macro can read the key);
+it signs its update packages with a throwaway key made for that run. The `publish`
+job, which compiles nothing, signs them for real with the key from the `release`
+environment and creates the draft release. The Apple secrets (once added) go to
+the one macOS build step only.
 
 What only the repository owner can switch on (GitHub settings):
 
 1. **Settings › Environments › New environment `release`**: add yourself under
-   *Required reviewers* and move `TAURI_SIGNING_PRIVATE_KEY`,
-   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` and the `APPLE_*` secrets from
-   repository secrets into that environment. A release then waits for your
-   approval before any secret is available.
+   *Required reviewers* and move `TAURI_SIGNING_PRIVATE_KEY` and
+   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` from repository secrets into that
+   environment. The `publish` job is the only one that names it, so a release
+   waits for your approval before the key is available. (Leave the `APPLE_*`
+   secrets as repository secrets: the build jobs don't use the environment.)
+   Until you do this, a tag push signs and drafts a release unattended.
 2. **Settings › Rules › Rulesets › New tag ruleset**: target `v*`, restrict
    creation and deletion to yourself (no bypass), so a collaborator's tag can't
    start a release.
@@ -102,3 +109,9 @@ Options, cheapest first:
 - An OV or EV certificate from a certificate authority.
 
 Each needs its own small workflow change; tell Claude which you pick.
+
+The release workflow could not be run while it was changed (it needs GitHub). On the
+first tag, watch the `build` and `publish` jobs: `publish` expects one `.app.tar.gz`,
+one `-setup.exe` and one `.AppImage` among the built files, signs each with
+`tauri signer sign` and writes `latest.json` itself. If a step fails, the draft
+isn't created and nothing is published.

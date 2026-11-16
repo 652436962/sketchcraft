@@ -29,14 +29,17 @@ concurrency:
 #     package install script runs there.
 #   - Apple signing secrets are given to the one build step that signs, never
 #     written to the job environment.
-# What still runs with the key in its environment: the Tauri CLI (the
-# @tauri-apps/cli npm package and its prebuilt binary, pinned by
-# app/package-lock.json) and Cargo build scripts of Rust dependencies (pinned
-# by Cargo.lock). For more protection, the `build` job names a GitHub
-# Environment, `release`: put the signing secrets in it with required
-# reviewers, and add a tag protection rule (ruleset) for v* tags so only the
-# maintainer can start a release (docs/SIGNING.md). Those are repository
-# settings only the owner can turn on.
+#   - Compiling is separate from signing. The `build` job compiles with
+#     `cargo build --locked` semantics (`-- --locked`) and holds no secrets and
+#     a read-only token (the Apple secrets, once added, go to one step). The
+#     `publish` job signs the update packages with the real key and makes the
+#     draft release; it compiles nothing, so no dependency build script or
+#     proc-macro ever runs next to the key. Only the pinned Tauri CLI
+#     (`signer sign`, installed with --ignore-scripts) and a short script run there.
+# The `publish` job names a GitHub Environment, `release`: put the signing
+# secrets in it with required reviewers, and add a tag protection rule
+# (ruleset) for v* tags so only the maintainer can start a release
+# (docs/SIGNING.md). Those are repository settings only the owner can turn on.
 
 jobs:
   checks:
@@ -87,13 +90,15 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # Compiles and bundles the installers. This job has NO secrets: every Rust
+  # build script, proc-macro and npm package runs here without the update-signing
+  # key and without a token that can write to the repository. (The update
+  # packages it makes are signed with a throwaway key made fresh for the run;
+  # the `publish` job signs them for real.)
   build:
     needs: [frontend]
-    # the signing secrets can be kept in this environment (required reviewers)
-    environment: release
     permissions:
-      # Creates the draft release and uploads installers and latest.json.
-      contents: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -135,22 +140,24 @@ jobs:
         with:
           name: frontend-dist
           path: app/dist
-      # Turns off beforeBuildCommand (`npm run build`) for this build: the UI
-      # is already built, and this job holds the signing key.
+      # Turns off beforeBuildCommand (`npm run build`) for this build: the UI is already built.
       - name: Skip the frontend build hook
         shell: bash
         run: echo '{"build":{"beforeBuildCommand":""}}' > "$RUNNER_TEMP/tauri-release.json"
+      # Tauri makes its update packages (and their signatures) while bundling, so it needs
+      # a key. This one is made here, used here and thrown away; its signatures are discarded.
+      - name: Make a throwaway key for the build
+        shell: bash
+        working-directory: app
+        run: npx --no-install tauri signer generate --ci -p "" -w "$RUNNER_TEMP/throwaway.key"
 
-      # macOS with Apple signing + notarization: the secrets go to this step only.
+      # macOS with Apple signing + notarization: the Apple secrets go to this one step.
       - name: Build, sign and notarize (macOS)
         if: matrix.platform == 'macos-latest' && env.HAS_APPLE == 'true'
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signs the update packages; installed copies only accept updates
-          # signed with this key (public half in tauri.conf.json). Required.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ runner.temp }}/throwaway.key
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -159,29 +166,18 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: app
-          tagName: ${{ github.ref_name }}
-          releaseName: SketchCraft ${{ github.ref_name }}
-          uploadUpdaterJson: true
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }} --config ${{ runner.temp }}/tauri-release.json
+          args: ${{ matrix.args }} --config ${{ runner.temp }}/tauri-release.json -- --locked
 
-      # Everything else (and macOS before the Apple secrets exist): no Apple secrets.
+      # Everything else (and macOS before the Apple secrets exist): no secrets at all.
       - name: Build
         if: matrix.platform != 'macos-latest' || env.HAS_APPLE != 'true'
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ runner.temp }}/throwaway.key
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           projectPath: app
-          tagName: ${{ github.ref_name }}
-          releaseName: SketchCraft ${{ github.ref_name }}
-          uploadUpdaterJson: true
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }} --config ${{ runner.temp }}/tauri-release.json
+          args: ${{ matrix.args }} --config ${{ runner.temp }}/tauri-release.json -- --locked
 
       # Windows: the app as a ZIP too, to run from any folder (no installer).
       # PORTABLE.txt tells it to offer the new ZIP instead of installing updates.
@@ -203,6 +199,95 @@ jobs:
           path: extras/*.zip
           if-no-files-found: error
           retention-days: 1
+
+      # What the release gets: installers, and the update packages (.app.tar.gz,
+      # -setup.exe, .AppImage), without the throwaway signatures.
+      - name: Collect the installers
+        shell: bash
+        run: |
+          mkdir -p bundles
+          find target -path '*/release/bundle/*' -type f \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*-setup.exe' -o -name '*.msi' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -exec cp {} bundles/ \;
+          ls -la bundles
+          [ -n "$(ls bundles)" ] || { echo "::error::no installers were built"; exit 1; }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bundles-${{ matrix.platform }}
+          path: bundles/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Signs the update packages with the real key and makes the draft release. It
+  # compiles nothing: the only code that runs with the key is the pinned Tauri
+  # CLI's `signer sign` (installed with --ignore-scripts) and a short script
+  # below. Put the key in the `release` Environment with required reviewers
+  # (docs/SIGNING.md), so a tag alone can't start this job.
+  publish:
+    needs: [build]
+    environment: release
+    runs-on: ubuntu-latest
+    permissions:
+      # Creates the draft release and uploads to it.
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install the Tauri CLI (no install scripts)
+        working-directory: app
+        run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: bundles-*
+          path: bundles
+          merge-multiple: true
+      - name: Sign the update packages
+        shell: bash
+        working-directory: app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          n=0
+          for f in ../bundles/*.app.tar.gz ../bundles/*-setup.exe ../bundles/*.AppImage; do
+            npx --no-install tauri signer sign "$f"
+            n=$((n+1))
+          done
+          [ "$n" -ge 3 ] || { echo "::error::expected a macOS, Windows and Linux update package, found $n"; exit 1; }
+      - name: latest.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'JS'
+          const fs = require("fs");
+          const v = JSON.parse(fs.readFileSync("app/src-tauri/tauri.conf.json", "utf8")).version;
+          const tag = process.env.GITHUB_REF_NAME;
+          if (tag !== `v${v}`) throw new Error(`tag ${tag} is not v${v}`);
+          const base = `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}/`;
+          const files = fs.readdirSync("bundles");
+          const entry = (name) => ({ signature: fs.readFileSync(`bundles/${name}.sig`, "utf8").trim(), url: base + encodeURIComponent(name) });
+          const find = (re) => { const f = files.filter((n) => re.test(n)); if (f.length !== 1) throw new Error(`expected one ${re}, found ${f}`); return f[0]; };
+          const mac = entry(find(/\.app\.tar\.gz$/));
+          const platforms = {
+            "darwin-aarch64": mac,
+            "darwin-x86_64": mac,
+            "windows-x86_64": entry(find(/-setup\.exe$/)),
+            "linux-x86_64": entry(find(/\.AppImage$/)),
+          };
+          fs.writeFileSync("bundles/latest.json", JSON.stringify({ version: v, notes: `SketchCraft ${v}`, pub_date: new Date().toISOString(), platforms }, null, 2));
+          JS
+          cat bundles/latest.json
+      - name: Create the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --title "SketchCraft $GITHUB_REF_NAME" --notes "Draft: check the files, then publish." bundles/*
 
   # The headless CLI. No secrets, no write access: it builds and hands the zip on.
   cli:
@@ -245,7 +330,7 @@ jobs:
   # Puts the CLI and portable zips on the draft, then publishes SHA256SUMS.txt
   # for every file on it (so a download can be checked against the release page).
   assets:
-    needs: [build, cli]
+    needs: [publish, cli]
     runs-on: ubuntu-latest
     permissions:
       contents: write

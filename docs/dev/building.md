@@ -30,7 +30,12 @@ engine, rebuild and restart the bridge.
 (`X-Sketchcraft-Token`). The bridge writes it to `.bridge-token` beside the live
 model (readable only by you; `--token-file FILE` or `SKETCHCRAFT_BRIDGE_TOKEN`
 change that), and the dev server hands it to the page at `/__bridge-token`, reading
-the file again if the bridge was restarted, so there's nothing to copy. Scripts
+the file again if the bridge was restarted, so there's nothing to copy. The dev
+server answers that only for a request from its own page (same origin, the
+`X-Sketchcraft-Dev` header, which another site can't send) that comes from a process
+of **your own user** (it looks up the caller's port with `lsof`; elsewhere, such as
+Windows, that check isn't made, so use the dev server on a machine only you use).
+`curl` won't get the token from the dev server: read the file, as below. Scripts
 that call the bridge send the file's contents as the header (see
 `tools/demos/lib.mjs`; `curl -H "X-Sketchcraft-Token: $(cat ~/Documents/SketchCraft/.bridge-token)" ...`).
 The dev page also gets the desktop app's content security policy.
