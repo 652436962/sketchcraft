@@ -208,6 +208,7 @@ export function WorkspaceDialog({ ws, onChange, onReset, onClose }: { ws: Worksp
           <select className="units-select" value={ws.dock} onChange={(e) => onChange({ dock: e.target.value as Workspace["dock"] })}>
             <option value="bottom">Along the bottom</option>
             <option value="left">Down the left side</option>
+            <option value="classic">Classic: docked above the model</option>
           </select>
           <span>Left panel</span>
           <select className="units-select" value={ws.showLeft ? ws.leftTab : "off"} onChange={(e) => (e.target.value === "off" ? onChange({ showLeft: false }) : onChange({ showLeft: true, leftTab: e.target.value as Workspace["leftTab"] }))}>

@@ -19,6 +19,10 @@ What changed in each SketchCraft release, newest first. The format follows
 - **Windows portable ZIP.** `SketchCraft_<version>_x64_portable.zip`: unzip
   anywhere and open SketchCraft.exe, no installer. When a new version is out,
   the portable copy links to the new ZIP instead of installing.
+- **Classic layout.** The tool bar, view bar and workspace strip dock edge to
+  edge above the model, outside it, like SketchUp, and the Value box sits in
+  the corner. Shift+S › **Classic layout**, or per workspace under Customize ›
+  Toolbar. The floating layout stays the default.
 
 ## [0.3.4] - 2026-11-15
 

@@ -712,6 +712,11 @@ export default function App() {
       { label: "3D Text…", hint: "File", run: () => setShowText3d(true) },
       { label: "Generate report (CSV)…", hint: "File", run: file.report },
       { label: "Skins…", hint: "How SketchCraft looks", run: () => setShowSkins(true) },
+      {
+        label: ws.dock === "classic" ? "Floating layout" : "Classic layout",
+        hint: ws.dock === "classic" ? "Tool bar floating over the model again" : "Tool bars docked above the model, like SketchUp",
+        run: () => editWs({ dock: ws.dock === "classic" ? "bottom" : "classic" }),
+      },
       { label: "Keyboard shortcuts", hint: "Help", key: "?", run: () => setShowKeys(true) },
       ...(inTauri ? [{ label: "Check for updates…", hint: "Help", run: checkForUpdatesNow }] : []),
       { label: "About SketchCraft", hint: `Version ${__APP_VERSION__}`, run: () => say(`SketchCraft ${__APP_VERSION__}`) },
@@ -759,7 +764,7 @@ export default function App() {
   const selCount = selIds(sel).length;
 
   return (
-    <div className={`app ${ws.showLeft ? "" : "no-left"} ${ws.showRight ? "" : "no-right"} ${ws.dock === "left" ? "dock-left" : ""}`}>
+    <div className={`app ${ws.showLeft ? "" : "no-left"} ${ws.showRight ? "" : "no-right"} ${ws.dock === "left" ? "dock-left" : ws.dock === "classic" ? "dock-classic" : ""}`}>
       <header className="topbar" data-tauri-drag-region>
         <div className="brand" data-tauri-drag-region>
           <Logo />

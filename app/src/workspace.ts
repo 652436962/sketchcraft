@@ -5,7 +5,9 @@
 import type { Styles, Tool } from "./Viewport";
 
 export type WorkspaceId = "model" | "arch" | "design" | "previz";
-export type Dock = "bottom" | "left";
+/** where the tool bar sits: floating along the bottom, down the left, or
+ * "classic": docked edge to edge above the model, like SketchUp */
+export type Dock = "bottom" | "left" | "classic";
 export type LeftTab = "outliner" | "library" | "views";
 
 export interface Workspace {
