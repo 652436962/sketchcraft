@@ -44,6 +44,7 @@ buttons, forms and tools.
 | SketchCraft Lite (Android) | RuliAvo25, Lasm998 (Reddit) | 2026-11-16 | later | Its own app; touch-first push/pull |
 | Running SketchUp's own Ruby plugins | rats4final (Reddit) | 2026-11-16 | later | Needs SketchUp's whole Ruby API; SketchCraft plugins (#5) come first |
 | Library of scale figures (people, cyclists, cars) for pathways | EuphoricPenguin22 (Reddit) | 2026-11-16 | later | Original art, traced from CC0 photos |
+| 2D drafting done right: a dimension style editor (arrows, text, units, precision) and fonts for text and tables, what people miss in CADCraft | Waste-Affect5021 (r/ArtCraftAI, about CADCraft) | 2026-11-16 | later | Start once plugins are stable (end of sprint 2) |
 
 ## Done before this list
 
