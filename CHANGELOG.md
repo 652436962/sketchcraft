@@ -14,6 +14,15 @@ What changed in each SketchCraft release, newest first. The format follows
   plugin sandbox is tighter, installing a plugin shows what it is first, MCP
   agents work inside one folder, and the dev bridge needs a token. Updates and
   releases are checked more strictly, and releases publish SHA-256 checksums.
+- **A second review closed the gaps in that.** Undo no longer steps back over
+  work another client (Claude, a second window) saved, and a burst of New/Open
+  can't push your last good backup out (backups are thinned instead of dropped,
+  blank ones are skipped). A plugin run is now one Undo step. Opening a huge or
+  booby-trapped DXF is refused quickly instead of freezing the app, and very
+  long point lists or absurd stair/array counts are refused. AI agents write
+  only the right kind of file with a new name (never over yours) and can't be
+  steered out of their folder by an OBJ file. Plugin messages say which plugin
+  they come from, and saved CSVs can't carry spreadsheet formulas.
 
 ### Added
 - **Plugins window** (File › Plugins ▸ Manage plugins…, or Shift+S): every

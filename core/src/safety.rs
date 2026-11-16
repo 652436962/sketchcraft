@@ -129,6 +129,14 @@ impl Drop for TempDir {
 /// of it: write beside it, flush to disk, then rename over it.
 pub fn write_atomic(path: impl AsRef<Path>, bytes: &[u8]) -> std::io::Result<()> {
     let path = path.as_ref();
+    // a file that is a link is written through it (replacing the link would orphan its target)
+    let target;
+    let path = if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        target = std::fs::canonicalize(path)?;
+        target.as_path()
+    } else {
+        path
+    };
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
     let tmp = dir.join(format!(".{name}.tmp-{}-{}", std::process::id(), TMP_N.fetch_add(1, Ordering::Relaxed)));
@@ -137,6 +145,10 @@ pub fn write_atomic(path: impl AsRef<Path>, bytes: &[u8]) -> std::io::Result<()>
         f.write_all(bytes)?;
         f.sync_all()?;
         drop(f);
+        // the replacement keeps the mode the person gave the old file
+        if let Ok(old) = std::fs::metadata(path) {
+            std::fs::set_permissions(&tmp, old.permissions()).ok();
+        }
         std::fs::rename(&tmp, path)
     })();
     if result.is_err() {
@@ -176,6 +188,18 @@ mod tests {
         write_atomic(&f, b"two two").unwrap();
         assert_eq!(std::fs::read(&f).unwrap(), b"two two");
         assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 1, "no temp file left behind");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o640)).unwrap();
+            write_atomic(&f, b"three").unwrap();
+            assert_eq!(std::fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o640);
+            let link = d.path().join("link.txt");
+            std::os::unix::fs::symlink(&f, &link).unwrap();
+            write_atomic(&link, b"four").unwrap();
+            assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+            assert_eq!(std::fs::read(&f).unwrap(), b"four");
+        }
     }
 
     #[test]
