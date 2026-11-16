@@ -23,8 +23,8 @@ What changed in each SketchCraft release, newest first. The format follows
   the portable copy links to the new ZIP instead of installing.
 - **Classic layout.** The tool bar, view bar and workspace strip dock edge to
   edge above the model, outside it, like SketchUp, and the Value box sits in
-  the corner. Shift+S › **Classic layout**, or per workspace under Customize ›
-  Toolbar. The floating layout stays the default.
+  the corner. Themes › Layout, Shift+S › **Classic layout**, or per workspace under
+  Customize › Toolbar.
 - **Plugins.** Small JavaScript plugins add commands (File › Plugins ▸, and
   Shift+S). They run sandboxed: no network, no files, only engine commands,
   and what they change can be undone. Drop a folder in
@@ -32,17 +32,19 @@ What changed in each SketchCraft release, newest first. The format follows
 - **Cut list** (the first plugin). Lists the parts to cut, grouped by size and
   material, and roughly how many 4×8 sheets and 8 ft boards to buy. Copy the
   table or save it as CSV.
-- **Icons in skins.** A skin can bring its own tool icons: in the skin editor,
+- **Icons in themes.** A theme can bring its own tool icons: Themes › Icons ›
   **Load icons…** takes image files named after the tools (line.svg,
-  push.png…; **File names** lists them). They're saved in the .sketchskin
-  file, so an icon set can be shared like any skin.
+  push.png…; **File names** lists them). They're saved in the theme file, so
+  an icon set can be shared like any theme.
 
 ### Changed
-- **Classic is the new default.** New installs start in the Classic skin
+- **Classic is the new default.** New installs start in the Classic theme
   (neutral greys, a blue accent) with the tool bars docked above the model,
   at home for SketchUp users. SketchCraft's own Workshop look and floating
-  tool bars, and every other skin, are in the skin gallery; picking a skin
-  brings its layout. Your current skin is kept.
+  tool bars, and every other theme, are in the Themes gallery; picking one
+  brings its layout. Your current theme is kept.
+- Every field (dropdowns, text and number boxes) shares one look from the
+  theme: corners, border and height.
 - **Skins are now Themes.** The **Themes** button (top right, with a palette)
   opens one window for the look: **Theme** (the gallery), **Layout** (Classic
   or Floating, with a picture of each) and **Icons** (built in, or load your
