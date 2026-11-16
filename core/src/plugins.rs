@@ -329,16 +329,33 @@ fn write_plugin(id: &str, files: &[(String, Vec<u8>)]) -> Result<bool> {
     let root = dir();
     std::fs::create_dir_all(&root)?;
     let target = root.join(id);
+    // write the new copy beside it first: if that fails, the old one is untouched
+    let staging = root.join(format!(".installing-{id}-{}", std::process::id()));
+    std::fs::remove_dir_all(&staging).ok();
+    let written = (|| -> Result<()> {
+        for (rel, b) in files {
+            let p = staging.join(rel);
+            if let Some(d) = p.parent() {
+                std::fs::create_dir_all(d)?;
+            }
+            std::fs::write(p, b)?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = written {
+        std::fs::remove_dir_all(&staging).ok();
+        return Err(e);
+    }
     let replaced = target.exists();
     if replaced {
-        set_aside(&target, id)?;
-    }
-    for (rel, b) in files {
-        let p = target.join(rel);
-        if let Some(d) = p.parent() {
-            std::fs::create_dir_all(d)?;
+        if let Err(e) = set_aside(&target, id) {
+            std::fs::remove_dir_all(&staging).ok();
+            return Err(e);
         }
-        std::fs::write(p, b)?;
+    }
+    if let Err(e) = std::fs::rename(&staging, &target) {
+        std::fs::remove_dir_all(&staging).ok();
+        return Err(e.into());
     }
     Ok(replaced)
 }

@@ -375,3 +375,15 @@ fn obj_export_names_cannot_start_new_lines() {
     assert!(text.lines().all(|l| !l.contains('\r')));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn imported_geometry_out_of_range_is_refused_whole() {
+    // an arc whose radius is 1e300 used to import and poison the next transform
+    let dxf = "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\nA\n10\n0\n20\n0\n30\n0\n11\n1e300\n21\n0\n31\n0\n0\nENDSEC\n0\nEOF\n";
+    let mut e = Engine::new();
+    run(&mut e, json!({"cmd": "rect", "from": [0, 0, 0], "to": [4, 4, 0]}));
+    let before = serde_json::to_string(&e.model).unwrap();
+    let r = e.exec_json(&json!({"cmd": "import_dxf", "text": dxf}).to_string());
+    assert_eq!(r["ok"], false, "{r}");
+    assert_eq!(serde_json::to_string(&e.model).unwrap(), before);
+}
