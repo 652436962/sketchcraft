@@ -115,7 +115,17 @@ pub fn read(path: &str, bytes: &[u8], scale: f64, max_points: usize) -> Result<(
         bail!("no points in that file");
     }
     let name = std::path::Path::new(path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Scan".into());
-    Ok(build(name, raw, scale, max_points))
+    let (cloud, shift) = build(name, raw, scale, max_points);
+    if cloud.points.is_empty() {
+        bail!("no usable points in that file (every point was not a number or out of range)");
+    }
+    Ok((cloud, shift))
+}
+
+/// A point the model can hold: finite and within the model's range (a value
+/// past f32 or past the range would be stored as infinity or break the scene).
+fn usable(p: DVec3) -> bool {
+    p.is_finite() && p.abs().max_element() <= crate::model::MAX_COORD
 }
 
 /// Points to a cloud: scaled, thinned to the budget, moved near the origin
@@ -124,7 +134,7 @@ fn build(name: String, raw: Raw, scale: f64, max_points: usize) -> (Cloud, DVec3
     let n = raw.points.len();
     let k = n.div_ceil(max_points.max(1)).max(1);
     let keep: Vec<usize> = (0..n).step_by(k).collect();
-    let pts: Vec<DVec3> = keep.iter().map(|&i| raw.points[i] * scale).filter(|p| p.is_finite()).collect();
+    let pts: Vec<DVec3> = keep.iter().map(|&i| raw.points[i] * scale).filter(|p| usable(*p)).collect();
     let (lo, hi) = pts.iter().fold((DVec3::splat(f64::MAX), DVec3::splat(f64::MIN)), |(a, b), p| (a.min(*p), b.max(*p)));
     let center = (lo + hi) / 2.0;
     // far from the origin (a survey's coordinates): bring its middle, at its lowest, to the origin
@@ -133,7 +143,7 @@ fn build(name: String, raw: Raw, scale: f64, max_points: usize) -> (Cloud, DVec3
         let q = *p - shift;
         [q.x as f32, q.y as f32, q.z as f32]
     }).collect();
-    let colors: Vec<u8> = if raw.colors.len() == n { keep.iter().filter(|&&i| (raw.points[i] * scale).is_finite()).flat_map(|&i| raw.colors[i]).collect() } else { vec![] };
+    let colors: Vec<u8> = if raw.colors.len() == n { keep.iter().filter(|&&i| usable(raw.points[i] * scale)).flat_map(|&i| raw.colors[i]).collect() } else { vec![] };
     (Cloud { name, points: Arc::new(points), colors: Arc::new(colors), hidden: false, version: 1 }, shift)
 }
 

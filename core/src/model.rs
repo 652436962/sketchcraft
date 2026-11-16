@@ -951,17 +951,53 @@ impl Model {
                 i.parent = Some(gid);
             }
         }
+        let inside: BTreeSet<Id> = faces.iter().copied().collect();
         let mut verts = BTreeSet::new();
         for f in &faces {
             let face = self.faces.get_mut(f).unwrap();
             face.group = Some(gid);
             verts.extend(face.loops().flatten().copied());
         }
+        // a corner that faces outside the group also use can't belong to both: the
+        // group gets its own copy (and its own copies of the edges between them)
+        let shared: BTreeSet<Id> = self.faces.iter().filter(|(k, _)| !inside.contains(k)).flat_map(|(_, f)| f.loops().flatten().copied()).filter(|v| verts.contains(v)).collect();
+        let mut remap: HashMap<Id, Id> = HashMap::new();
+        for v in &shared {
+            let p = self.vertices[v].p;
+            let id = self.new_id();
+            self.vertices.insert(id, Vertex { p, group: Some(gid) });
+            remap.insert(*v, id);
+        }
+        if !remap.is_empty() {
+            let outside_edges: BTreeSet<(Id, Id)> = self.faces.iter().filter(|(k, _)| !inside.contains(k)).flat_map(|(_, f)| f.loops().flat_map(|l| pairs(l).map(|(a, b)| (a.min(b), a.max(b))).collect::<Vec<_>>()).collect::<Vec<_>>()).collect();
+            let used: Vec<(Id, Id)> = faces.iter().flat_map(|f| self.faces[f].loops().flat_map(|l| pairs(l).map(|(a, b)| (a.min(b), a.max(b))).collect::<Vec<_>>()).collect::<Vec<_>>()).collect();
+            for f in &faces {
+                let face = self.faces.get_mut(f).unwrap();
+                for v in face.outer.iter_mut().chain(face.holes.iter_mut().flatten()) {
+                    if let Some(n) = remap.get(v) {
+                        *v = *n;
+                    }
+                }
+            }
+            for (a, b) in used {
+                let Some((eid, e)) = self.edges.iter().find(|(_, e)| (e.a == a && e.b == b) || (e.a == b && e.b == a)).map(|(k, e)| (*k, e.clone())) else { continue };
+                let (na, nb) = (remap.get(&e.a).copied().unwrap_or(e.a), remap.get(&e.b).copied().unwrap_or(e.b));
+                if self.find_edge(na, nb).is_none() {
+                    let id = self.new_id();
+                    self.edges.insert(id, Edge { a: na, b: nb, group: Some(gid), ..e });
+                }
+                if !outside_edges.contains(&(a, b)) && (remap.contains_key(&e.a) || remap.contains_key(&e.b)) {
+                    self.edges.remove(&eid);
+                }
+            }
+            verts = verts.iter().map(|v| remap.get(v).copied().unwrap_or(*v)).collect();
+        }
         for v in &verts {
             self.vertices.get_mut(v).unwrap().group = Some(gid);
         }
+        let originals: BTreeSet<Id> = remap.keys().copied().collect();
         for e in self.edges.values_mut() {
-            if verts.contains(&e.a) && verts.contains(&e.b) {
+            if verts.contains(&e.a) && verts.contains(&e.b) && !originals.contains(&e.a) && !originals.contains(&e.b) {
                 e.group = Some(gid);
             }
         }
@@ -1151,6 +1187,9 @@ impl Model {
     }
 }
 
+/// Free text (names, notes) a model may hold in total.
+pub const MAX_TEXT_BYTES: usize = 8 << 20;
+
 /// Largest coordinate (meters) the model accepts anywhere.
 pub const MAX_COORD: f64 = 1e9;
 
@@ -1202,10 +1241,40 @@ impl Model {
         if !self.cages.values().all(|c| c.points.iter().flatten().all(|&x| sane(x))) {
             return bad("a cage");
         }
+        for c in self.clouds.values() {
+            if !c.points.iter().all(|&x| x.is_finite() && (x as f64).abs() <= MAX_COORD) {
+                return bad("a point cloud");
+            }
+        }
         for d in self.definitions.values() {
             d.model.check_sane()?;
         }
+        if self.text_bytes() > MAX_TEXT_BYTES {
+            bail!("the model's names and notes add up to more than {} MB, so that was not done", MAX_TEXT_BYTES >> 20);
+        }
         Ok(())
+    }
+
+    /// Bytes of names, notes and other free text the model holds (counted
+    /// toward the undo budget and capped so they can't be used to exhaust memory).
+    pub fn text_bytes(&self) -> usize {
+        let notes: usize = self.annotations.iter().map(|a| if let Annotation::Text { text, .. } = a { text.len() } else { 0 }).sum();
+        let views: usize = self.views.iter().map(|v| v.name.len() + v.style.as_ref().map_or(0, |s| s.to_string().len()) + v.tags.as_ref().map_or(0, |t| t.keys().map(|k| k.len() + 8).sum())).sum();
+        self.materials.keys().map(|k| k.len() + 16).sum::<usize>()
+            + self.tags.keys().map(|k| k.len() + 16).sum::<usize>()
+            + self.tag_colors.keys().map(|k| k.len() + 16).sum::<usize>()
+            + self.groups.values().map(|g| g.name.len() + g.tag.as_ref().map_or(0, String::len)).sum::<usize>()
+            + self.classes.values().map(String::len).sum::<usize>()
+            + self.sections.iter().map(|s| s.name.len()).sum::<usize>()
+            + self.clouds.values().map(|c| c.name.len()).sum::<usize>()
+            + self.definitions.values().map(|d| d.name.len() + d.model.text_bytes()).sum::<usize>()
+            + notes
+            + views
+    }
+
+    /// Nothing drawn yet (a fresh model): not worth a backup.
+    pub fn is_blank(&self) -> bool {
+        self.vertices.is_empty() && self.edges.is_empty() && self.faces.is_empty() && self.groups.is_empty() && self.instances.is_empty() && self.definitions.is_empty() && self.clouds.is_empty() && self.annotations.is_empty() && self.guides.is_empty() && self.views.is_empty() && self.materials.is_empty()
     }
 
     /// A rough size in bytes, for budgeting undo history (not exact; shared
@@ -1214,6 +1283,7 @@ impl Model {
         let tex: usize = self.materials.values().map(|m| 64 + m.texture.as_ref().map_or(0, |t| t.data.len())).sum();
         let faces: usize = self.faces.values().map(|f| 96 + 4 * (f.outer.len() + f.holes.iter().map(Vec::len).sum::<usize>())).sum();
         let photos: usize = self.views.iter().map(|v| 160 + v.photo.as_ref().map_or(0, String::len)).sum();
-        self.vertices.len() * 64 + self.edges.len() * 72 + faces + self.groups.len() * 96 + self.instances.len() * 200 + self.definitions.len() * 128 + tex + photos + self.annotations.len() * 120 + self.guides.len() * 80
+        let clouds: usize = self.clouds.values().map(|c| 64 + 4 * c.points.len() + c.colors.len()).sum();
+        self.text_bytes() + clouds + self.vertices.len() * 64 + self.edges.len() * 72 + faces + self.groups.len() * 96 + self.instances.len() * 200 + self.definitions.len() * 128 + tex + photos + self.annotations.len() * 120 + self.guides.len() * 80
     }
 }
