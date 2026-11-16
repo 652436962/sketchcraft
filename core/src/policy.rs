@@ -56,17 +56,65 @@ pub enum Caller {
 #[derive(Clone, Debug)]
 pub struct Workspace {
     pub root: Option<PathBuf>,
-    /// files this agent created in this session: the only existing files it may write again
-    made: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<PathBuf>>>,
+    /// files this agent really wrote in this session, with what they looked like when it finished: the
+    /// only existing files it may write again, and only while they are still exactly that
+    made: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<PathBuf, FileId>>>,
+    /// what the command being run is about to write (made files only once it succeeded: see `settle`)
+    pending: std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>,
+}
+
+/// A file's identity: where it is on disk and what it holds, so a file the person replaced under the same
+/// name is not mistaken for one the agent made.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileId {
+    dev_ino: (u64, u64),
+    len: u64,
+    mtime: Option<std::time::SystemTime>,
+    dir: bool,
+}
+
+impl FileId {
+    fn of(p: &Path) -> Option<FileId> {
+        let m = std::fs::symlink_metadata(p).ok()?;
+        #[cfg(unix)]
+        let dev_ino = {
+            use std::os::unix::fs::MetadataExt;
+            (m.dev(), m.ino())
+        };
+        #[cfg(not(unix))]
+        let dev_ino = (0, 0);
+        // a folder's size and time change with what is in it: only its place counts
+        let dir = m.is_dir();
+        Some(FileId { dev_ino, len: if dir { 0 } else { m.len() }, mtime: if dir { None } else { m.modified().ok() }, dir })
+    }
 }
 
 impl Workspace {
     pub fn at(dir: impl AsRef<Path>) -> Self {
         let d = dir.as_ref();
-        Workspace { root: Some(std::fs::canonicalize(d).unwrap_or_else(|_| lexical(d))), made: Default::default() }
+        Workspace { root: Some(std::fs::canonicalize(d).unwrap_or_else(|_| lexical(d))), made: Default::default(), pending: Default::default() }
+    }
+    /// May the agent write `path` (which exists): only if it wrote that very file, and nothing has changed it since.
+    fn owns(&self, path: &Path) -> bool {
+        let made = self.made.lock().unwrap_or_else(|e| e.into_inner());
+        made.get(path).is_some_and(|id| FileId::of(path).as_ref() == Some(id))
+    }
+    /// The command finished: what it planned to write and really wrote becomes "made by this agent"
+    /// (with its identity); a command that failed made nothing.
+    pub fn settle(&self, ok: bool) {
+        let planned: Vec<PathBuf> = std::mem::take(&mut *self.pending.lock().unwrap_or_else(|e| e.into_inner()));
+        if !ok {
+            return;
+        }
+        let mut made = self.made.lock().unwrap_or_else(|e| e.into_inner());
+        for p in planned {
+            if let Some(id) = FileId::of(&p) {
+                made.insert(p, id);
+            }
+        }
     }
     pub fn anywhere() -> Self {
-        Workspace { root: None, made: Default::default() }
+        Workspace { root: None, made: Default::default(), pending: Default::default() }
     }
     /// A folder an agent shouldn't be handed whole: the filesystem root, a drive root, a home folder, or a folder that holds the home folder.
     pub fn too_wide(&self) -> bool {
@@ -194,9 +242,12 @@ fn confine(raw: &str, ws: &Workspace) -> Result<String, String> {
     let Ok(rel) = full.strip_prefix(root) else {
         return Err(format!("{raw:?} is outside the workspace ({}); an agent may only use files there (start the server with --workspace DIR, or --any-path)", root.display()));
     };
+    let mut walked = root.clone();
     for c in rel.components() {
         let name = c.as_os_str().to_string_lossy();
-        if name.starts_with('.') || name.eq_ignore_ascii_case("plugins") || name.eq_ignore_ascii_case("backups") {
+        walked.push(c.as_os_str());
+        // by spelling (folded: `Backupſ`, `BACKUPS`, `Backups.`, `BACKUP~1`) and by identity (the same folder on disk)
+        if name.starts_with('.') || crate::library::reserved(&name) || crate::library::is_protected(&walked, root) {
             return Err(format!("{raw:?}: agents can't use hidden files, Backups or the Plugins folder"));
         }
     }
@@ -277,6 +328,13 @@ fn path_values<'a>(cmd: &'a mut Value) -> Vec<&'a mut Value> {
     out
 }
 
+/// The command that was vetted has finished (`ok`: it succeeded): files it wrote are now the agent's own.
+pub fn settle(caller: &Caller, ok: bool) {
+    if let Caller::Mcp(ws) = caller {
+        ws.settle(ok);
+    }
+}
+
 /// Check one command before it runs: numbers finite and in range, strings a
 /// sane length, paths real files (never URLs or pipes), and, for plugins and
 /// agents, only what their allowlist and workspace permit. Agent paths are
@@ -308,6 +366,8 @@ pub fn vet(caller: &Caller, cmd: &mut Value) -> Result<(), String> {
         }
     }
     if let Caller::Mcp(ws) = caller {
+        // what the previous command planned is settled or dropped; this one starts clean
+        ws.pending.lock().unwrap_or_else(|e| e.into_inner()).clear();
         // the library an agent works in is the workspace's own, not the person's
         if LIBRARY.contains(&name.as_str()) && cmd.get("dir").is_none_or(Value::is_null) {
             if let (Some(root), Some(o)) = (&ws.root, cmd.as_object_mut()) {
@@ -318,7 +378,8 @@ pub fn vet(caller: &Caller, cmd: &mut Value) -> Result<(), String> {
         if matches!(name.as_str(), "save_to_library" | "library_add") {
             for key in ["collection", "name"] {
                 if let Some(v) = cmd.get(key).and_then(Value::as_str).filter(|v| !v.trim().is_empty()) {
-                    crate::library::plain_name(v).map_err(|e| format!("\"{name}\" {key}: {e}"))?;
+                    let ok = if key == "collection" { crate::library::agent_collection(v) } else { crate::library::plain_name(v) };
+                    ok.map_err(|e| format!("\"{name}\" {key}: {e}"))?;
                 }
             }
         }
@@ -328,12 +389,11 @@ pub fn vet(caller: &Caller, cmd: &mut Value) -> Result<(), String> {
             let paths: Vec<String> = cmd.get("paths").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
             let collection = cmd.get("collection").and_then(Value::as_str).unwrap_or("").to_string();
             let (_, plan) = crate::library::plan_add(&dir, &paths, &collection).map_err(|e| e.to_string())?;
-            let mut made = ws.made.lock().unwrap_or_else(|e| e.into_inner());
             let dests: Vec<PathBuf> = plan.iter().map(|(_, d)| resolve(d)).collect();
-            if let Some(d) = dests.iter().find(|d| d.exists() && !made.contains(*d)) {
-                return Err(format!("{} already exists and wasn't made by this agent: an agent adds new files to the library, it doesn't replace the person's", d.display()));
+            if let Some(d) = dests.iter().find(|d| d.exists() && !ws.owns(d)) {
+                return Err(format!("{} already exists and wasn't made by this agent (or has changed since): an agent adds new files to the library, it doesn't replace the person's", d.display()));
             }
-            made.extend(dests);
+            ws.pending.lock().unwrap_or_else(|e| e.into_inner()).extend(dests);
         }
         for (c, key, exts) in WRITES.iter().filter(|(c, ..)| *c == name) {
             let Some(path) = cmd.get(*key).and_then(Value::as_str).map(str::to_string) else { continue };
@@ -343,9 +403,8 @@ pub fn vet(caller: &Caller, cmd: &mut Value) -> Result<(), String> {
                 return Err(format!("\"{c}\" writes .{} files: {path:?} has the wrong extension", exts.join(" or .")));
             }
             let resolved = resolve(p);
-            let mut made = ws.made.lock().unwrap_or_else(|e| e.into_inner());
-            if resolved.exists() && !made.contains(&resolved) {
-                return Err(format!("{path:?} already exists and wasn't made by this agent: an agent writes new file names, it doesn't replace the person's files"));
+            if resolved.exists() && !ws.owns(&resolved) {
+                return Err(format!("{path:?} already exists and wasn't made by this agent (or has changed since): an agent writes new file names, it doesn't replace the person's files"));
             }
             // the files an export writes beside the one it names (materials, textures) are held to the same rule
             let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -357,12 +416,12 @@ pub fn vet(caller: &Caller, cmd: &mut Value) -> Result<(), String> {
             };
             for x in extras {
                 let x = resolve(&x);
-                if x.exists() && !made.contains(&x) {
-                    return Err(format!("{} already exists and wasn't made by this agent: \"{c}\" would write into it, and an agent doesn't replace the person's files", x.display()));
+                if x.exists() && !ws.owns(&x) {
+                    return Err(format!("{} already exists and wasn't made by this agent (or has changed since): \"{c}\" would write into it, and an agent doesn't replace the person's files", x.display()));
                 }
-                made.insert(x);
+                ws.pending.lock().unwrap_or_else(|e| e.into_inner()).push(x);
             }
-            made.insert(resolved);
+            ws.pending.lock().unwrap_or_else(|e| e.into_inner()).push(resolved);
         }
     }
     Ok(())

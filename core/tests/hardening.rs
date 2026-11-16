@@ -1146,3 +1146,79 @@ fn text_3d_stops_at_its_deadline_for_the_app_too() {
     let took = t.elapsed().as_secs_f64();
     assert!(took < 20.0, "plugin text_3d on a big model ran {took:.1}s");
 }
+
+/// R4-MBK-002: the reserved folders are compared folded and by identity, not by spelling.
+#[test]
+fn look_alike_spellings_of_reserved_folders_are_refused() {
+    use sketchcraft::library::{plain_name, reserved};
+    for bad in ["Backups", "BACKUPS", "Backupſ", "Pluginſ", "Bac\u{212A}ups", "Backups.", "Backups ", "Backups...", "BACKUP~1", "PLUGIN~2", "ＢＡＣＫＵＰＳ", "CON", "nul", "COM1", "Lpt9", "aux.obj", ".git"] {
+        assert!(reserved(bad), "{bad:?} should be reserved");
+        assert!(plain_name(bad).is_err(), "{bad:?} should be refused");
+    }
+    for ok in ["Mine", "Backup stuff", "Plugins and more", "Console", "Chairs", "com", "Backups2"] {
+        assert!(!reserved(ok), "{ok:?} should be fine");
+    }
+    let base = scratch("lib-fold");
+    let ws = base.join("ws");
+    std::fs::create_dir_all(ws.join("Backups")).unwrap();
+    std::fs::create_dir_all(ws.join("Plugins")).unwrap();
+    let a = agent(&ws);
+    let mut e = Engine::new();
+    run_as(&mut e, &a, json!({"cmd": "rect", "from": [0, 0, 0], "to": [2, 2, 0]}));
+    let f = run_as(&mut e, &a, json!({"cmd": "rect", "from": [10, 0, 0], "to": [12, 2, 0]}))["face"].as_u64().unwrap();
+    let g = run_as(&mut e, &a, json!({"cmd": "group", "ids": [f]}))["group"].as_u64().unwrap();
+    let comp = run_as(&mut e, &a, json!({"cmd": "make_component", "ids": [g], "name": "Thing"}))["component"].as_u64().unwrap();
+    for coll in ["Backupſ", "Pluginſ", "BACKUPS", "Backups.", "Backups ", "BACKUP~1", "Bäckups"] {
+        for cmd in ["save_to_library", "library_add"] {
+            let mut c = json!({"cmd": cmd, "dir": ".", "collection": coll, "name": "live-1"});
+            if cmd == "save_to_library" {
+                c["component"] = json!(comp);
+            } else {
+                c["paths"] = json!(["x.obj"]);
+            }
+            let r = e.exec_json_as(&a, &c.to_string());
+            assert_eq!(r["ok"], false, "{cmd} {coll:?} -> {r}");
+        }
+    }
+    assert!(std::fs::read_dir(ws.join("Backups")).unwrap().next().is_none(), "nothing written into Backups");
+    assert!(std::fs::read_dir(ws.join("Plugins")).unwrap().next().is_none(), "nothing written into Plugins");
+    // by identity: a folder that is really Backups (a link, or the same folder under another name) is refused for everyone
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(ws.join("Backups"), ws.join("Shelf")).unwrap();
+        let r = e.exec_json(&json!({"cmd": "save_to_library", "component": comp, "dir": ws, "collection": "Shelf"}).to_string());
+        assert_eq!(r["ok"], false, "{r}");
+        assert!(std::fs::read_dir(ws.join("Backups")).unwrap().next().is_none());
+    }
+    std::fs::remove_dir_all(&base).ok();
+}
+
+/// R4-MBK-003: a name is "made by this agent" only after a command wrote it, and only while it is still that file.
+#[test]
+fn a_failed_command_reserves_no_name_and_a_replaced_file_is_not_the_agents() {
+    let base = scratch("made");
+    let ws = base.join("ws");
+    std::fs::create_dir_all(ws.join("x")).unwrap();
+    let a = agent(&ws);
+    let mut e = Engine::new();
+    run_as(&mut e, &a, json!({"cmd": "rect", "from": [0, 0, 0], "to": [2, 2, 0]}));
+    // a library_add of a file that doesn't exist fails and must reserve nothing
+    let r = e.exec_json_as(&a, &json!({"cmd": "library_add", "paths": ["Chair.obj"], "dir": "Library"}).to_string());
+    assert_eq!(r["ok"], false, "{r}");
+    // the person makes that file afterwards
+    std::fs::create_dir_all(ws.join("Library")).unwrap();
+    std::fs::write(ws.join("Library/Chair.obj"), b"PERSONS CHAIR").unwrap();
+    run_as(&mut e, &a, json!({"cmd": "export_obj", "path": "x/Chair.obj"}));
+    let r = e.exec_json_as(&a, &json!({"cmd": "library_add", "paths": ["x/Chair.obj"], "dir": "Library"}).to_string());
+    assert_eq!(r["ok"], false, "{r}");
+    assert_eq!(std::fs::read(ws.join("Library/Chair.obj")).unwrap(), b"PERSONS CHAIR");
+    // a file the agent really made can be written again, until the person changes it
+    run_as(&mut e, &a, json!({"cmd": "export_obj", "path": "x/Mine.obj"}));
+    run_as(&mut e, &a, json!({"cmd": "export_obj", "path": "x/Mine.obj"}));
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    std::fs::write(ws.join("x/Mine.obj"), b"the person edited this").unwrap();
+    let r = e.exec_json_as(&a, &json!({"cmd": "export_obj", "path": "x/Mine.obj"}).to_string());
+    assert_eq!(r["ok"], false, "{r}");
+    assert_eq!(std::fs::read(ws.join("x/Mine.obj")).unwrap(), b"the person edited this");
+    std::fs::remove_dir_all(&base).ok();
+}

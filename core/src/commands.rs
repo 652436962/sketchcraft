@@ -1263,12 +1263,17 @@ impl Engine {
             return json!({"ok": false, "error": e});
         }
         if let Err(e) = self.resolve(&mut v) {
+            crate::policy::settle(caller, false);
             return json!({"ok": false, "error": e.to_string()});
         }
         let r = match serde_json::from_value::<Command>(v) {
             Ok(cmd) => self.exec(cmd),
-            Err(e) => return json!({"ok": false, "error": format!("bad command: {e}")}),
+            Err(e) => {
+                crate::policy::settle(caller, false);
+                return json!({"ok": false, "error": format!("bad command: {e}")});
+            }
         };
+        crate::policy::settle(caller, r["ok"] == true);
         if let (Some(n), true) = (name, r["ok"] == true) {
             if let Some(id) = ["face", "group", "instance", "guide", "dimension", "text"]
                 .iter()
@@ -2639,9 +2644,12 @@ impl Engine {
                         }
                         d.join(c)
                     }
-                    None => d,
+                    None => d.clone(),
                 };
                 std::fs::create_dir_all(&folder)?;
+                if crate::library::is_protected(&folder, &d) {
+                    bail!("that folder is the model's Backups or Plugins folder; the library never writes there");
+                }
                 let base = crate::library::safe(&name.unwrap_or_else(|| m.definitions[&component].name.clone()));
                 let bytes = serde_json::to_string(&model)?;
                 // a new file every time: never over an existing one (create_new also settles a race)

@@ -206,11 +206,80 @@ pub fn thumbnail_of_file(path: &str, px: u32) -> Result<Vec<u8>> {
     Ok(png)
 }
 
+/// A name compared the way a file system might: Unicode case folded (`ſ` is `s`, the Kelvin sign is `k`),
+/// full-width Latin letters flattened, trailing dots and spaces dropped (Windows ignores them).
+pub fn fold(name: &str) -> String {
+    name.trim()
+        .trim_end_matches(['.', ' '])
+        .chars()
+        .map(|c| match c as u32 {
+            0xFF01..=0xFF5E => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            _ => c,
+        })
+        .flat_map(|c| c.to_uppercase().flat_map(|u| u.to_lowercase()).collect::<Vec<_>>())
+        .collect()
+}
+
+/// Windows device names (a file called `NUL` or `COM1.obj` is the device).
+fn is_device(folded: &str) -> bool {
+    let stem = folded.split('.').next().unwrap_or("").trim_end();
+    matches!(stem, "con" | "prn" | "aux" | "nul" | "conin$" | "conout$")
+        || ((stem.starts_with("com") || stem.starts_with("lpt")) && stem.len() == 4 && stem.as_bytes()[3].is_ascii_digit() && stem.as_bytes()[3] != b'0')
+}
+
 /// Folder names the library never writes into: the model's own `Backups` and `Plugins` (a
-/// file there is a backup or code the app would run), and hidden names.
+/// file there is a backup or code the app would run), hidden names, Windows short names
+/// (`BACKUP~1`) and device names. Compared folded, not by spelling.
 pub fn reserved(name: &str) -> bool {
     let n = name.trim();
-    n.starts_with('.') || n.eq_ignore_ascii_case("backups") || n.eq_ignore_ascii_case("plugins")
+    let f = fold(n);
+    n.starts_with('.') || f == "backups" || f == "plugins" || f.starts_with("backups.") || f.starts_with("plugins.") || is_device(&f) || f.as_bytes().windows(2).any(|w| w[0] == b'~' && w[1].is_ascii_digit())
+}
+
+/// Are these two paths the same folder on disk (same device and file id, or the same real path)?
+/// Spelling does not matter: a case-insensitive volume, a short name or a link all compare equal.
+pub fn same_folder(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (std::fs::metadata(a), std::fs::metadata(b)) {
+            (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+            (Ok(x), Ok(y)) => x == y,
+            _ => false,
+        }
+    }
+}
+
+/// Is `folder` (a library folder or collection that exists) the model's `Backups` or `Plugins` folder,
+/// or inside one, by identity? Checked against the ones beside `base`, beside its parent and beside the
+/// live document.
+pub fn is_protected(folder: &Path, base: &Path) -> bool {
+    let mut homes: Vec<PathBuf> = vec![base.to_path_buf()];
+    if let Some(p) = base.parent() {
+        homes.push(p.to_path_buf());
+    }
+    if let Some(p) = crate::live::default_doc().parent() {
+        homes.push(p.to_path_buf());
+    }
+    let real = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
+    for h in homes {
+        for name in ["Backups", "Plugins"] {
+            let r = h.join(name);
+            if !r.exists() {
+                continue;
+            }
+            if same_folder(folder, &r) || real.ancestors().any(|a| same_folder(a, &r)) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// A collection or file name an agent may give: one plain name, no separators, drive letters
@@ -220,8 +289,18 @@ pub fn plain_name(s: &str) -> Result<()> {
     if t.is_empty() || t.contains(['/', '\\', ':', '\0']) || t.starts_with('.') || t.contains("..") || t.chars().any(char::is_control) {
         bail!("{s:?} isn't a plain name (no folders, dots at the start or control characters)");
     }
-    if reserved(&safe(t)) {
+    if reserved(&safe(t)) || reserved(t) {
         bail!("{s:?} is a reserved folder name (Backups and Plugins are not library collections)");
+    }
+    Ok(())
+}
+
+/// A collection name an agent may give: letters, digits, spaces, `_` and `-` only (ASCII), so no
+/// look-alike spelling of a reserved folder can be made.
+pub fn agent_collection(s: &str) -> Result<()> {
+    plain_name(s)?;
+    if !s.trim().is_empty() && !s.trim().chars().all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '_' || c == '-') {
+        bail!("{s:?}: an agent's collection names use only letters, digits, spaces, - and _");
     }
     Ok(())
 }
@@ -265,6 +344,9 @@ pub fn plan_add(dir: &Path, paths: &[String], collection: &str) -> Result<(PathB
 pub fn add_files(dir: &Path, paths: &[String], collection: &str, replace: bool) -> Result<Vec<String>> {
     let (to, plan) = plan_add(dir, paths, collection)?;
     std::fs::create_dir_all(&to)?;
+    if is_protected(&to, dir) {
+        bail!("that folder is the model's Backups or Plugins folder; the library never writes there");
+    }
     let to_real = std::fs::canonicalize(&to)?;
     if !replace {
         for (src, dest) in &plan {
