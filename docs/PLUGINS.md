@@ -147,12 +147,21 @@ commands are handy for plugins:
 
 ## What plugins can't do
 
-Each run gets a fresh, sandboxed worker:
+Each run gets a fresh, sandboxed worker, and the engine checks every command it
+sends:
 
-- no access to the page, the network (`fetch` and friends are gone) or your files;
-- commands that read or write files (`save`, `open`, `import_*`, `export_*`,
-  anything with a `path` or `out`, and the like) are refused;
-- a run that takes over a minute is stopped (a tool: ten seconds per click or move).
+- no access to the page, the network (`fetch`, `Worker` and friends are gone) or your files;
+- the engine only runs modeling and inspection commands for a plugin: drawing,
+  editing, grouping, materials, views, measuring. Anything that reads or writes
+  files (`save`, `open`, `import_*`, `export_*`, anything with a `path` or
+  `out`), launches a program (`animate`, `photoreal`, `add_location`), manages
+  plugins (`install_plugin`, `plugin_enable`, `remove_plugin`) or touches your
+  skins and library is refused. This is enforced in the engine, so it holds for
+  JavaScript plugins and SketchUp Ruby scripts alike;
+- a run that takes over a minute is stopped (a tool: ten seconds per click or move);
+- what a plugin shows (results, forms) is checked and cut down, and always
+  carries a note saying it comes from that plugin.
 
 So a plugin can change your model (and you can undo that), but it can't send
-anything anywhere or touch other files.
+anything anywhere or touch other files. Installing one shows what it is (kind,
+files, a fingerprint) first, and replacing an installed plugin asks.

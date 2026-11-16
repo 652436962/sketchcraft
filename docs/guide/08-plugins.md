@@ -33,7 +33,7 @@ yet; they stop with a message saying what's missing.
 
 ## Are plugins safe?
 
-They run in a sandbox: no internet, no access to your files, and a minute at
+They run in a sandbox: no internet, no access to your files, no way to run other programs, and a minute at
 most. SketchUp Ruby scripts run in the same sandbox. They can change your model, and **⌘Z** undoes that like anything else.
 
 ## Write your own

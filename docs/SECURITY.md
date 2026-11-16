@@ -9,10 +9,13 @@ exposed, what has been tested, and how to test it again.
 | Surface | Who can reach it | Guard |
 | --- | --- | --- |
 | Desktop app (Tauri) | the app's own window | three IPC calls only (`exec`, `scene`, `sync`); `core:default` + `dialog:default` permissions; strict Content-Security-Policy (own files only, no remote scripts) |
-| Dev bridge (`sketchcraft bridge`, 127.0.0.1:5175) | programs on this Mac | refuses any browser `Origin` but the dev page (other websites can't send it commands); refuses any `Host` but 127.0.0.1/localhost (no DNS rebinding); 64 MB request cap |
-| MCP server | the agent you connect | stdio only; no network listener |
+| Dev bridge (`sketchcraft bridge`, 127.0.0.1:5175; development only, the app doesn't start it) | programs on this Mac | every request (GET too) needs a random per-launch token from a file only you can read; refuses any browser `Origin` but the dev page; refuses any `Host` but 127.0.0.1/localhost (no DNS rebinding); 64 MB request cap |
+| MCP server | the agent you connect | stdio only; no network listener; modeling plus file import/export **inside one workspace folder** (the model's folder, `--workspace DIR`, or `--any-path`), never plugin management, raw file writes, or launching programs; names read from a model are marked as data |
+| Plugins (JavaScript and SketchUp Ruby) | whoever wrote the plugin you installed | a worker with no network, no page, no way to start another worker; every command it sends runs under an **allowlist in the engine** (`core/src/policy.rs`): modeling and inspection only. Installing shows what it is first; replacing one needs a yes |
 | File importers | anyone who sends you a file | fuzzed (below); limits on sizes, depth and parse time |
-| External programs (ffmpeg, DWG converters, `open`) | paths you choose | arguments, never a shell; paths can't be read as flags; Reveal shows apps, never launches them |
+| External programs (ffmpeg, DWG converters, `open`) | paths you choose | arguments, never a shell; paths can't be read as flags or be URLs, pipes or devices; Reveal shows files, never launches them (on Windows too) |
+| The model file | every program that edits it | written whole-or-not-at-all, never with non-finite numbers, with rolling backups in `Backups/`; a file that can't be read is copied aside and reported |
+| Updates and releases | GitHub, the maintainer's signing key | signed with a pinned key; the app only accepts a newer version whose downloads come from that version's own release; release builds run from a `v*` tag on `main` with pinned actions, least-privilege tokens and SHA-256 checksums |
 
 ## Review, 2026-11-13
 
@@ -32,11 +35,39 @@ Not fixed, and why: `glib` (unsound) and `proc-macro-error` (unmaintained)
 come from Tauri's Linux GTK layer, aren't in the Mac build, and need a Tauri
 release. TypeScript 7 (a new compiler) is left for a deliberate upgrade.
 
+## Review, 2026-11-16 (red team)
+
+Four assessments (pentest, APT, financial, chaos) found 53 findings, 34 once
+the overlaps are merged. All are fixed, mitigated or accepted with a reason,
+except two that need the repository owner (code signing and the update key's
+protection, see [Signing](SIGNING.md)). In short:
+
+- One command policy in the engine (`core/src/policy.rs`) for plugins, SketchUp
+  Ruby and agents; allowlists, not denylists. Numbers, strings and paths in every
+  command are checked; a result with a non-finite or huge number is undone.
+- The model can't be lost to one bad command: panics restore the model, saves
+  are atomic, backups roll, damaged files are kept.
+- Bridge token, MCP workspace, plugin sandbox lockdown, install preview, error
+  boundary, skin value grammar, hashed Ruby cache, resource budgets (render,
+  photoreal, DXF blocks, undo memory), updater and release-workflow hardening.
+
+Checks for these live in `core/tests/hardening.rs`, `app/checks/run.mjs`
+(`npm run check`) and `tools/security-tests/plugin-sandbox.mjs`.
+
+Known limits: plugins are trusted with your model (not your files): install
+only ones you trust; the dev bridge is for development, and a plugin run in the
+plain browser dev page has the same limits but the page can't tell it apart from
+the app's own calls if it escapes the worker; macOS builds aren't notarized and
+Windows builds aren't code-signed yet (see [Signing](SIGNING.md)).
+
 ## Testing it again
 
 ```sh
 cargo audit                                   # Rust advisories (0 vulnerabilities on 2026-11-13)
 (cd app && npm audit)                         # npm advisories (0)
+cargo test --release -p sketchcraft-core --test hardening      # integrity, policy, limits
+(cd app && npm run check)                                      # skin values, plugin lockdown, plugin data
+SKETCHCRAFT_DOC=/some/scratch/live.sketchcraft node tools/security-tests/plugin-sandbox.mjs   # a hostile plugin in a real browser (see dev/building.md)
 cargo test --release --test fuzz -- --ignored --nocapture       # DXF, OBJ (20,000 cases each), SketchUp samples
 cargo test --release --test fbx -- --ignored --nocapture        # FBX (20,000 cases)
 FUZZ_TRACE=1 FUZZ_SKP_ITERS=150 cargo test --release --test fuzz fuzz_skp -- --ignored --nocapture

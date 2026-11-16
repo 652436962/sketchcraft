@@ -33,6 +33,10 @@ fn install_turn_off_and_remove_a_plugin() {
     std::env::set_var("SKETCHCRAFT_DOC", home.join("live.sketchcraft"));
     let mut e = Engine::new();
 
+    // SKETCHCRAFT_DOC scopes every user folder: plugins, library and skins
+    assert_eq!(sketchcraft::library::default_dir(), home.join("Library"));
+    assert_eq!(sketchcraft::plugins::dir(), home.join("Plugins"));
+
     let manifest = r#"{"name":"Stair Maker","version":"1.2.0","commands":[{"id":"stairs","label":"Stairs…","icon":"stairs.svg"}]}"#;
     let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>"#;
     // zipped inside a folder, with a junk file that isn't unpacked

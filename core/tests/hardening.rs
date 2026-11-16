@@ -282,7 +282,7 @@ fn render_and_photoreal_sizes_are_clamped_everywhere() {
     let o = sketchcraft::render::RenderOpts { width: 0, height: 0, ..Default::default() }.limited();
     assert!(o.width >= 16 && o.height >= 16);
     let p = sketchcraft::pt::PtOpts { width: 4096, height: 4096, samples: 4096, bounces: 16, ..Default::default() }.limited();
-    assert!(p.width as u64 * p.height as u64 * p.samples as u64 * p.bounces as u64 <= 2_600_000_000, "{}x{} {} {}", p.width, p.height, p.samples, p.bounces);
+    assert!(p.width as u64 * p.height as u64 * p.samples as u64 * p.bounces as u64 <= 4_100_000_000, "{}x{} {} {}", p.width, p.height, p.samples, p.bounces);
     assert!(p.bounces <= 12);
     // and a huge render command returns quickly instead of grinding
     let mut e = Engine::new();

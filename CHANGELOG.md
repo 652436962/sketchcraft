@@ -6,6 +6,15 @@ What changed in each SketchCraft release, newest first. The format follows
 
 ## [Unreleased]
 
+### Security
+- **Hardening after a red-team review.** Your model is safer: it's saved
+  atomically with rolling backups, a file that can't be read is kept aside
+  instead of replaced, and a bad command can no longer corrupt it. Plugins
+  (JavaScript and SketchUp Ruby) and AI agents are held to modeling commands, the
+  plugin sandbox is tighter, installing a plugin shows what it is first, MCP
+  agents work inside one folder, and the dev bridge needs a token. Updates and
+  releases are checked more strictly, and releases publish SHA-256 checksums.
+
 ### Added
 - **Plugins window** (File › Plugins ▸ Manage plugins…, or Shift+S): every
   plugin with its version and author, turn each on or off, remove yours

@@ -24,7 +24,26 @@ cd app && npm run dev                                          # 127.0.0.1:5174
 ```
 
 Open http://127.0.0.1:5174. Both listen on localhost only. After changing the
-engine, rebuild and restart the bridge. Dev builds expose the tool state as
+engine, rebuild and restart the bridge.
+
+**The bridge token.** Every bridge request needs a random per-launch token
+(`X-Sketchcraft-Token`). The bridge writes it to `.bridge-token` beside the live
+model (readable only by you; `--token-file FILE` or `SKETCHCRAFT_BRIDGE_TOKEN`
+change that), and the dev server hands it to the page at `/__bridge-token`, reading
+the file again if the bridge was restarted, so there's nothing to copy. Scripts
+that call the bridge send the file's contents as the header (see
+`tools/demos/lib.mjs`; `curl -H "X-Sketchcraft-Token: $(cat ~/Documents/SketchCraft/.bridge-token)" ...`).
+The dev page also gets the desktop app's content security policy.
+
+**A throwaway instance** (for tests; never touches your real model): pick other
+ports and a scratch model, and give the bridge the page's origin.
+
+```sh
+export SKETCHCRAFT_DOC=/tmp/scratch/live.sketchcraft SKETCHCRAFT_DEV_PORT=5195 VITE_BRIDGE_PORT=5196
+./target/release/sketchcraft bridge --port 5196 --origin http://127.0.0.1:5195 &
+(cd app && npx vite) &
+node tools/ruby-tests/run.mjs && node tools/security-tests/plugin-sandbox.mjs
+``` Dev builds expose the tool state as
 `window.__sketchcraft` and the view as `window.__sketchcraftView` for debugging.
 
 ## Tests
@@ -32,6 +51,7 @@ engine, rebuild and restart the bridge. Dev builds expose the tool state as
 ```sh
 cargo test --release -p sketchcraft-core    # modeling, importers (fuzzed), plugins
 cd app && npx tsc --noEmit -p .             # the interface's types
+cd app && npm run check                     # skin values, plugin lockdown and data checks
 ```
 
 The importers are fuzzed (`core/tests/fuzz.rs`): thousands of corrupted files

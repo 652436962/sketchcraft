@@ -752,10 +752,10 @@ fn denoise(color: &[Vec3], albedo: &[Vec3], normal: &[Vec3], w: usize, h: usize)
 }
 
 /// The most work one render may ask for: pixels x samples x bounces.
-const BUDGET: u64 = 2_500_000_000;
+const BUDGET: u64 = 4_000_000_000;
 
 impl PtOpts {
-    /// The same options held to what one call may cost (about a minute at
+    /// The same options held to what one call may cost (about a minute and a half at
     /// most): size, samples and bounces are capped, and samples come down
     /// further if the three together are still too much.
     pub fn limited(&self) -> PtOpts {

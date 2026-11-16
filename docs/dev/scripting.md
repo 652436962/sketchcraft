@@ -56,7 +56,11 @@ townhouse, a row of houses, a retail center and the asset lineup.
 | Inspect | `info`, `faces`, `pick`, `parts`, `volume`, `report`, `classify`, `units` |
 | Pictures and video | `render`, `photoreal`, `animate`, `timeline`, `timeline_frames`, `sheets`, `blueprint` |
 | Files | `new` (optionally with a `figure`), `save`, `open`, `import_skp`, `import_dxf`, `import_dwg`, `import_ifc`, `import_fbx`, `import_obj`, `export_glb`, `export_obj`, `export_stl`, `export_dae`, `export_dxf`, `export_dwg`, `export_ifc`, `export_pdf`, `raise_walls` |
-| Plugins | `plugins`, `plugin_enable`, `install_plugin`, `remove_plugin` |
+| Plugins | `plugins`, `plugin_enable`, `install_plugin` (`preview: true` describes a plugin without installing it; replacing an installed one needs `replace: true`), `remove_plugin` |
+
+Scripts, the CLI and the app run every command. Plugin code and AI agents run
+under a narrower allowlist (see [Security](../SECURITY.md)); every caller's numbers
+(within +/-1e9), strings and paths are checked.
 | History | `undo`, `redo` |
 
 The engine's own list (and each command's fields) lives in

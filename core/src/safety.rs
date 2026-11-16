@@ -154,6 +154,31 @@ pub fn write_atomic(path: impl AsRef<Path>, bytes: &[u8]) -> std::io::Result<()>
 mod tests {
     use super::*;
     #[test]
+    fn temp_dirs_are_unique_private_and_removed() {
+        let (a, b) = (TempDir::new("sc-safety").unwrap(), TempDir::new("sc-safety").unwrap());
+        assert_ne!(a.path(), b.path());
+        assert!(a.path().is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(a.path()).unwrap().permissions().mode() & 0o777, 0o700);
+        }
+        let gone = a.path().to_path_buf();
+        drop(a);
+        assert!(!gone.exists());
+    }
+
+    #[test]
+    fn atomic_writes_replace_whole_files() {
+        let d = TempDir::new("sc-atomic").unwrap();
+        let f = d.path().join("m.txt");
+        write_atomic(&f, b"one").unwrap();
+        write_atomic(&f, b"two two").unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"two two");
+        assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 1, "no temp file left behind");
+    }
+
+    #[test]
     fn sha256_matches_known_values() {
         assert_eq!(sha256_hex(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
         assert_eq!(sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
