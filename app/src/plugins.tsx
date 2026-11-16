@@ -29,6 +29,10 @@ export interface Plugin {
   /** off: its commands don't show anywhere */
   enabled?: boolean;
   folder?: string;
+  /** a SketchUp Ruby extension: its .rb files (by path) and the ones that load it */
+  ruby?: boolean;
+  files?: Record<string, string>;
+  entry?: string[];
 }
 
 export interface PluginResult {
@@ -305,7 +309,20 @@ export function PluginResultDialog({ result, plugin, onClose, onToast }: { resul
 }
 
 /** The Plugins window: every plugin, on or off, install from a .zip, remove yours. */
-export function PluginsDialog({ list, reload, onClose, onToast }: { list: PluginList; reload: () => Promise<void>; onClose: () => void; onToast: (t: string, bad?: boolean) => void }) {
+export function PluginsDialog({
+  list,
+  reload,
+  onClose,
+  onToast,
+  commandsOf,
+}: {
+  list: PluginList;
+  reload: () => Promise<void>;
+  onClose: () => void;
+  onToast: (t: string, bad?: boolean) => void;
+  /** a plugin's commands as found so far (Ruby ones register theirs when they load) */
+  commandsOf?: (p: Plugin) => PluginCommand[];
+}) {
   const file = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const install = async (f: File | undefined) => {
@@ -317,7 +334,7 @@ export function PluginsDialog({ list, reload, onClose, onToast }: { list: Plugin
       fr.onerror = () => res("");
       fr.readAsDataURL(f);
     });
-    const r = await exec({ cmd: "install_plugin", data });
+    const r = await exec({ cmd: "install_plugin", data, name: f.name });
     setBusy(false);
     if (!r.ok) return onToast(`Couldn't install ${f.name}: ${r.error}`, true);
     await reload();
@@ -351,10 +368,10 @@ export function PluginsDialog({ list, reload, onClose, onToast }: { list: Plugin
               <div className="plugin-about">
                 <b>{p.name}</b>
                 <span className="muted small">
-                  {[p.version && `v${p.version}`, p.author, p.builtin ? "built in" : "yours"].filter(Boolean).join(" · ")}
+                  {[p.version && `v${p.version}`, p.author, p.ruby ? "SketchUp Ruby" : null, p.builtin ? "built in" : "yours"].filter(Boolean).join(" · ")}
                 </span>
                 {p.description && <span className="small">{p.description}</span>}
-                <span className="muted small">{p.commands.map((c) => c.label).join(", ")}</span>
+                <span className="muted small">{(commandsOf?.(p) ?? p.commands).map((c) => c.label).join(", ")}</span>
               </div>
               {!p.builtin && (
                 <button className="btn small ghost" onClick={() => remove(p)}>
@@ -373,7 +390,7 @@ export function PluginsDialog({ list, reload, onClose, onToast }: { list: Plugin
             </div>
           ))}
         </div>
-        <input ref={file} type="file" accept=".zip,application/zip" hidden onChange={(e) => (install(e.target.files?.[0]), (e.target.value = ""))} />
+        <input ref={file} type="file" accept=".zip,.rbz,.rb,application/zip" hidden onChange={(e) => (install(e.target.files?.[0]), (e.target.value = ""))} />
         <div className="row gap" style={{ marginTop: 14 }}>
           <button className="btn small" onClick={() => file.current?.click()} disabled={busy}>
             {busy ? "Installing…" : "Install from file…"}
@@ -383,7 +400,7 @@ export function PluginsDialog({ list, reload, onClose, onToast }: { list: Plugin
               Open plugins folder
             </button>
           )}
-          <span className="muted small">A plugin is a .zip with plugin.json and main.js (see docs/PLUGINS.md).</span>
+          <span className="muted small">A SketchCraft plugin (.zip), or a SketchUp Ruby extension (.rbz or .rb).</span>
           <span style={{ flex: 1 }} />
           <button className="btn small" onClick={onClose}>
             Done

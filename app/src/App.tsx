@@ -16,7 +16,8 @@ import { TOOL_INFO, WORKSPACES, withEdits, type WorkspaceEdits, type WorkspaceId
 import { AppearanceDialog, WorkspaceDialog } from "./appearance";
 import { WorkspaceStrip } from "./wsstrip";
 import { Toolbar } from "./toolbar";
-import { loadPlugins, PluginFormDialog, PluginResultDialog, PluginsDialog, runPlugin, startPluginTool, type Plugin, type PluginForm, type PluginList, type PluginResult, type ToolSession } from "./plugins";
+import { runRuby } from "./ruby";
+import { loadPlugins, PluginFormDialog, PluginResultDialog, PluginsDialog, runPlugin, startPluginTool, type Plugin, type PluginCommand, type PluginForm, type PluginList, type PluginResult, type ToolSession } from "./plugins";
 import { PhotoModeler } from "./photomodel";
 import { RefImageDialog } from "./refimage";
 import { Text3dDialog } from "./text3d";
@@ -286,13 +287,28 @@ export default function App() {
   const [pluginTool, setPluginTool] = useState<{ name: string; hint: string; preview: [number, number, number][][]; anchor: [number, number, number] | null } | null>(null);
   const [pluginForm, setPluginForm] = useState<{ form: PluginForm; plugin: Plugin; done: (a: Record<string, unknown> | null) => void } | null>(null);
   const reloadPlugins = () => loadPlugins().then(setPlugins, () => {});
-  // plugins that are on
-  const livePlugins = plugins.plugins.filter((p) => p.enabled !== false);
+  // a SketchUp Ruby plugin's commands are the menu items it adds when it loads
+  const [rubyMenus, setRubyMenus] = useState<Record<string, string[] | { error: string }>>({});
+  useEffect(() => {
+    for (const p of plugins.plugins) {
+      if (!p.ruby || p.enabled === false || rubyMenus[p.id]) continue;
+      runRuby(p, {}).then((r) => setRubyMenus((m) => ({ ...m, [p.id]: r.error ? { error: r.error } : r.menu })));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plugins]);
+  // plugins that are on (Ruby ones with the commands they registered)
+  const livePlugins: Plugin[] = plugins.plugins
+    .filter((p) => p.enabled !== false)
+    .map((p) => {
+      if (!p.ruby) return p;
+      const m = rubyMenus[p.id];
+      return { ...p, commands: Array.isArray(m) ? m.map((label, i): PluginCommand => ({ id: String(i), label, hint: `${p.name} (SketchUp Ruby)` })) : [] };
+    });
   // their commands with icons sit on the tool bar
   const pluginButtons = useMemo(
     () => livePlugins.flatMap((pl) => pl.commands.filter((c) => c.icon).map((c) => ({ id: `plugin:${pl.id}:${c.id}`, name: c.label.replace(/…$/, ""), icon: c.icon!, run: () => void runPluginCommandRef.current(pl, c.id) }))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [plugins],
+    [plugins, rubyMenus],
   );
   useEffect(() => {
     loadPlugins().then(setPlugins, () => {});
@@ -680,7 +696,57 @@ export default function App() {
     }
   }, [tool]);
 
+  // a SketchUp Ruby command: run it (asking for its input boxes), then replay
+  // what it recorded, one undoable SketchCraft command at a time
+  const runRubyCommand = async (plugin: Plugin, item: number) => {
+    const answers: string[][] = [];
+    const selection = [
+      ...sel.groups.map((id) => ({ id, name: scene?.groups.find((g) => g.id === id)?.name ?? "", kind: "group" })),
+      ...sel.instances.map((id) => ({ id, name: scene?.instances.find((i) => i.id === id)?.name ?? "", kind: "instance" })),
+      ...sel.faces.map((id) => ({ id, name: "", kind: "face" })),
+    ];
+    for (let round = 0; round < 12; round++) {
+      const r = await runRuby(plugin, { item, answers, selection });
+      if (r.need) {
+        const need = r.need;
+        const got = await new Promise<Record<string, unknown> | null>((resolve) =>
+          setPluginForm({
+            form: {
+              title: need.title,
+              fields: need.prompts.map((label, i) => {
+                const list = need.lists[i];
+                return list && list.includes("|") ? { id: `f${i}`, label, type: "choice" as const, options: list.split("|"), value: need.defaults[i] } : { id: `f${i}`, label, type: "text" as const, value: need.defaults[i] ?? "" };
+              }),
+            },
+            plugin,
+            done: (a) => (setPluginForm(null), resolve(a)),
+          }),
+        );
+        if (!got) return;
+        answers.push(need.prompts.map((_, i) => String(got[`f${i}`] ?? "")));
+        continue;
+      }
+      if (r.error) return say(`${plugin.name}: ${r.error}`, true);
+      let failed = "";
+      for (const [i, cmd] of r.journal.entries()) {
+        const res = await exec(cmd);
+        if (!res.ok) {
+          failed = `step ${i + 1} (${String(cmd.cmd)}): ${res.error}`;
+          break;
+        }
+      }
+      await refresh();
+      setPluginRuns((n) => n + 1);
+      for (const t of r.toasts) say(t);
+      if (failed) say(`${plugin.name} stopped at ${failed}. ⌘Z undoes what it did.`, true);
+      if (r.out.trim()) setPluginShown({ result: { title: plugin.name, text: r.out.trim() }, plugin });
+      return;
+    }
+    say(`${plugin.name} kept asking for input, so it was stopped.`, true);
+  };
+
   const runPluginCommand = (plugin: Plugin, commandId: string) => {
+    if (plugin.ruby) return runRubyCommand(plugin, Number(commandId));
     const c = plugin.commands.find((x) => x.id === commandId);
     if (c?.tool) return Promise.resolve(startTool(plugin, commandId, c.label));
     return runPlugin(plugin, commandId, {
@@ -1218,7 +1284,7 @@ export default function App() {
         {showPhotoModel && scene && <PhotoModeler scene={scene} run={run} onClose={() => setShowPhotoModel(false)} onToast={say} />}
         {showSkins && <AppearanceDialog current={skin} onPick={wearSkin} onClose={() => setShowSkins(false)} onToast={say} layout={layout} onLayout={setLayout} />}
         {pluginForm && <PluginFormDialog form={pluginForm.form} plugin={pluginForm.plugin} units={scene?.units || "m"} done={pluginForm.done} />}
-        {showPlugins && <PluginsDialog list={plugins} reload={reloadPlugins} onClose={() => setShowPlugins(false)} onToast={say} />}
+        {showPlugins && <PluginsDialog list={plugins} reload={reloadPlugins} onClose={() => setShowPlugins(false)} onToast={say} commandsOf={(p) => livePlugins.find((x) => x.id === p.id)?.commands ?? p.commands} />}
         {pluginShown && <PluginResultDialog result={pluginShown.result} plugin={pluginShown.plugin} onClose={() => setPluginShown(null)} onToast={say} />}
         {showWs && <WorkspaceDialog ws={ws} onChange={editWs} onReset={() => editWs(null)} onClose={() => setShowWs(false)} />}
         {toast && <div className={`toast ${toast.bad ? "bad" : ""}`}>{toast.text}</div>}
