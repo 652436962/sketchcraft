@@ -666,3 +666,34 @@ fn run_as(e: &mut Engine, c: &Caller, v: Value) -> Value {
     assert_eq!(r["ok"], true, "{v} -> {r}");
     r
 }
+
+/// R2-BRN-006: a plugin run (begin_batch ... end_batch) is one undo step and one save, however many commands it sent.
+#[test]
+fn a_batch_of_commands_is_one_undo_step_and_one_save() {
+    let dir = scratch("batch");
+    let doc = dir.join("live.sketchcraft");
+    let mut app = Live::open(doc.clone());
+    app.exec(&json!({"cmd": "rect", "from": [0, 0, 0], "to": [4, 4, 0]}));
+    let depth = app.engine.undo_depth();
+    app.exec(&json!({"cmd": "begin_batch"}));
+    for i in 0..300 {
+        let r = app.exec_as(&Caller::Plugin, &json!({"cmd": "rect", "from": [10 + i * 6, 0, 0], "to": [14 + i * 6, 4, 0]}));
+        assert_eq!(r["ok"], true);
+    }
+    // Undo isn't available to the person mid-run, nor to the plugin
+    assert_eq!(app.exec_as(&Caller::Plugin, &json!({"cmd": "undo"}))["ok"], false);
+    // the file still holds the state before the run
+    let mut check = Engine::new();
+    run(&mut check, json!({"cmd": "open", "path": doc}));
+    assert_eq!(faces(&mut check), 1);
+    app.exec(&json!({"cmd": "end_batch"}));
+    assert_eq!(app.engine.undo_depth(), depth + 1, "one step for 300 commands");
+    run(&mut check, json!({"cmd": "open", "path": doc}));
+    assert_eq!(faces(&mut check), 301);
+    // plugins can't open or close batches themselves
+    assert_eq!(app.exec_as(&Caller::Plugin, &json!({"cmd": "end_batch"}))["ok"], false);
+    app.exec(&json!({"cmd": "undo"}));
+    run(&mut check, json!({"cmd": "open", "path": doc}));
+    assert_eq!(faces(&mut check), 1, "one Undo takes back the whole run");
+    std::fs::remove_dir_all(&dir).ok();
+}

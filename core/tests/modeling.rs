@@ -715,7 +715,7 @@ fn section_cut_fills_walls_with_their_openings() {
     // filled ring (outline with the room as a hole)
     let mut e = Engine::new();
     run(&mut e, json!({"cmd":"wall","points":[[0,0,0],[4,0,0],[4,4,0],[0,4,0]],"closed":true,"thickness":0.2,"height":2.7}));
-    let dir = std::env::temp_dir().join(format!("sketchcraft-sec-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("sketchcraft-sec-a-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let svg = dir.join("plan.svg").to_string_lossy().to_string();
     let r = run(&mut e, json!({"cmd":"section","origin":[0,0,1.2],"normal":[0,0,-1],"path":svg}));
@@ -2309,7 +2309,7 @@ fn section_planes_named_switch_and_save() {
     let s = sketchcraft::scene::build(&e.model, None);
     assert_eq!(s["sections"].as_array().unwrap().len(), 2);
     run(&mut e, json!({"cmd":"section_edit","id":b,"active":true}));
-    let dir = std::env::temp_dir().join(format!("sketchcraft-sec-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("sketchcraft-sec-b-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("m.sketchcraft").to_string_lossy().to_string();
     run(&mut e, json!({"cmd":"save","path":path}));

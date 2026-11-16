@@ -41,6 +41,8 @@ pub struct Live {
     /// something the person should know (a damaged file was set aside, a save failed)
     pub notice: Option<String>,
     notice_at: Option<SystemTime>,
+    /// commands ran inside a batch and the file doesn't have them yet
+    unsaved_batch: bool,
     /// saving is off: the file couldn't be read and couldn't be copied aside
     blocked: bool,
 }
@@ -63,7 +65,7 @@ pub fn default_doc() -> PathBuf {
 
 impl Live {
     pub fn open(doc: PathBuf) -> Self {
-        let mut live = Live { engine: Engine::new(), doc, seen: None, persist: true, last_backup: None, notice: None, notice_at: None, blocked: false };
+        let mut live = Live { engine: Engine::new(), doc, seen: None, persist: true, last_backup: None, notice: None, notice_at: None, unsaved_batch: false, blocked: false };
         if live.doc.exists() {
             live.load(true);
         }
@@ -73,7 +75,7 @@ impl Live {
 
     /// A model that is not saved anywhere.
     pub fn memory(engine: Engine) -> Self {
-        Live { engine, doc: PathBuf::new(), seen: None, persist: false, last_backup: None, notice: None, notice_at: None, blocked: false }
+        Live { engine, doc: PathBuf::new(), seen: None, persist: false, last_backup: None, notice: None, notice_at: None, unsaved_batch: false, blocked: false }
     }
 
     /// Open the file into the engine. If it can't be read, set it aside (a copy
@@ -88,6 +90,7 @@ impl Live {
             }
             // the file reads fine now: whatever was wrong is over
             self.blocked = false;
+            self.unsaved_batch = false;
             self.notice = None;
             return true;
         }
@@ -146,7 +149,15 @@ impl Live {
         let name = cmd["cmd"].as_str().unwrap_or("");
         let (before, replaces) = (self.engine.revision(), matches!(name, "new" | "open"));
         let mut r = self.engine.exec_value_as(caller, cmd.clone());
-        if r["ok"] == true && self.engine.revision() != before && self.persist {
+        // inside a batch (a plugin run) the file is written once, when the batch ends
+        let changed = r["ok"] == true && self.engine.revision() != before;
+        if self.engine.in_batch() {
+            self.unsaved_batch |= changed;
+            return r;
+        }
+        let changed = changed || (r["ok"] == true && self.unsaved_batch);
+        self.unsaved_batch = false;
+        if changed && self.persist {
             // another client saved while this command ran: theirs wins, ours is dropped,
             // so nobody's work is overwritten (run the command again)
             if self.doc.exists() && !self.blocked && mtime(&self.doc) != self.seen {

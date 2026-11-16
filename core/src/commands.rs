@@ -258,6 +258,10 @@ pub enum Command {
     DeleteView { name: String },
     Undo,
     Redo,
+    /// Start one undo step that spans many commands (a plugin run); `end_batch` closes it.
+    /// While it is open the model isn't saved after each command, and Undo is off.
+    BeginBatch,
+    EndBatch,
     /// Render a PNG. Without `out`, just reports the camera it would use.
     Render {
         #[serde(default)]
@@ -1147,6 +1151,8 @@ impl Command {
                 | Command::SaveText { .. }
                 | Command::Components
                 | Command::Pick { .. }
+                | Command::BeginBatch
+                | Command::EndBatch
                 | Command::Undo
                 | Command::Redo
                 | Command::Render { .. }
@@ -1187,7 +1193,12 @@ pub struct Engine {
     pt: Option<crate::pt::Progress>,
     /// memory undo history may use (estimated bytes); 0: the default
     pub undo_budget: usize,
+    /// an open batch: the model before it began, the revision then, and when
+    batch: Option<(Model, u64, std::time::Instant)>,
 }
+
+/// A batch nobody closed (the app went away mid-run) is closed after this.
+const BATCH_MAX: std::time::Duration = std::time::Duration::from_secs(300);
 
 const UNDO_LIMIT: usize = 200;
 /// Undo history never holds more than about this much (per-step sizes are estimates).
@@ -1237,6 +1248,9 @@ impl Engine {
     }
 
     fn exec_value_inner(&mut self, caller: &Caller, mut v: Value) -> Value {
+        if self.batch.as_ref().is_some_and(|b| b.2.elapsed() > BATCH_MAX) {
+            self.end_batch();
+        }
         let name = v.as_object_mut().and_then(|o| o.remove("as")).and_then(|n| n.as_str().map(String::from));
         if let Err(e) = crate::policy::vet(caller, &mut v) {
             return json!({"ok": false, "error": e});
@@ -1259,6 +1273,22 @@ impl Engine {
             }
         }
         r
+    }
+
+    /// Is a batch (see `BeginBatch`) open?
+    pub fn in_batch(&self) -> bool {
+        self.batch.is_some()
+    }
+
+    /// Close a batch: everything since it began is ONE undo step.
+    fn end_batch(&mut self) {
+        if let Some((before, rev, _)) = self.batch.take() {
+            if self.revision != rev {
+                self.undo.push(before);
+                self.redo.clear();
+                self.trim_undo();
+            }
+        }
     }
 
     /// How many steps Undo can go back.
@@ -1388,7 +1418,7 @@ impl Engine {
                     }
                     if is_open {
                         self.undo.clear();
-                    } else if push_undo {
+                    } else if push_undo && self.batch.is_none() {
                         if let Some((before, ..)) = saved {
                             self.undo.push(before);
                         }
@@ -1882,12 +1912,29 @@ impl Engine {
                     "bounds": b,
                 })
             }
+            Command::BeginBatch => {
+                if self.batch.is_some() {
+                    self.end_batch();
+                }
+                self.batch = Some((self.model.clone(), self.revision, std::time::Instant::now()));
+                json!({})
+            }
+            Command::EndBatch => {
+                self.end_batch();
+                json!({})
+            }
             Command::Undo => {
+                if self.batch.is_some() {
+                    bail!("a plugin is still running; Undo works when it has finished");
+                }
                 let Some(prev) = self.undo.pop() else { bail!("nothing to undo") };
                 self.redo.push(std::mem::replace(&mut self.model, prev));
                 json!({})
             }
             Command::Redo => {
+                if self.batch.is_some() {
+                    bail!("a plugin is still running; Redo works when it has finished");
+                }
                 let Some(next) = self.redo.pop() else { bail!("nothing to redo") };
                 self.undo.push(std::mem::replace(&mut self.model, next));
                 json!({})
@@ -1985,6 +2032,7 @@ impl Engine {
                 let opened: Model = serde_json::from_str(&std::fs::read_to_string(&path)?).map_err(|e| anyhow::anyhow!("{path} isn't a model SketchCraft can read: {e}"))?;
                 opened.check_sane()?;
                 self.model = opened;
+                self.batch = None;
                 self.ctx = None;
                 self.names.clear();
                 json!({"path": path, "faces": self.model.faces.len()})
