@@ -1349,6 +1349,9 @@ impl Engine {
     /// or absurd number in the model changes nothing (and costs no undo step).
     pub fn exec(&mut self, cmd: Command) -> Value {
         let is_env = matches!(cmd, Command::Environment { .. });
+        // opening a file replaces the model and the history with it: Undo must never
+        // step back to a model that isn't the one on disk
+        let is_open = matches!(cmd, Command::Open { .. });
         let mutates = cmd.mutates() || is_env;
         if mutates || matches!(cmd, Command::Undo | Command::Redo) {
             self.revision += 1;
@@ -1383,7 +1386,9 @@ impl Engine {
                         restore(self, saved);
                         return json!({"ok": false, "error": e.to_string()});
                     }
-                    if push_undo {
+                    if is_open {
+                        self.undo.clear();
+                    } else if push_undo {
                         if let Some((before, ..)) = saved {
                             self.undo.push(before);
                         }

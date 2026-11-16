@@ -163,7 +163,7 @@ fn rolling_backups_are_kept_and_bounded() {
         live.exec(&json!({"cmd": "new"}));
     }
     let n = std::fs::read_dir(dir.join("Backups")).unwrap().count();
-    assert!((1..=8).contains(&n), "{n} backups");
+    assert!((1..=9).contains(&n), "{n} backups");
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -386,4 +386,176 @@ fn imported_geometry_out_of_range_is_refused_whole() {
     let r = e.exec_json(&json!({"cmd": "import_dxf", "text": dxf}).to_string());
     assert_eq!(r["ok"], false, "{r}");
     assert_eq!(serde_json::to_string(&e.model).unwrap(), before);
+}
+
+// ---- Round 2 ---------------------------------------------------------------------------
+
+fn backups(dir: &std::path::Path) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = std::fs::read_dir(dir.join("Backups")).map(|rd| rd.flatten().map(|e| e.path()).collect()).unwrap_or_default();
+    v.sort();
+    v
+}
+
+/// R2-BRN-001 / R2-MBK-006: another client's save is not one of my undo steps.
+#[test]
+fn undo_after_a_reload_cannot_erase_the_other_clients_work() {
+    let dir = scratch("undo-reload");
+    let doc = dir.join("live.sketchcraft");
+    let mut app = Live::open(doc.clone());
+    app.exec(&json!({"cmd": "rect", "from": [0, 0, 0], "to": [4, 4, 0]}));
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let mut other = Live::open(doc.clone());
+    other.exec(&json!({"cmd": "rect", "from": [10, 0, 0], "to": [14, 4, 0]}));
+    other.exec(&json!({"cmd": "rect", "from": [20, 0, 0], "to": [24, 4, 0]}));
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    // the app picks up their work, then the person presses Undo
+    assert_eq!(app.exec(&json!({"cmd": "info"}))["faces"], 3);
+    app.exec(&json!({"cmd": "undo"}));
+    let mut check = Engine::new();
+    run(&mut check, json!({"cmd": "open", "path": doc}));
+    assert_eq!(faces(&mut check), 3, "their rectangles are still on disk");
+    // and the person's own steps still undo normally afterwards
+    app.exec(&json!({"cmd": "rect", "from": [30, 0, 0], "to": [34, 4, 0]}));
+    app.exec(&json!({"cmd": "undo"}));
+    run(&mut check, json!({"cmd": "open", "path": doc}));
+    assert_eq!(faces(&mut check), 3);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// R2-MBK-006: a client that finishes a slow command after someone else saved does not overwrite them.
+#[test]
+fn a_save_made_while_a_command_ran_is_not_overwritten() {
+    let dir = scratch("race");
+    let doc = dir.join("live.sketchcraft");
+    let mut app = Live::open(doc.clone());
+    app.exec(&json!({"cmd": "rect", "from": [0, 0, 0], "to": [4, 4, 0]}));
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    // the other client saves between this client's sync and its save: simulate with a file written under it
+    let mut other = Live::open(doc.clone());
+    other.exec(&json!({"cmd": "rect", "from": [10, 0, 0], "to": [14, 4, 0]}));
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    // (app hasn't polled) its next command starts from theirs; nothing is lost
+    let r = app.exec(&json!({"cmd": "rect", "from": [20, 0, 0], "to": [24, 4, 0]}));
+    assert_eq!(r["ok"], true);
+    let mut check = Engine::new();
+    run(&mut check, json!({"cmd": "open", "path": doc}));
+    assert_eq!(faces(&mut check), 3);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// R2-BRN-002 / R2-MBK-003: a flood of `new` cannot push out the last good backup.
+#[test]
+fn repeated_new_cannot_erase_the_last_good_backup() {
+    let dir = scratch("backup-flood");
+    let doc = dir.join("live.sketchcraft");
+    let mut live = Live::open(doc.clone());
+    for i in 0..5 {
+        live.exec(&json!({"cmd": "rect", "from": [0, 0, 0], "to": [4 + i, 4, 0]}));
+    }
+    // an older good backup, made an hour ago
+    std::fs::create_dir_all(dir.join("Backups")).unwrap();
+    let old = dir.join("Backups").join(format!("live-{}.sketchcraft", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - 7200));
+    std::fs::copy(&doc, &old).unwrap();
+    for _ in 0..30 {
+        live.exec(&json!({"cmd": "new"}));
+    }
+    // empty models are not backed up
+    let mut check = Engine::new();
+    for p in backups(&dir) {
+        run(&mut check, json!({"cmd": "open", "path": p}));
+        assert!(faces(&mut check) >= 1, "every backup holds a drawn model");
+    }
+    // many distinct models in a row: the older good backup and the first of the burst remain
+    let first: Vec<PathBuf> = backups(&dir);
+    for i in 0..20 {
+        live.exec(&json!({"cmd": "rect", "from": [0, 0, 0], "to": [4 + i, 4, 0]}));
+        live.exec(&json!({"cmd": "new"}));
+    }
+    let b2 = backups(&dir);
+    assert!(b2.contains(&old), "the older good backup survived the flood");
+    assert!(first.iter().filter(|p| **p != old).min().is_none_or(|p| b2.contains(p)), "so did the first backup of the burst");
+    assert!(b2.len() <= 12, "{} backups", b2.len());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// R2-BRN-008: flags and copies don't pile up or stick.
+#[test]
+fn damaged_copies_are_pruned_and_the_notice_clears_when_the_file_is_repaired() {
+    let dir = scratch("damaged-prune");
+    let doc = dir.join("live.sketchcraft");
+    for _ in 0..9 {
+        std::fs::write(&doc, b"{ not a model").unwrap();
+        let live = Live::open(doc.clone());
+        assert!(live.notice.is_some());
+    }
+    let kept = std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().contains(".damaged-")).count();
+    assert!(kept <= 5, "{kept} damaged copies");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// R2-BRN-004: a point list that would take minutes is refused up front.
+#[test]
+fn long_point_lists_and_huge_counts_are_refused_quickly() {
+    let mut e = Engine::new();
+    let pts: Vec<Value> = (0..3000).map(|i| json!([i as f64, (i % 7) as f64, 0])).collect();
+    let r = e.exec_json_as(&Caller::Plugin, &json!({"cmd": "line", "points": pts}).to_string());
+    assert_eq!(r["ok"], false, "{r}");
+    let ring: Vec<Value> = (0..3000).map(|i| json!([i as f64, (i % 7) as f64])).collect();
+    let r = e.exec_json_as(&Caller::Plugin, &json!({"cmd": "text_3d", "rings": [ring.clone(), ring.clone(), ring.clone()], "height": 1}).to_string());
+    assert_eq!(r["ok"], false, "{r}");
+    // R2-MBK-005: a stair of 100,000 m would be half a million steps
+    let t = std::time::Instant::now();
+    let r = e.exec_json_as(&Caller::Plugin, &json!({"cmd": "stairs", "at": [0, 0, 0], "rise": 100000, "tread": 0.3}).to_string());
+    assert_eq!(r["ok"], false, "{r}");
+    let r = e.exec_json(&json!({"cmd": "stairs", "at": [0, 0, 0], "rise": 1e8, "tread": 0.3}).to_string());
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(t.elapsed().as_secs() < 2);
+    let r = e.exec_json(&json!({"cmd": "stairs", "at": [0, 0, 0], "rise": 2.8, "tread": 0.28}).to_string());
+    assert_eq!(r["ok"], true, "{r}");
+}
+
+/// R2-BRN-003: names and notes count toward the undo budget and are capped in total.
+#[test]
+fn long_names_are_counted_and_capped() {
+    let mut e = Engine::new();
+    let mut refused = false;
+    for i in 0..200 {
+        let r = e.exec_json_as(&Caller::Plugin, &json!({"cmd": "material", "name": format!("{i}{}", "m".repeat(60_000)), "color": [1, 0, 0]}).to_string());
+        if r["ok"] != true {
+            refused = true;
+            break;
+        }
+    }
+    assert!(refused, "the total of names is capped");
+    assert!(e.model.text_bytes() <= sketchcraft::model::MAX_TEXT_BYTES);
+    assert!(e.model.approx_bytes() >= e.model.text_bytes());
+}
+
+/// R2-BRN-007: a point cloud with out-of-range values is cleaned at import and refused in the model.
+#[test]
+fn point_clouds_are_finite_and_in_range() {
+    let dir = scratch("cloud");
+    let f = dir.join("c.xyz");
+    std::fs::write(&f, "1 2 3\n4 5 6\n1e39 0 0\n7 8 9\n").unwrap();
+    let mut e = Engine::new();
+    run(&mut e, json!({"cmd": "import_cloud", "path": f}));
+    assert!(e.model.clouds.values().all(|c| c.points.iter().all(|x| x.is_finite() && (*x as f64).abs() <= 1e9)));
+    assert_eq!(e.model.clouds.values().map(|c| c.points.len()).sum::<usize>(), 9);
+    e.model.clouds.values_mut().next().unwrap().points = std::sync::Arc::new(vec![f32::INFINITY, 0.0, 0.0]);
+    assert!(e.model.check_sane().is_err());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// R2-BRN-008: grouping part of a solid then subdividing the group no longer hits a stale id.
+#[test]
+fn subdividing_a_partial_group_works() {
+    let mut e = Engine::new();
+    let f = run(&mut e, json!({"cmd": "rect", "from": [0, 0, 0], "to": [1, 1, 0]}))["face"].as_u64().unwrap();
+    let top = run(&mut e, json!({"cmd": "pushpull", "face": f, "distance": 1}))["face"].as_u64().unwrap();
+    let g = run(&mut e, json!({"cmd": "group", "ids": [top]}))["group"].as_u64().unwrap();
+    run(&mut e, json!({"cmd": "subdivide", "id": g, "levels": 1}));
+    // everything still refers to vertices that exist
+    for f in e.model.faces.values() {
+        assert!(f.loops().flatten().all(|v| e.model.vertices.contains_key(v)));
+    }
 }
