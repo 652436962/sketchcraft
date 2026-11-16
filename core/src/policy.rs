@@ -26,6 +26,19 @@ const MAX_DATA_UNTRUSTED: usize = 16 << 20;
 /// Keys whose values are file paths (checked for URLs, pipes and confinement).
 const PATH_KEYS: [&str; 5] = ["path", "out", "dir", "file", "folder"];
 /// Keys whose values may be long (files, images, text bodies).
+/// Longest list of points a drawing command takes (line, polygon, text outlines...):
+/// these cost far more than linear time, so a long one would freeze the app.
+const MAX_POINTS_UI: usize = 10_000;
+const MAX_POINTS_UNTRUSTED: usize = 2_000;
+/// Longest list of anything else (ids, faces, cage points), and the total
+/// number of values one command from a plugin or agent may carry.
+const MAX_LIST_UI: usize = 5_000_000;
+const MAX_LIST_UNTRUSTED: usize = 200_000;
+const MAX_VALUES_UNTRUSTED: usize = 400_000;
+/// Commands that draw from a list of points, whose cost grows faster than linearly.
+const DRAWING: [&str; 6] = ["line", "polygon", "wall", "text_3d", "text3d", "follow_me"];
+/// Keys whose arrays are point lists.
+const POINT_KEYS: [&str; 3] = ["points", "rings", "ring"];
 const DATA_KEYS: [&str; 7] = ["data", "photo", "text", "skin", "background", "style", "rings"];
 
 #[derive(Clone, Debug)]
@@ -153,12 +166,24 @@ fn confine(raw: &str, ws: &Workspace) -> Result<String, String> {
     Ok(full.to_string_lossy().into_owned())
 }
 
-fn walk(v: &Value, cmd: &str, data_max: usize, depth: usize, key: &str) -> Result<(), String> {
+struct Walk {
+    data_max: usize,
+    trusted: bool,
+    /// values seen so far (numbers and strings)
+    values: usize,
+}
+
+fn walk(v: &Value, cmd: &str, w: &mut Walk, depth: usize, key: &str) -> Result<(), String> {
+    let data_max = w.data_max;
     if depth > 64 {
         return Err("command nested too deeply".into());
     }
     match v {
         Value::Number(n) => {
+            w.values += 1;
+            if !w.trusted && w.values > MAX_VALUES_UNTRUSTED {
+                return Err("that command carries too many values".into());
+            }
             if n.as_f64().is_none_or(|x| !x.is_finite() || x.abs() > MAX_NUMBER) {
                 return Err(format!("{key:?}: that number is out of range (limit {MAX_NUMBER:e})"));
             }
@@ -170,8 +195,24 @@ fn walk(v: &Value, cmd: &str, data_max: usize, depth: usize, key: &str) -> Resul
                 return Err(format!("{key:?} is too long ({} bytes, limit {limit})", s.len()));
             }
         }
-        Value::Array(a) => a.iter().try_for_each(|x| walk(x, cmd, data_max, depth + 1, key))?,
-        Value::Object(o) => o.iter().try_for_each(|(k, x)| walk(x, cmd, data_max, depth + 1, k))?,
+        Value::Array(a) => {
+            let is_points = POINT_KEYS.contains(&key) && DRAWING.contains(&cmd) && a.first().is_some_and(|x| x.is_array() || x.is_number());
+            // a list of points: each element is [x, y, z]; "rings" is a list of lists of points
+            let (cap, what) = if is_points && key != "rings" { (if w.trusted { MAX_POINTS_UI } else { MAX_POINTS_UNTRUSTED }, "points") } else if w.trusted { (MAX_LIST_UI, "items") } else { (MAX_LIST_UNTRUSTED, "items") };
+            if a.len() > cap {
+                return Err(format!("{key:?} has too many {what} ({}, limit {cap})", a.len()));
+            }
+            if key == "rings" && a.first().and_then(Value::as_array).is_some_and(|r| r.first().is_some_and(Value::is_array)) {
+                // outlines: count the points of every ring against one budget
+                let n: usize = a.iter().map(|r| r.as_array().map_or(0, Vec::len)).sum(); // all rings together
+                let cap = if w.trusted { MAX_POINTS_UI * 2 } else { MAX_POINTS_UNTRUSTED * 2 };
+                if n > cap {
+                    return Err(format!("{key:?} has too many points ({n}, limit {cap})"));
+                }
+            }
+            a.iter().try_for_each(|x| walk(x, cmd, w, depth + 1, key))?
+        }
+        Value::Object(o) => o.iter().try_for_each(|(k, x)| walk(x, cmd, w, depth + 1, k))?,
         _ => {}
     }
     Ok(())
@@ -208,7 +249,7 @@ pub fn vet(caller: &Caller, cmd: &mut Value) -> Result<(), String> {
         });
     }
     let data_max = if matches!(caller, Caller::Ui) { MAX_DATA_UI } else { MAX_DATA_UNTRUSTED };
-    walk(cmd, &name, data_max, 0, "")?;
+    walk(cmd, &name, &mut Walk { data_max, trusted: matches!(caller, Caller::Ui), values: 0 }, 0, "")?;
     if matches!(caller, Caller::Plugin) {
         if let Some(o) = cmd.as_object() {
             if let Some(k) = o.keys().find(|k| PATH_KEYS.contains(&k.as_str()) || *k == "paths") {

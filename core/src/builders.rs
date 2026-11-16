@@ -103,6 +103,9 @@ impl Model {
         if width <= 0.0 || rise <= 0.0 || tread <= 0.0 {
             bail!("width, rise and tread must be positive");
         }
+        if rise / 0.19 > 500.0 {
+            bail!("that stair has more than 500 steps (rise {rise} m): a stair climbs up to 95 m");
+        }
         let n = (rise / 0.19).ceil().max(1.0) as usize;
         let r = rise / n as f64;
         let t = DMat4::from_translation(at) * DMat4::from_rotation_z(direction.to_radians());

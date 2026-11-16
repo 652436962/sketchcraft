@@ -250,6 +250,9 @@ fn walk_keys(path: &[[f64; 3]], eye: f64) -> Result<Vec<Cam>> {
     let mut dense = vec![];
     for w in pts.windows(2) {
         let steps = ((w[0].distance(w[1]) / 0.25).ceil() as usize).max(1);
+        if dense.len() + steps > 100_000 {
+            bail!("that walk path is too long (over 25 km)");
+        }
         for k in 0..steps {
             dense.push(w[0].lerp(w[1], k as f64 / steps as f64));
         }

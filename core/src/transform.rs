@@ -181,8 +181,12 @@ impl Model {
 
     /// `count` more copies, each `by` further along.
     pub fn array(&mut self, ids: &[Id], by: DVec3, count: usize) -> Result<Vec<Id>> {
+        let count = count.min(500);
+        if ids.len().saturating_mul(count) > 100_000 {
+            bail!("that array would make over 100,000 copies: use fewer items or a smaller count");
+        }
         let mut out = Vec::new();
-        for k in 1..=count.min(500) {
+        for k in 1..=count {
             out.extend(self.duplicate(ids, by * k as f64)?);
         }
         Ok(out)
