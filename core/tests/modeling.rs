@@ -1258,6 +1258,30 @@ fn moving_one_corner_folds_the_faces_around_it() {
 }
 
 #[test]
+fn parts_measure_boards_along_their_faces_and_plugins_list() {
+    let mut e = Engine::new();
+    // a 1200 x 400 x 18 mm shelf, turned 30 degrees and stood on its edge
+    let g = box_group(&mut e, [0.0, 0.0, 0.0], [1.2, 0.4, 0.018], "Shelf");
+    run(&mut e, json!({"cmd":"rotate","ids":[g],"center":[0,0,0],"axis":[0,0,1],"angle":30}));
+    run(&mut e, json!({"cmd":"rotate","ids":[g],"center":[0,0,0],"axis":[1,0,0],"angle":90}));
+    box_group(&mut e, [3.0, 0.0, 0.0], [3.038, 0.089, 2.0], "Post");
+    let r = run(&mut e, json!({"cmd":"parts"}));
+    let parts = r["parts"].as_array().unwrap();
+    assert_eq!(parts.len(), 2);
+    let size = |name: &str| -> Vec<f64> { parts.iter().find(|p| p["name"] == name).unwrap()["size"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect() };
+    let shelf = size("Shelf");
+    assert!((shelf[0] - 1.2).abs() < 1e-3 && (shelf[1] - 0.4).abs() < 1e-3 && (shelf[2] - 0.018).abs() < 1e-3, "{shelf:?}");
+    let post = size("Post");
+    assert!((post[0] - 2.0).abs() < 1e-3 && (post[1] - 0.089).abs() < 1e-3 && (post[2] - 0.038).abs() < 1e-3, "{post:?}");
+    // the built-in cut list plugin is listed with its code
+    let l = run(&mut e, json!({"cmd":"plugins"}));
+    let cut = l["plugins"].as_array().unwrap().iter().find(|p| p["id"] == "cutlist").expect("cut list");
+    assert_eq!(cut["builtin"], true);
+    assert!(cut["code"].as_str().unwrap().contains("sketchcraft.command"));
+    assert!(cut["commands"][0]["label"].is_string());
+}
+
+#[test]
 fn scale_figures_face_the_camera() {
     let mut e = Engine::new();
     box_group(&mut e, [3.0, 0.0, 0.0], [5.0, 2.0, 2.0], "Block");

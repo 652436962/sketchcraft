@@ -141,6 +141,16 @@ pub enum Command {
     Copy { group: Id, by: [f64; 3], #[serde(default)] name: Option<String> },
     /// Counts, bounds, groups, materials.
     Info,
+    /// Each part's true size (along its own faces, so a turned board reads
+    /// right): `ids` (groups or components), or every leaf group and component.
+    Parts {
+        #[serde(default)]
+        ids: Vec<Id>,
+    },
+    /// The plugins: built in, and those in ~/Documents/SketchCraft/Plugins.
+    Plugins,
+    /// Write text to a file (the app's Save CSV; plugins can't reach it).
+    SaveText { path: String, text: String },
     /// Make faces or a group into a reusable component (placed where it was).
     MakeComponent { ids: Vec<Id>, #[serde(default)] name: Option<String> },
     /// Place a component (by id or name) at a point, optionally turned about Z.
@@ -1108,6 +1118,9 @@ impl Command {
                 | Command::SameAs { .. }
                 | Command::Section { .. }
                 | Command::Info
+                | Command::Parts { .. }
+                | Command::Plugins
+                | Command::SaveText { .. }
                 | Command::Components
                 | Command::Pick { .. }
                 | Command::Undo
@@ -1734,6 +1747,12 @@ impl Engine {
             Command::DeleteView { name } => {
                 m.views.retain(|v| v.name != name);
                 json!({})
+            }
+            Command::Parts { ids } => json!({"parts": crate::plugins::parts(m, &ids), "units": m.units}),
+            Command::Plugins => crate::plugins::list(),
+            Command::SaveText { path, text } => {
+                std::fs::write(&path, text)?;
+                json!({"path": path})
             }
             Command::Info => {
                 let b = m.world_bounds().map(|(lo, hi)| json!({"min": lo.to_array(), "max": hi.to_array()}));
