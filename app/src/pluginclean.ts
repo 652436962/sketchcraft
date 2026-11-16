@@ -72,3 +72,35 @@ export function cleanForm(f: unknown): PluginForm {
     }));
   return { title: str(o.title, 120), text: str(o.text, 2000), ok: str(o.ok, 30), fields };
 }
+
+// ---- tool previews -----------------------------------------------------------------
+
+export type Point3 = [number, number, number];
+const COORD_MAX = 1e9;
+
+/** One point: exactly three finite numbers, clamped to the model's range. Anything else is dropped (null). */
+export function cleanPoint(p: unknown): Point3 | null {
+  if (!Array.isArray(p) || p.length !== 3) return null;
+  const out: number[] = [];
+  for (let i = 0; i < 3; i++) {
+    const v = p[i];
+    if (typeof v !== "number" || !Number.isFinite(v)) return null;
+    out.push(Math.max(-COORD_MAX, Math.min(COORD_MAX, v)));
+  }
+  return out as Point3;
+}
+
+/** A tool's preview lines: at most `max` segments, each exactly two good points; the rest are skipped. */
+export function cleanPreview(lines: unknown, max = 5000): Point3[][] {
+  if (!Array.isArray(lines)) return [];
+  const out: Point3[][] = [];
+  const n = Math.min(lines.length, max * 2);
+  for (let i = 0; i < n && out.length < max; i++) {
+    const l = lines[i];
+    if (!Array.isArray(l) || l.length !== 2) continue;
+    const a = cleanPoint(l[0]);
+    const b = cleanPoint(l[1]);
+    if (a && b) out.push([a, b]);
+  }
+  return out;
+}

@@ -47,6 +47,13 @@ try {
   const f = cleanForm({ title: { x: 1 }, fields: [{ id: "a", label: 5, type: "bogus", options: "no" }, { id: 7 }, null, { id: "b", type: "choice", options: ["x", 3], value: {} }] });
   check(f.fields.length === 2 && f.fields.every((x) => typeof x.label === "string" && ["text", "choice", "length", "number", "check"].includes(x.type)), "a form with odd fields is cleaned");
 
+  // tool previews and anchors: only well-formed, finite, bounded points reach the 3D code
+  const { cleanPreview, cleanPoint } = await load("/src/pluginclean.ts");
+  const pv = cleanPreview([[5, 6], [[0, 0, 0], [1, 1, 1]], [[0, 0, "x"], [1, 1, 1]], [[0, 0, NaN], [1, 1, 1]], null, [[1, 2, 3]], [[1e300, -1e300, 0], [0, 0, 0]], { length: 2 }, Array(1000000).fill(1)]);
+  check(pv.length === 2 && pv.every((l) => l.length === 2 && l.flat().every((n) => Number.isFinite(n) && Math.abs(n) <= 1e9)), "a hostile tool preview is cut down to finite, bounded segments");
+  check(cleanPreview("no").length === 0 && cleanPreview(Array(100000).fill([[0, 0, 0], [1, 1, 1]])).length === 5000, "a preview that isn't a list is empty, a long one is capped");
+  check(cleanPoint([1, 2, 3]) !== null && cleanPoint([1, 2]) === null && cleanPoint([1, 2, Infinity]) === null && cleanPoint("abc") === null && cleanPoint(null) === null, "an anchor must be three finite numbers");
+
   // ---- the plugin's command check is a first filter only ----------------------------
   globalThis.window ??= {}; // engine.ts asks whether it is inside Tauri
   const { allowed, csvCell } = await load("/src/plugins.tsx");

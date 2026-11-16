@@ -9,7 +9,7 @@ import { exec, type Reply } from "./engine";
 import { pickSave } from "./files";
 import { LOCKDOWN_SOURCE } from "./lockdown";
 import { pluginSandboxHolds } from "./cspcheck";
-import { cleanForm, cleanResult, type PluginField, type PluginForm, type PluginResult } from "./pluginclean";
+import { cleanForm, cleanPoint, cleanPreview, cleanResult, type PluginField, type PluginForm, type PluginResult } from "./pluginclean";
 
 export { cleanForm, cleanResult };
 export type { PluginField, PluginForm, PluginResult };
@@ -163,6 +163,8 @@ async function __toolMessage(m) {
 `;
 
 const LIMIT_MS = 60_000;
+/** The longest a Ruby script's recorded commands may take to replay (a JavaScript run has the same limit). */
+export const RUBY_REPLAY_MS = LIMIT_MS;
 /** The most commands one plugin run may send (each is checked, run and counted by the engine). */
 export const MAX_COMMANDS = 10_000;
 
@@ -687,9 +689,9 @@ export function startPluginTool(
       worker.postMessage({ type: "reply", rid: m.rid, reply: answers });
     } else if (m.type === "show") env.show(cleanResult(m.result), plugin);
     else if (m.type === "toast") env.toast(String(m.text).slice(0, 300));
-    else if (m.type === "preview") env.preview(Array.isArray(m.lines) ? m.lines.slice(0, 5000) : []);
+    else if (m.type === "preview") env.preview(cleanPreview(m.lines));
     else if (m.type === "hint") env.hint(String(m.text).slice(0, 300));
-    else if (m.type === "anchor") env.anchor(Array.isArray(m.point) && m.point.length === 3 ? m.point : null);
+    else if (m.type === "anchor") env.anchor(cleanPoint(m.point));
     else if (m.type === "finish") end();
     else if (m.type === "error") {
       env.toast(`${plugin.name}: ${String(m.error).slice(0, 300)}`, true);

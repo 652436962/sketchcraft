@@ -18,7 +18,7 @@ import { WorkspaceStrip } from "./wsstrip";
 import { Toolbar } from "./toolbar";
 import { runRuby } from "./ruby";
 import { pluginSandboxHolds } from "./cspcheck";
-import { batcher, cleanForm, cleanResult, loadPlugins, MAX_COMMANDS, PluginFormDialog, PluginResultDialog, PluginsDialog, runPlugin, startPluginTool, type Plugin, type PluginCommand, type PluginForm, type PluginList, type PluginResult, type ToolSession } from "./plugins";
+import { RUBY_REPLAY_MS, batcher, cleanForm, cleanResult, loadPlugins, MAX_COMMANDS, PluginFormDialog, PluginResultDialog, PluginsDialog, runPlugin, startPluginTool, type Plugin, type PluginCommand, type PluginForm, type PluginList, type PluginResult, type ToolSession } from "./plugins";
 import { ErrorBoundary } from "./boundary";
 import { PhotoModeler } from "./photomodel";
 import { RefImageDialog } from "./refimage";
@@ -761,7 +761,13 @@ export default function App() {
       const batch = batcher();
       try {
         await batch.begin();
+        // replaying has the same wall-clock limit as a JavaScript plugin run (one command can be slow, 10,000 can take hours)
+        const started = Date.now();
         for (const [i, cmd] of r.journal.entries()) {
+          if (Date.now() - started > RUBY_REPLAY_MS) {
+            failed = `step ${i + 1} (${String(cmd.cmd)}): it took over ${RUBY_REPLAY_MS / 1000} seconds, so the rest was skipped`;
+            break;
+          }
           // Ruby's recorded commands are plugin commands too: same limits as JavaScript plugins
           const res = await execPlugin(cmd);
           if (!res.ok) {
