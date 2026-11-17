@@ -87,3 +87,56 @@ fn an_older_model_file_with_an_absolute_source_loads_and_loses_the_folder() {
     let win: sketchcraft::model::Model = serde_json::from_str(&old.replace("/Users/someone/Documents/SketchCraft/Library/", "\\\\\\\\?\\\\C:\\\\Users\\\\x\\\\")).unwrap();
     assert_eq!(win.definitions.values().next().unwrap().source.as_deref(), Some("x\\\\chair.sketchcraft").map(|_| "chair.sketchcraft"));
 }
+
+fn zip_of(files: &[(&str, &str)]) -> Vec<u8> {
+    use std::io::Write;
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut z = zip::ZipWriter::new(&mut buf);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default();
+        for (name, body) in files {
+            z.start_file(*name, opts).unwrap();
+            z.write_all(body.as_bytes()).unwrap();
+        }
+        z.finish().unwrap();
+    }
+    buf.into_inner()
+}
+
+fn b64(b: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(b)
+}
+
+/// SPECTER-002: what the preview calls the plugin is what the installer makes of it.
+#[test]
+fn a_plugin_that_says_ruby_is_previewed_and_installed_as_ruby() {
+    let home = scratch("plug");
+    std::env::set_var("SKETCHCRAFT_DOC", home.join("live.sketchcraft"));
+    let mut e = Engine::new();
+    let rb = "UI.menu('Plugins').add_item(\"Tidy edges\") { }\nUI::Command.new('Other thing') { }\n";
+    let sneaky = zip_of(&[
+        ("plugin.json", r#"{"name":"Tidy Edges","commands":[{"label":"Harmless"}],"ruby":true,"entry":["loader.rb"]}"#),
+        ("loader.rb", rb),
+    ]);
+    let p = ok(&mut e, json!({"cmd": "install_plugin", "data": b64(&sneaky), "preview": true}));
+    assert_eq!(p["ruby"], true, "{p}");
+    assert_eq!(p["kind"], "SketchUp Ruby extension");
+    assert_eq!(p["commands"], json!(["Tidy edges", "Other thing"]), "the menu items come from the Ruby code, not the manifest");
+    let r = ok(&mut e, json!({"cmd": "install_plugin", "data": b64(&sneaky)}));
+    assert_eq!(r["ruby"], true);
+    assert_eq!(r["sha256"], p["sha256"]);
+    let list = ok(&mut e, json!({"cmd": "plugins"}));
+    let me = list["plugins"].as_array().unwrap().iter().find(|x| x["id"] == "tidy-edges").unwrap();
+    assert_eq!(me["ruby"], true);
+    // both at once is refused
+    let both = zip_of(&[("plugin.json", r#"{"name":"Mixed","commands":[],"ruby":true}"#), ("main.js", "1"), ("a.rb", "puts 1")]);
+    let r = e.exec_json(&json!({"cmd": "install_plugin", "data": b64(&both), "preview": true}).to_string());
+    assert_eq!(r["ok"], false, "{r}");
+    // a plain JavaScript plugin is still one
+    let js = zip_of(&[("plugin.json", r#"{"name":"Plain","commands":[{"label":"Go"}]}"#), ("main.js", "1")]);
+    let p = ok(&mut e, json!({"cmd": "install_plugin", "data": b64(&js), "preview": true}));
+    assert_eq!(p["ruby"], false);
+    assert_eq!(p["kind"], "JavaScript plugin");
+    std::fs::remove_dir_all(&home).ok();
+}

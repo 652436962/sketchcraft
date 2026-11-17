@@ -9,6 +9,13 @@ import { RUBY_REPLAY_MS, batcher, cleanForm, cleanResult, loadPlugins, MAX_COMMA
 import type { Sel } from "./selection";
 import type { Tool } from "./Viewport";
 
+/** a short hash, to tell one version of a plugin's files from another */
+function fingerprint(t: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < t.length; i++) h = Math.imul(h ^ t.charCodeAt(i), 16777619);
+  return `${t.length}.${(h >>> 0).toString(36)}`;
+}
+
 export function usePlugins({ sel, scene, tool, setTool, say, sayAs, runForPlugin, refresh }: {
   sel: Sel;
   scene: Scene | null;
@@ -30,10 +37,18 @@ export function usePlugins({ sel, scene, tool, setTool, say, sayAs, runForPlugin
   const reloadPlugins = () => loadPlugins().then(setPlugins, () => {});
   // a SketchUp Ruby plugin's commands are the menu items it adds when it loads
   const [rubyMenus, setRubyMenus] = useState<Record<string, string[] | { error: string }>>({});
+  // the menu is remembered with a fingerprint of the plugin's files, so a replaced plugin gets its new menu
+  const rubySig = (p: Plugin) => `${p.id}:${p.version ?? ""}:${fingerprint(JSON.stringify(p.files ?? {}))}`;
+  const menuSig = useRef<Record<string, string>>({});
   useEffect(() => {
     for (const p of plugins.plugins) {
-      if (!p.ruby || p.enabled === false || rubyMenus[p.id]) continue;
-      runRuby(p, {}).then((r) => setRubyMenus((m) => ({ ...m, [p.id]: r.error ? { error: r.error } : r.menu })));
+      if (!p.ruby || p.enabled === false) continue;
+      const sig = rubySig(p);
+      if (rubyMenus[p.id] && menuSig.current[p.id] === sig) continue;
+      menuSig.current[p.id] = sig;
+      runRuby(p, {}).then((r) => {
+        if (menuSig.current[p.id] === sig) setRubyMenus((m) => ({ ...m, [p.id]: r.error ? { error: r.error } : r.menu }));
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plugins]);
