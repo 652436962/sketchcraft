@@ -64,6 +64,18 @@ downloading: `shasum -a 256 SketchCraft_*.dmg` (macOS/Linux) or
 `Get-FileHash SketchCraft_*_x64-setup.exe` (Windows) and compare. Only download
 from this repository's Releases page.
 
+Every installer, update package and zip is also **attested**: the release workflow records,
+through GitHub and Sigstore, that the file came out of this repository's workflow at that tag
+and commit. This is stronger than the checksum list, which is published beside the files
+and so proves only that a file matches the list. To check one (needs the GitHub CLI, `gh`):
+
+```sh
+gh attestation verify SketchCraft_0.3.6_universal.dmg --repo jasonsutter87/sketchcraft
+```
+
+It prints the workflow, tag and commit, or fails if the file isn't one the workflow made.
+(The update packages are checked by the app itself against the update key.)
+
 ## Protecting the release
 
 What the workflow does for you: releases build only from a `v*` tag on a commit
@@ -72,7 +84,7 @@ pinned to commit SHAs; npm install scripts don't run; and compiling is kept apar
 signing. The `build` job compiles with `--locked`, holds no update key and only a
 read-only token (so no dependency's build script or proc-macro can read the key);
 it signs its update packages with a throwaway key made for that run. The `publish`
-job, which compiles nothing, signs them for real with the key from the `release`
+job, which compiles nothing, first checks that each platform's download holds only that platform's own file names and file types (so one platform's build can't hand another platform's update package to the signer), then signs them for real with the key from the `release`
 environment and creates the draft release. The Apple secrets (once added, as `release` Environment secrets) go only to
 steps of the `sign-macos` job, which names that environment, compiles nothing and checks out no code: it
 takes the unsigned macOS app the `build` job made (built with no secrets, like every
