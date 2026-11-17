@@ -28,13 +28,6 @@ export function RestoreDialog({ run, onClose, onToast }: { run: Run; onClose: ()
       live = false;
     };
   }, []);
-  useEffect(() => {
-    const k = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", k);
-    return () => window.removeEventListener("keydown", k);
-  }, [onClose]);
 
   const act = async (it: Item, mode: "replace" | "copy") => {
     setBusy(`${it.kind}:${it.name}:${mode}`);

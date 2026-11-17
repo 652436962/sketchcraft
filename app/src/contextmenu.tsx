@@ -5,6 +5,7 @@ import { exec, type Reply, type Scene } from "./engine";
 import { EMPTY, isEmpty, selIds, type Sel } from "./selection";
 import { formatLength, parseLength } from "./units";
 import { type Run } from "./panelkit";
+import { useEscapeToClose } from "./sheet";
 
 export interface MenuItem {
   label: string;
@@ -167,6 +168,7 @@ export function contextItems(scene: Scene, sel: Sel, run: Run, setSel: (s: Sel) 
 }
 
 export function ContextMenu({ x, y, items, close }: { x: number; y: number; items: MenuItem[]; close: () => void }) {
+  useEscapeToClose(close);
   // keep the whole menu on screen: open upward or leftward near an edge
   const box = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState({ left: x, top: y });

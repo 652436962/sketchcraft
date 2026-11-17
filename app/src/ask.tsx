@@ -49,7 +49,6 @@ export function AskHost() {
     if (!a?.confirm) return;
     const key = (e: KeyboardEvent) => {
       if (e.key === "Enter") (e.preventDefault(), a.done(""), setA(null));
-      if (e.key === "Escape") (a.done(null), setA(null));
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);

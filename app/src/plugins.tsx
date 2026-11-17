@@ -14,7 +14,7 @@ export { allowed, batcher, MAX_COMMANDS, RUBY_REPLAY_MS, runPlugin, startPluginT
 export type { ToolPoint, ToolSession } from "./pluginhost";
 export type { PluginField, PluginForm, PluginResult };
 import { formatLength, parseLength } from "./units";
-import { Sheet, SheetHead } from "./sheet";
+import { Sheet, SheetHead, useEscapeToClose } from "./sheet";
 
 export interface PluginCommand {
   id: string;
@@ -310,6 +310,7 @@ export function PluginFormDialog({ form, plugin, units, done }: { form: PluginFo
     }
     done(out);
   };
+  useEscapeToClose(() => done(null));
   return (
     <div className="sheet-backdrop" onClick={() => done(null)}>
       <form

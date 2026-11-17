@@ -3,6 +3,7 @@ import { useState, type RefObject } from "react";
 import { inTauri } from "./engine";
 import { loadPlugins, type Plugin, type PluginList } from "./plugins";
 import { checkForUpdatesNow } from "./updater";
+import { useEscapeToClose } from "./sheet";
 import type { useFileActions } from "./usefiles";
 
 export function FileMenu({ file, section, plugins, livePlugins, setPlugins, runPluginCommand, reloadPlugins, fileRef, open }: {
@@ -21,6 +22,7 @@ export function FileMenu({ file, section, plugins, livePlugins, setPlugins, runP
   const [fileMenu, setFileMenu] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [pluginsOpen, setPluginsOpen] = useState(false);
+  useEscapeToClose(() => setFileMenu(false), fileMenu);
   return (
   <div className="dropdown">
     <button className="file-btn" onClick={() => setFileMenu((o) => !o)}>

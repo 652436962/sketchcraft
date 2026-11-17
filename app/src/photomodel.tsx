@@ -135,17 +135,15 @@ export function PhotoModeler({ scene, run, onClose, onToast }: { scene: Scene; r
 
   if (photos.length < 2) {
     return (
-      <div className="sheet-backdrop" onClick={onClose}>
-        <div className="sheet" style={{ width: "min(520px, calc(100vw - 32px))" }} onClick={(e) => e.stopPropagation()}>
-          <div className="sheet-head">
-            <b>Model from photos</b>
-          </div>
-          <p>Match at least two photos of the same building first (Views › Match photo…), each with the origin marker on the <b>same corner</b>. Then come back here to mark corners in both.</p>
-          <button className="btn small" onClick={onClose}>
-            OK
-          </button>
+      <Sheet onClose={onClose} label="Model from photos" width={520}>
+        <div className="sheet-head">
+          <b>Model from photos</b>
         </div>
-      </div>
+        <p>Match at least two photos of the same building first (Views › Match photo…), each with the origin marker on the <b>same corner</b>. Then come back here to mark corners in both.</p>
+        <button className="btn small" onClick={onClose}>
+          OK
+        </button>
+      </Sheet>
     );
   }
   const missOf = (i: number) => (result?.misses[i]?.length ? Math.max(...result.misses[i].map((m) => m[1])) : null);

@@ -10,7 +10,7 @@ import { Icons } from "./icons";
 import { iconOk, isDark, readSkin, SKINS, TOKEN_LABELS, TOKENS, type Skin, type SkinToken } from "./skins";
 import type { Tool } from "./Viewport";
 import { TOOL_INFO, WORKSPACES, type Workspace, type WorkspaceEdits } from "./workspace";
-import { Sheet } from "./sheet";
+import { Sheet, useEscapeToClose } from "./sheet";
 
 /** the tools an icon set can cover (its files are named after these) */
 const TOOL_NAMES = Object.keys(TOOL_INFO);
@@ -139,6 +139,7 @@ export function AppearanceDialog({
     onToast(`Saved ${name}: share the .sketchskin file from your themes folder`);
   };
   const all = [...SKINS, ...mine];
+  useEscapeToClose(onClose);
   return (
     <div
       className="sheet-backdrop"
