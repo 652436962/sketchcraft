@@ -159,7 +159,7 @@ exporters, a rasterizer and a path tracer live in `core/`; the interface in
 
 ## Contributing
 
-Bug reports and ideas: [issues](https://github.com/jasonsutter87/sketchcraft/issues).
+Bug reports and ideas: [issues](https://github.com/jasonsutter87/sketchcraft/issues). How to run the tests, and the rule that features land with them: [CONTRIBUTING.md](CONTRIBUTING.md).
 Where SketchCraft is going, release by release: [ROADMAP.md](ROADMAP.md). What people asked for: [FEATURE-REQUESTS.md](FEATURE-REQUESTS.md).
 What changed in each version: [CHANGELOG.md](CHANGELOG.md).
 

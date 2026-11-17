@@ -54,13 +54,21 @@ node tools/ruby-tests/run.mjs && node tools/security-tests/plugin-sandbox.mjs
 ## Tests
 
 ```sh
-cargo test --release -p sketchcraft-core    # modeling, importers (fuzzed), plugins
+cargo test --release -p sketchcraft-core    # modeling, importers (fuzzed), plugins, the SketchUp corpus
 cd app && npx tsc --noEmit -p .             # the interface's types
 cd app && npm run check                     # skin values, plugin lockdown and data checks
+cd app && npm test                          # Vitest unit tests of the interface's pure code
+node tools/ui-tests/run.mjs                 # every browser suite, on a scratch bridge and dev page
 ```
 
 The importers are fuzzed (`core/tests/fuzz.rs`): thousands of corrupted files
-each, no panics, with parse deadlines.
+each, no panics, with parse deadlines. `core/tests/skp_corpus/` holds real
+SketchUp files, one per format era, with their counts checked.
+
+`tools/ui-tests/run.mjs` is the way to run the browser suites: it starts the
+scratch bridge and dev page described above for you, and stops them. How to
+run, add and update every suite (and the rule that features land with their
+tests): [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
 ## Demo GIFs
 
