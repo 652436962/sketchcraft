@@ -14,18 +14,20 @@ export interface MenuItem {
   run: () => void;
 }
 
-export function contextItems(scene: Scene, sel: Sel, run: Run, setSel: (s: Sel) => void, fitSel: () => void, section?: { origin: number[]; normal: number[] } | null, onCage?: (id: number) => void, onToast?: (t: string) => void): MenuItem[] {
+export function contextItems(scene: Scene, sel: Sel, run: Run, setSel: (s: Sel) => void, fitSel: () => void, section?: { origin: number[]; normal: number[] } | null, onCage?: (id: number) => void, onToast?: (t: string) => void, subd?: { subdivide: () => void; subdBox: () => void }): MenuItem[] {
   const ids = selIds(sel);
   const items: MenuItem[] = [];
   if (isEmpty(sel)) {
     items.push({ label: "Unhide all", run: () => run({ cmd: "unhide" }) });
     items.push({ label: "Clear guides", run: () => run({ cmd: "clear_guides" }) });
+    items.push({ label: "SubD box", run: () => subd?.subdBox() });
     items.push({ label: "Soften flat seams", run: () => run({ cmd: "soften", coplanar: true }) });
     if (scene.editing != null || scene.activeGroup != null) items.push({ label: "Close editing", key: "Esc", run: () => run({ cmd: "close" }) });
     return items;
   }
   const one = ids.length === 1;
   if (one && sel.groups.length && scene.cages?.[String(ids[0])]) items.push({ label: "Shape in SubD mode", key: "Tab", run: () => onCage?.(ids[0]) });
+  if (one && (sel.groups.length || sel.instances.length) && !sel.faces.length && !scene.cages?.[String(ids[0])]) items.push({ label: "Subdivide…", run: () => subd?.subdivide() });
   if (one && (sel.groups.length || sel.instances.length)) items.push({ label: `Edit ${sel.groups.length ? "group" : "component"}`, run: () => (run({ cmd: "edit", id: ids[0] }), setSel(EMPTY)) });
   // groups and components selected go inside the new group as they are (nesting)
   if (sel.faces.length || sel.groups.length || sel.instances.length) {

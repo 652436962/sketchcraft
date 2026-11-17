@@ -30,6 +30,7 @@ import { Toolbar } from "./toolbar";
 import { PluginFormDialog, PluginResultDialog, PluginsDialog, type Plugin } from "./plugins";
 import { usePlugins } from "./useplugins";
 import { FileMenu } from "./filemenu";
+import { makeSubdBox, SUBD_HOW, subdivideEntity, SubdivideDialog, type SubdivideOptions } from "./subdivide";
 import { readFigure, skippedText, useFileActions, type FigureChoice } from "./usefiles";
 import { ErrorBoundary } from "./boundary";
 import { PhotoModeler } from "./photomodel";
@@ -301,6 +302,44 @@ export default function App() {
   const { plugins, setPlugins, pluginShown, setPluginShown, pluginRuns, toolSession, pluginTool, pluginForm, reloadPlugins, livePlugins, pluginButtons, runPluginCommand } = usePlugins({ sel, scene, tool, setTool, say, sayAs, runForPlugin, refresh });
   const { file, importFile, runTemplate } = useFileActions({ run, say, refresh, api, scene, figure, currentFile, setCurrentFile, setSel });
 
+  // SubD: make one from a group or component (Subdivide…) or from a cube cage (SubD box); both end in SubD mode
+  const [subdividing, setSubdividing] = useState<{ id: number; component: boolean } | null>(null);
+  const openCage = useCallback(
+    async (group: number) => {
+      // the new group is in the scene the viewport holds a frame or two from now
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => requestAnimationFrame(() => r(null)));
+        if (api.current?.editCage(group)) return say(`SubD mode: drag points to shape it. ${SUBD_HOW}.`);
+      }
+    },
+    [say]
+  );
+  const askSubdivide = () => {
+    if (api.current?.inCage()) return;
+    const id = sel.groups.length === 1 && !sel.instances.length && !sel.faces.length ? sel.groups[0] : sel.instances.length === 1 && !sel.groups.length && !sel.faces.length ? sel.instances[0] : null;
+    if (id == null) return say(`Select one group or component first (click it), then Subdivide. ${SUBD_HOW}.`, true);
+    if (scene?.cages?.[String(id)]) return openCage(id);
+    setSubdividing({ id, component: sel.instances.length === 1 });
+  };
+  const doSubdivide = async (o: SubdivideOptions) => {
+    const t = subdividing;
+    setSubdividing(null);
+    if (!t) return;
+    const g = await subdivideEntity(run, t.id, t.component, o);
+    if (g == null) return;
+    setSel(EMPTY);
+    api.current?.fitSoon();
+    await openCage(g);
+  };
+  const addSubdBox = async () => {
+    if (api.current?.inCage()) return;
+    const g = await makeSubdBox(run);
+    if (g == null) return;
+    setSel(EMPTY);
+    api.current?.fitSoon();
+    await openCage(g);
+  };
+
   // a notice from the engine (a damaged model file was set aside...): say it once
   const lastNotice = useRef("");
   useEffect(() => {
@@ -547,6 +586,8 @@ export default function App() {
           if (r.ok) say(`Raised ${r.walls} walls${r.windows ? ` with ${r.windows} window openings` : ""}`);
         },
       },
+      { label: "Subdivide…", hint: `Tools · smooth the selected group or component into a SubD shape. ${SUBD_HOW}`, run: askSubdivide },
+      { label: "SubD box", hint: `Tools · a cube cage to shape. ${SUBD_HOW}`, run: () => void addSubdBox() },
       { label: "Clear guides", hint: "Edit", run: () => void run({ cmd: "clear_guides" }) },
       toggle("xray", "X-Ray"),
       toggle("shadows", "Shadows"),
@@ -653,6 +694,20 @@ export default function App() {
               <details className="panel-fold" open>
                 <summary>Build</summary>
                 <BuildTools tool={tool} setTool={chooseTool} build={build} setBuild={setBuild} units={scene.units || "m"} />
+              </details>
+              <details className="panel-fold">
+                <summary>Smooth shapes (SubD)</summary>
+                <div className="build-options">
+                  <p>{`A SubD shape is a soft surface you shape by its cage. ${SUBD_HOW}.`}</p>
+                  <div className="row gap">
+                    <button className="btn small" onClick={() => void addSubdBox()} title="A cube cage, ready to shape">
+                      SubD box
+                    </button>
+                    <button className="btn small" onClick={askSubdivide} title="Smooth the selected group or component, then shape it">
+                      Subdivide…
+                    </button>
+                  </div>
+                </div>
               </details>
               <details className="panel-fold">
                 <summary>Sandbox (terrain)</summary>
@@ -870,6 +925,14 @@ export default function App() {
             onToast={say}
           />
         )}
+        {subdividing && (
+          <SubdivideDialog
+            name={(subdividing.component ? scene?.instances.find((i) => i.id === subdividing.id)?.name : scene?.groups.find((g) => g.id === subdividing.id)?.name) || "this"}
+            component={subdividing.component}
+            onGo={doSubdivide}
+            onClose={() => setSubdividing(null)}
+          />
+        )}
         {showKeys && <ShortcutSheet onClose={() => setShowKeys(false)} />}
         {showPalette && <CommandPalette commands={commands()} onClose={() => setShowPalette(false)} />}
         {showLocation && (
@@ -901,7 +964,7 @@ export default function App() {
             }}
           />
         )}
-        {menu && scene && <ContextMenu x={menu.x} y={menu.y} close={() => setMenu(null)} items={contextItems(scene, sel, run, setSel, () => api.current?.fit(), api.current?.sectionPlane(), (id) => api.current?.editCage(id), say)} />}
+        {menu && scene && <ContextMenu x={menu.x} y={menu.y} close={() => setMenu(null)} items={contextItems(scene, sel, run, setSel, () => api.current?.fit(), api.current?.sectionPlane(), (id) => api.current?.editCage(id), say, { subdivide: askSubdivide, subdBox: addSubdBox })} />}
       </main>
 
       <aside className="panel right">

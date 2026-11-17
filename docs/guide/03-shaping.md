@@ -36,8 +36,24 @@ Design workspace.
 ![Subdivision surfaces](../demos/subdivision.gif)
 
 **Subdivision** smooths a rough cage of faces into a soft shape, the way
-Blender's Subdivision modifier does. Open a subdivided object to shape its
-cage:
+Blender's Subdivision modifier does. There are two ways to start one, both in
+the app:
+
+- **SubD box**: a cube cage, ready to shape. Library › Smooth shapes (SubD) ›
+  SubD box, or right-click empty space › SubD box (or Shift+S, type *SubD*).
+- **Subdivide…** on something you already modeled: select a group or component,
+  right-click › Subdivide… (or Library › Smooth shapes › Subdivide…). Choose how
+  smooth (1 light, 2 usual, 3 very smooth) and whether sharp edges stay sharp,
+  then Subdivide. A component is made a group first (just that one). Faces with
+  holes can't be subdivided: split them first.
+
+Either way you land in SubD mode on the object's cage. Drag points, edges or
+faces; the smooth surface follows. **Tab to shape, Enter when done**: Enter
+leaves SubD mode, and later, select the object and press Tab (or double-click
+it) to shape it again. Undo takes back the Subdivide in one step.
+
+Inside SubD mode, 1, 2 and 3 pick points, edges or faces; L adds a loop, E
+extrudes, C creases; Tab switches between the cage and the smooth surface.
 
 ![SubD mode](../demos/subd-mode.gif)
 

@@ -27,6 +27,7 @@ interface Base {
   faces: number;
   groups: number;
   painted: number;
+  cages: number;
   nested: number;
   hidden: number;
   tagged: number;
@@ -48,6 +49,7 @@ function measure(s: Scene, c?: LearnCtx): Base {
     faces: s.faces.length,
     groups: s.groups.length,
     painted: s.faces.filter((f) => f.material).length,
+    cages: Object.keys(s.cages ?? {}).length,
     nested: s.groups.filter((g) => g.parent != null).length,
     hidden: s.groups.filter((g) => g.hidden).length,
     tagged: s.groups.filter((g) => g.tag).length + s.instances.filter((i) => i.tag).length,
@@ -137,6 +139,17 @@ export const LESSONS: Lesson[] = [
     steps: [
       { do: "Make a box", how: "R for a rectangle, then P to pull it up.", done: (c, b) => c.scene.faces.length >= b.faces + 6 },
       { do: "Raise one top corner", how: "Press Space then Esc so nothing is selected, M for Move, click a top corner, move up, click (or type a height).", done: (c, b) => c.scene.faces.length >= b.faces + 7 },
+    ],
+  },
+  {
+    id: "smooth",
+    title: "Smooth shapes (SubD)",
+    about: "Turn a box into a soft, rounded shape, then shape it by its cage (Tab to shape, Enter when done).",
+    minutes: 3,
+    demo: "subd-mode",
+    steps: [
+      { do: "Start from a box", how: "Library › Smooth shapes › SubD box gives you a cube cage already smoothed. Or draw your own box (R, then P) and group it.", done: (c, b) => c.scene.faces.length >= b.faces + 6 },
+      { do: "Subdivide it", how: "Select the group (or a component), right-click › Subdivide…, then Subdivide. (SubD box is already one: skip ahead.) You land in SubD mode: click a point and drag it, the other side follows. Enter when done; to shape it again, select it and press Tab.", done: (c, b) => Object.keys(c.scene.cages ?? {}).length > b.cages },
     ],
   },
   {

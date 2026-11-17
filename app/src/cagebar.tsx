@@ -2,6 +2,7 @@
 // operation as a button with its key, so nothing has to be memorized.
 
 import type { CageEditor, CageUi } from "./cage";
+import { SUBD_HOW } from "./subdivide";
 
 const AXES = ["red", "green", "blue"];
 
@@ -41,6 +42,9 @@ export function CageBar({ ui, ed, onDone }: { ui: CageUi; ed: CageEditor; onDone
           <span>
             <kbd>Middle-drag</kbd> orbit
           </span>
+          <span>
+            <kbd>Tab</kbd> cage or smooth, <kbd>Enter</kbd> when done
+          </span>
         </div>
       </div>
       <div className="ws-strip subd-bar" role="toolbar" aria-label="SubD">
@@ -72,7 +76,7 @@ export function CageBar({ ui, ed, onDone }: { ui: CageUi; ed: CageEditor; onDone
         </label>
         {btn(ui.display === "both" ? "Cage + smooth" : "Cage only", "Tab", false, () => ed.setDisplay(ui.display === "both" ? "cage" : "both"), "Show the smooth surface or just the cage")}
         <span className="sep" />
-        <button className="on" onClick={onDone} title="Leave SubD mode (Enter)">
+        <button className="on" onClick={onDone} title={`Leave SubD mode (Enter). To shape it again, select it. ${SUBD_HOW}`}>
           Done <kbd>↵</kbd>
         </button>
       </div>
