@@ -79,6 +79,11 @@ pub fn on_boundary(p: DVec2, poly: &[DVec2]) -> bool {
 /// Triangulate a planar polygon with holes. Triangles come out wound
 /// counter-clockwise about `n` (so their normals agree with the face).
 pub fn triangulate(outer: &[DVec3], holes: &[Vec<DVec3>], n: DVec3) -> Vec<[DVec3; 3]> {
+    // a triangle is already triangulated (most of a scan or a terrain): no need for the general triangulator
+    if holes.is_empty() && outer.len() == 3 {
+        let (a, b, c) = (outer[0], outer[1], outer[2]);
+        return vec![if (b - a).cross(c - a).dot(n) < 0.0 { [a, c, b] } else { [a, b, c] }];
+    }
     let (u, v) = basis(n);
     let mut all: Vec<DVec3> = outer.to_vec();
     let mut hole_idx = Vec::new();
@@ -87,9 +92,14 @@ pub fn triangulate(outer: &[DVec3], holes: &[Vec<DVec3>], n: DVec3) -> Vec<[DVec
         all.extend_from_slice(h);
     }
     let flat: Vec<f64> = to2d(&all, u, v).iter().flat_map(|p| [p.x, p.y]).collect();
-    let idx = match earcutr::earcut(&flat, &hole_idx, 2) {
-        Ok(i) => i,
-        Err(_) => return Vec::new(),
+    // a loop that has collapsed (a placement scaled to nothing, points on one line) can make the triangulator give up with a
+    // panic inside it: such a face has no area to draw, so it comes out empty rather than taking the whole drawing down
+    if flat.iter().any(|x| !x.is_finite()) {
+        return Vec::new();
+    }
+    let idx = match std::panic::catch_unwind(|| earcutr::earcut(&flat, &hole_idx, 2)) {
+        Ok(Ok(i)) => i,
+        _ => return Vec::new(),
     };
     idx.chunks_exact(3)
         .map(|t| {

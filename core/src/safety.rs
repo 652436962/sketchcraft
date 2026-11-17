@@ -216,3 +216,34 @@ mod tests {
         assert_eq!(path_arg("a-b.mp4"), PathBuf::from("a-b.mp4"));
     }
 }
+
+/// The widest or tallest picture SketchCraft decodes, the most pixels, and the most memory one decode may ask for.
+/// A picture's file size says little about its decoded size (a 17 KB one-bit PNG can be 12,000 x 12,000), and the
+/// model's own limits count the file, so every decode of a picture that came from outside goes through here.
+pub const MAX_IMAGE_SIDE: u32 = 8192;
+pub const MAX_IMAGE_PIXELS: u64 = 40_000_000;
+pub const MAX_IMAGE_ALLOC: u64 = 256 << 20;
+
+/// Decode a picture (PNG, JPEG, ...) after reading its size from the header: more than `MAX_IMAGE_SIDE` on a side or
+/// `MAX_IMAGE_PIXELS` in all is refused before anything is allocated, and the decoder is held to `MAX_IMAGE_ALLOC`.
+pub fn decode_image(bytes: &[u8], format: Option<image::ImageFormat>) -> anyhow::Result<image::DynamicImage> {
+    let reader = |bytes: &[u8]| -> anyhow::Result<image::ImageReader<std::io::Cursor<Vec<u8>>>> {
+        let mut r = image::ImageReader::new(std::io::Cursor::new(bytes.to_vec()));
+        match format {
+            Some(f) => r.set_format(f),
+            None => r = r.with_guessed_format()?,
+        }
+        Ok(r)
+    };
+    let (w, h) = reader(bytes)?.into_dimensions()?;
+    if w > MAX_IMAGE_SIDE || h > MAX_IMAGE_SIDE || (w as u64) * (h as u64) > MAX_IMAGE_PIXELS {
+        anyhow::bail!("that picture is {w} x {h} pixels; SketchCraft reads pictures up to {MAX_IMAGE_SIDE} on a side and {} million pixels", MAX_IMAGE_PIXELS / 1_000_000);
+    }
+    let mut r = reader(bytes)?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_SIDE);
+    limits.max_image_height = Some(MAX_IMAGE_SIDE);
+    limits.max_alloc = Some(MAX_IMAGE_ALLOC);
+    r.limits(limits);
+    Ok(r.decode()?)
+}

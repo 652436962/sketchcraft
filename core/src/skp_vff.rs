@@ -191,7 +191,7 @@ pub fn parse(d: &[u8], version: String) -> Result<SkpFile> {
 /// An image as a data URL no bigger than 1024 px (JPEG unless it has alpha).
 fn shrink(bytes: &[u8]) -> Option<(String, f64)> {
     use base64::Engine as _;
-    let img = image::load_from_memory(bytes).ok()?;
+    let img = crate::safety::decode_image(bytes, None).ok()?;
     let img = if img.width().max(img.height()) > 1024 { img.thumbnail(1024, 1024) } else { img };
     let mut out = Cursor::new(Vec::new());
     let mime = if img.color().has_alpha() {

@@ -83,7 +83,7 @@ impl Images {
                 continue;
             }
             let Ok((_, data)) = bytes(t) else { continue };
-            let Ok(img) = image::load_from_memory(&data) else { continue };
+            let Ok(img) = crate::safety::decode_image(&data, None) else { continue };
             let img = if img.width().max(img.height()) > 2048 { img.thumbnail(2048, 2048) } else { img };
             out.insert(name.clone(), img.to_rgb8());
         }

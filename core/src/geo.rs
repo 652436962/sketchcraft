@@ -52,7 +52,7 @@ fn stitched(base: &str, z: u32, x0: f64, y0: f64, x1: f64, y1: f64, out: u32, ge
     for ty in ty0..=ty1 {
         for tx in tx0..=tx1 {
             let bytes = get(&format!("{base}/{z}/{tx}/{ty}.png"))?;
-            let img = image::load_from_memory(&bytes).context("a map tile isn't an image")?.to_rgb8();
+            let img = crate::safety::decode_image(&bytes, None).context("a map tile isn't an image")?.to_rgb8();
             image::imageops::overlay(&mut all, &img, (tx - tx0) * 256, (ty - ty0) * 256);
         }
     }
