@@ -27,9 +27,13 @@ export function bridgeToken() {
 }
 export const authHeaders = () => ({ 'X-Sketchcraft-Token': bridgeToken() });
 
+// tools/ui-tests/run.mjs points HOME at a scratch folder; browsers are still looked for in the real one
+const realHome = process.env.SKETCHCRAFT_REAL_HOME ?? os.homedir();
+
 /** A browser: Playwright from the project if installed, else the /design skill's copy. */
 export async function chromium() {
-  const tries = ['playwright-core', 'playwright', path.join(os.homedir(), '.claude/skills/design/scripts/node_modules/playwright-core/index.mjs')];
+  const own = process.env.SKETCHCRAFT_PLAYWRIGHT ? [path.join(process.env.SKETCHCRAFT_PLAYWRIGHT, 'node_modules/playwright-core/index.mjs')] : [];
+  const tries = [...own, 'playwright-core', 'playwright', path.join(realHome, '.claude/skills/design/scripts/node_modules/playwright-core/index.mjs')];
   for (const t of tries) {
     try {
       const m = await import(t.startsWith('/') ? 'file://' + t : t);
@@ -41,9 +45,48 @@ export async function chromium() {
   throw new Error('Playwright not found: npm i -D playwright-core (in tools/demos), or install the /design skill');
 }
 
+/**
+ * With SKETCHCRAFT_TRACE_DIR set (CI does), every context a suite opens is traced, and when it closes it leaves a
+ * Playwright trace (open it with `npx playwright show-trace`) and a last screenshot of each page in that folder.
+ */
+function traced(browser) {
+  const dir = process.env.SKETCHCRAFT_TRACE_DIR;
+  if (!dir) return browser;
+  fs.mkdirSync(dir, { recursive: true });
+  const make = browser.newContext.bind(browser);
+  let n = 0;
+  const open = [];
+  const closeBrowser = browser.close.bind(browser);
+  // closing the browser closes the contexts the long way, so each leaves its trace
+  browser.close = async (...x) => {
+    for (const c of [...open]) await c.close().catch(() => {});
+    return closeBrowser(...x);
+  };
+  browser.newContext = async (...a) => {
+    const ctx = await make(...a);
+    open.push(ctx);
+    const id = `${path.basename(process.argv[1] ?? 'suite', '.mjs')}-${++n}`;
+    await ctx.tracing.start({ screenshots: true, snapshots: true }).catch(() => {});
+    const close = ctx.close.bind(ctx);
+    ctx.close = async (...x) => {
+      open.splice(open.indexOf(ctx) >>> 0, 1);
+      let i = 0;
+      for (const pg of ctx.pages()) await pg.screenshot({ path: path.join(dir, `${id}-page${i++}.png`) }).catch(() => {});
+      await ctx.tracing.stop({ path: path.join(dir, `${id}.zip`) }).catch(() => {});
+      return close(...x);
+    };
+    return ctx;
+  };
+  return browser;
+}
+
 export async function launch() {
+  return traced(await launchRaw());
+}
+
+async function launchRaw() {
   const c = await chromium();
-  const cache = path.join(os.homedir(), 'Library/Caches/ms-playwright');
+  const cache = path.join(realHome, 'Library/Caches/ms-playwright');
   const attempts = [() => c.launch()];
   if (fs.existsSync(cache)) {
     for (const rev of fs.readdirSync(cache).filter((d) => /^chromium-\d+$/.test(d)).sort().reverse()) {

@@ -81,7 +81,9 @@ check(JSON.stringify(await lefts()) === JSON.stringify([...turned, 50].sort((a, 
 await X({ cmd: 'new' });
 await wait(300);
 await X({ cmd: 'rect', from: [30, 0, 0], to: [34, 4, 0] });
-await wait(300);
+// "before New" backups are paced (one per 15 s unless the model's size doubles or halves; core/src/live.rs): wait out
+// the pacing from the New above, or the backup of this model is skipped and the test restores an older one
+await wait(16000);
 await X({ cmd: 'new' });
 await wait(300);
 check((await lefts()).length === 0, 'New leaves an empty model');
@@ -94,7 +96,7 @@ check(rows.some((r) => /before New/.test(r)), `the dialog lists a "before New" b
 await p.screenshot({ path: path.join(shots, 'restore-dialog.png') });
 await p.locator('.restore-row', { hasText: 'before New' }).first().getByRole('button', { name: 'Restore' }).click();
 await wait(1000);
-check(JSON.stringify(await lefts()) === '[30]', 'Restore put the model back');
+check(JSON.stringify(await lefts()) === '[30]', `Restore put the model back (${JSON.stringify(await lefts())}; rows: ${JSON.stringify(rows)})`);
 await p.keyboard.press('Control+z');
 await wait(800);
 check((await lefts()).length === 0, 'Ctrl+Z takes the restore back (one step)');

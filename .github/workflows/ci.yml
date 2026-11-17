@@ -60,6 +60,53 @@ jobs:
         working-directory: app
         run: npm run check
 
+  # The browser suites (tools/ui-tests, tools/security-tests, tools/ruby-tests) against the real engine: a release
+  # bridge plus the Vite dev page on a throwaway model, driven by Playwright's Chromium. No secrets, read-only token.
+  # Playwright is not an app dependency: it is installed here, at a pinned version, into a folder outside the
+  # repository (SKETCHCRAFT_PLAYWRIGHT; tools/demos/lib.mjs looks there). Its browser download is not cached:
+  # a cache entry is writable by any workflow run on the repository, and the download is about a minute.
+  ui-tests:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      PLAYWRIGHT_VERSION: 1.64.1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@263313d2989f864a2b8613f97277288638e7d8f8 # rust 1.99.1 (its version branch)
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Release engine
+        run: cargo build --release --locked -p sketchcraft-core
+      - name: App dependencies
+        working-directory: app
+        run: npm ci --ignore-scripts
+      - name: Playwright and its Chromium
+        run: |
+          mkdir -p "$RUNNER_TEMP/pw"
+          npm install --prefix "$RUNNER_TEMP/pw" --no-save --ignore-scripts --no-audit --no-fund "playwright-core@${PLAYWRIGHT_VERSION}"
+          node "$RUNNER_TEMP/pw/node_modules/playwright-core/cli.js" install --with-deps chromium
+          echo "SKETCHCRAFT_PLAYWRIGHT=$RUNNER_TEMP/pw" >> "$GITHUB_ENV"
+      - name: Browser suites
+        env:
+          SKETCHCRAFT_TRACE_DIR: ${{ runner.temp }}/ui-traces
+          SHOT_DIR: ${{ runner.temp }}/ui-shots
+        run: node tools/ui-tests/run.mjs
+      - name: Keep the screenshots and traces of a failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-test-failures
+          path: |
+            ${{ runner.temp }}/ui-traces
+            ${{ runner.temp }}/ui-shots
+          if-no-files-found: ignore
+          retention-days: 7
+
   # (The scale-figure generator's `--check` is not run here: its sine and cosine come out a last digit
   # different on Linux than on a Mac for four of the figures, so the check is only stable on the machine
   # that made the files. Run `python3 tools/scale_figures/scale_figures.py --check` before changing them.)
