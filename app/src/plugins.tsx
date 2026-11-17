@@ -10,7 +10,7 @@ import { pickSave } from "./files";
 import { cleanForm, cleanResult, type PluginField, type PluginForm, type PluginResult } from "./pluginclean";
 
 export { cleanForm, cleanResult };
-export { allowed, batcher, MAX_COMMANDS, RUBY_REPLAY_MS, runPlugin, startPluginTool } from "./pluginhost";
+export { allowed, announceChange, batcher, MAX_COMMANDS, RUBY_REPLAY_MS, runPlugin, startPluginTool } from "./pluginhost";
 export type { ToolPoint, ToolSession } from "./pluginhost";
 export type { PluginField, PluginForm, PluginResult };
 import { formatLength, parseLength } from "./units";

@@ -106,6 +106,27 @@ pub fn serve(live: Live, port: u16) -> anyhow::Result<()> {
     serve_with(live, Options { port, page: DEFAULT_PAGE.into(), token_file: None, token: std::env::var("SKETCHCRAFT_BRIDGE_TOKEN").ok().filter(|t| !t.is_empty()) })
 }
 
+/// `%20` and `+` in a query value.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let (mut out, mut i) = (Vec::new(), 0);
+    while i < b.len() {
+        match b[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < b.len() => match u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                Ok(v) => {
+                    out.push(v);
+                    i += 2;
+                }
+                Err(_) => out.push(b'%'),
+            },
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 pub fn serve_with(mut live: Live, opts: Options) -> anyhow::Result<()> {
     let port = opts.port;
     let token = opts.token.unwrap_or_else(new_token);
@@ -137,6 +158,8 @@ pub fn serve_with(mut live: Live, opts: Options) -> anyhow::Result<()> {
         let url = req.url().to_string();
         let (path, query) = url.split_once('?').unwrap_or((&url, ""));
         let caller = if query.split('&').any(|q| q == "as=plugin") { Caller::Plugin } else { Caller::Ui };
+        // the plugin the page is running this for (the page names it; the plugin itself can't)
+        let from: Option<String> = query.split('&').find_map(|q| q.strip_prefix("plugin=")).map(percent_decode);
         let body: Value = match (req.method(), path) {
             (Method::Options, _) => json!({}),
             (Method::Post, "/exec") => {
@@ -148,7 +171,7 @@ pub fn serve_with(mut live: Live, opts: Options) -> anyhow::Result<()> {
                 req.as_reader().take(MAX_BODY).read_to_string(&mut text).ok();
                 match serde_json::from_str::<Value>(&text) {
                     // a bug in one command answers with an error, not a dead bridge
-                    Ok(cmd) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| live.exec_as(&caller, &cmd))).unwrap_or_else(|_| json!({"ok": false, "error": "SketchCraft hit a bug running that."})),
+                    Ok(cmd) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| live.exec_as_from(&caller, &cmd, from.as_deref()))).unwrap_or_else(|_| json!({"ok": false, "error": "SketchCraft hit a bug running that."})),
                     Err(e) => json!({"ok": false, "error": format!("bad JSON: {e}")}),
                 }
             }

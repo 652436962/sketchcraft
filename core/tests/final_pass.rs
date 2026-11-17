@@ -167,3 +167,65 @@ fn agents_cannot_start_programs_and_any_path_keeps_the_reserved_folders() {
     assert_eq!(r["ok"], true, "{r}");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// SPECTER-006: a plugin run says who made it and how much it changed; Undo names whose step it takes back.
+#[test]
+fn undo_steps_carry_who_made_them_and_a_plugin_run_reports_what_it_changed() {
+    use sketchcraft::policy::Caller;
+    let mut e = Engine::new();
+    ok(&mut e, json!({"cmd": "rect", "from": [0, 0, 0], "to": [1, 1, 0]}));
+    assert_eq!(e.undo_origin(), Some("you"));
+    // a plugin run, as the app does it: a batch around the plugin's commands
+    ok(&mut e, json!({"cmd": "begin_batch"}));
+    for i in 0..3 {
+        let r = e.exec_value_as_from(&Caller::Plugin, json!({"cmd": "rect", "from": [5 + i * 3, 0, 0], "to": [6 + i * 3, 1, 0]}), Some("Cut list"));
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    let end = ok(&mut e, json!({"cmd": "end_batch"}));
+    assert_eq!(end["origin"], "plugin “Cut list”", "{end}");
+    assert!(end["changed"].as_u64().unwrap() >= 3, "{end}");
+    assert_eq!(e.undo_origin(), Some("plugin “Cut list”"));
+    // the person's own step after it is theirs
+    ok(&mut e, json!({"cmd": "rect", "from": [0, 5, 0], "to": [1, 6, 0]}));
+    assert_eq!(e.undo_origin(), Some("you"));
+    let u = ok(&mut e, json!({"cmd": "undo"}));
+    assert_eq!(u["origin"], "you");
+    assert_eq!(e.undo_origin(), Some("plugin “Cut list”"));
+    assert_eq!(e.redo_origin(), Some("you"));
+    let u = ok(&mut e, json!({"cmd": "undo"}));
+    assert_eq!(u["origin"], "plugin “Cut list”");
+    // a plugin that changed nothing says nothing
+    ok(&mut e, json!({"cmd": "begin_batch"}));
+    let end = ok(&mut e, json!({"cmd": "end_batch"}));
+    assert!(end.get("changed").is_none(), "{end}");
+    // a plugin can't claim to be the person: its own "as"/"origin" keys mean nothing
+    let r = e.exec_value_as_from(&Caller::Plugin, json!({"cmd": "rect", "from": [9, 9, 0], "to": [10, 10, 0], "origin": "you"}), None);
+    assert!(r["ok"] == true || r["ok"] == false);
+    assert_ne!(e.undo_origin(), Some("you"));
+}
+
+/// SPECTER-006: what an agent saved while the app was closed is announced when the person's window opens.
+#[test]
+fn the_person_is_told_what_an_agent_changed_while_the_app_was_closed() {
+    use sketchcraft::live::Live;
+    use sketchcraft::policy::{Caller, Workspace};
+    let dir = scratch("agent");
+    let doc = dir.join("live.sketchcraft");
+    // the agent's own server (no person's window): it saves, and tells no one yet
+    let mut agent = Live::open(doc.clone());
+    let ws = Caller::Mcp(Workspace::at(&dir));
+    let r = agent.exec_as(&ws, &json!({"cmd": "rect", "from": [0, 0, 0], "to": [2, 2, 0]}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(agent.scene()["notice"].is_null(), "{}", agent.scene());
+    drop(agent);
+    // the person opens the app
+    let mut app = Live::open(doc.clone());
+    app.as_person_view();
+    let note = app.scene()["notice"].as_str().unwrap_or("").to_string();
+    assert!(note.starts_with("Agent changed this model"), "{note}");
+    // said once
+    let mut again = Live::open(doc);
+    again.as_person_view();
+    assert!(again.scene()["notice"].is_null());
+    std::fs::remove_dir_all(&dir).ok();
+}

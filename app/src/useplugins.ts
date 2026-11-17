@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { execPlugin, type Reply, type Scene } from "./engine";
 import { runRuby } from "./ruby";
-import { RUBY_REPLAY_MS, batcher, cleanForm, cleanResult, loadPlugins, MAX_COMMANDS, runPlugin, startPluginTool, type Plugin, type PluginCommand, type PluginForm, type PluginList, type PluginResult, type ToolSession } from "./plugins";
+import { RUBY_REPLAY_MS, announceChange, batcher, cleanForm, cleanResult, loadPlugins, MAX_COMMANDS, runPlugin, startPluginTool, type Plugin, type PluginCommand, type PluginForm, type PluginList, type PluginResult, type ToolSession } from "./plugins";
 import type { Sel } from "./selection";
 import type { Tool } from "./Viewport";
 
@@ -22,7 +22,7 @@ export function usePlugins({ sel, scene, tool, setTool, say, sayAs, runForPlugin
   tool: Tool;
   setTool: (t: Tool | ((t: Tool) => Tool)) => void;
   say: (text: string, bad?: boolean) => void;
-  sayAs: (plugin: Plugin, t: string, bad?: boolean) => void;
+  sayAs: (plugin: Plugin, t: string, bad?: boolean, undo?: boolean) => void;
   runForPlugin: (cmd: Record<string, unknown>, plugin?: Plugin) => Promise<Reply>;
   refresh: () => Promise<void>;
 }) {
@@ -82,7 +82,7 @@ export function usePlugins({ sel, scene, tool, setTool, say, sayAs, runForPlugin
       units: scene?.units || "m",
       run: (cmd) => runForPlugin(cmd, plugin),
       show: (result, pl) => setPluginShown({ result, plugin: pl }),
-      toast: (t, bad) => sayAs(plugin, t, bad),
+      toast: (t, bad, undo) => sayAs(plugin, t, bad, undo),
       ask: (form, pl) => new Promise((resolve) => setPluginForm({ form, plugin: pl, done: (a) => (setPluginForm(null), resolve(a)) })),
       preview: (lines) => setPluginTool((p) => (p ? { ...p, preview: lines } : p)),
       hint: (text) => setPluginTool((p) => (p ? { ...p, hint: plugin.builtin ? text : `Plugin: ${text}` } : p)),
@@ -148,7 +148,7 @@ export function usePlugins({ sel, scene, tool, setTool, say, sayAs, runForPlugin
       if (r.journal.length > MAX_COMMANDS) return say(`${plugin.name} made ${r.journal.length} changes in one run; the most is ${MAX_COMMANDS}, so none were applied.`, true);
       let failed = "";
       // everything it recorded is ONE undo step (and one save)
-      const batch = batcher();
+      const batch = batcher((br) => announceChange(br, { toast: (t, bad, undo) => sayAs(plugin, t, bad, undo) }));
       try {
         await batch.begin();
         // replaying has the same wall-clock limit as a JavaScript plugin run (one command can be slow, 10,000 can take hours)
@@ -159,7 +159,7 @@ export function usePlugins({ sel, scene, tool, setTool, say, sayAs, runForPlugin
             break;
           }
           // Ruby's recorded commands are plugin commands too: same limits as JavaScript plugins
-          const res = await execPlugin(cmd);
+          const res = await execPlugin(cmd, plugin.name);
           if (!res.ok) {
             failed = `step ${i + 1} (${String(cmd.cmd)}): ${res.error}`;
             break;
@@ -188,7 +188,7 @@ export function usePlugins({ sel, scene, tool, setTool, say, sayAs, runForPlugin
       units: scene?.units || "m",
       run: (cmd) => runForPlugin(cmd, plugin),
       show: (result, pl) => setPluginShown({ result, plugin: pl }),
-      toast: (t, bad) => sayAs(plugin, t, bad),
+      toast: (t, bad, undo) => sayAs(plugin, t, bad, undo),
       ask: (form, pl) =>
         new Promise((resolve) =>
           setPluginForm({
