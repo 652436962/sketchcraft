@@ -42,9 +42,9 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlFMEYyMUQ3MURGRUI4RkUKUldUK3VQNGQxeUVQbmpIZmY3ZEN1VFdKZGdmZWc3WDRtMTdITHFJVDY3YnNnalpLWDJtVW41c2EK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdGQTM5RTNDRjhEMDcwMUMKUldRY2NORDRQSjZqZjZPTUlteGNwRjk2MDhpMTYzSS95bEFqdW0rNHlQQWtpRjZJZmlJaGwyblIK",
       "endpoints": [
-        "https://github.com/jasonsutter87/sketchcraft/releases/latest/download/latest.json"
+        "https://github.com/jasonsutter87/sketchcraft/releases/latest/download/latest-v2.json"
       ]
     }
   }
