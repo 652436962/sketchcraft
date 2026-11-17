@@ -14,7 +14,7 @@ export function autoTagColor(tag: string): [number, number, number] {
 }
 
 export const ACCENT = 0x6b5cff;
-export const EDGE_COLOR = 0x23252d;
+const EDGE_COLOR = 0x23252d;
 
 /** Clear color, line color, and whether the ground grid shows, per background. */
 export const BACKGROUNDS: Record<Backdrop, { clear: number; line: number; face: number; grid: boolean }> = {

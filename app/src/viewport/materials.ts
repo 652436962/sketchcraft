@@ -20,7 +20,7 @@ export function profileMaterial(color: number, px: number, clip: THREE.Plane[]):
 }
 
 // images for textured faces, loaded once per material and image
-export const textureCache = new Map<string, THREE.Texture>();
+const textureCache = new Map<string, THREE.Texture>();
 export function textureFor(name: string, data: string): THREE.Texture {
   const key = `${name}:${data.length}:${data.slice(-32)}`;
   let t = textureCache.get(key);

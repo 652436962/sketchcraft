@@ -1,7 +1,7 @@
 import * as THREE from "three";
 
 /** Little deterministic noise for sketchy lines. */
-export function jitter(i: number): number {
+function jitter(i: number): number {
   const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
   return x - Math.floor(x) - 0.5;
 }

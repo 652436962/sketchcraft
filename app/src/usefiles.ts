@@ -19,7 +19,7 @@ export function readFigure(): FigureChoice {
 }
 
 /** The figure for a new model today: on April 1 the beaver clocks in. */
-export function figureToday(choice: FigureChoice): FigureChoice {
+function figureToday(choice: FigureChoice): FigureChoice {
   const d = new Date();
   return choice !== "none" && d.getMonth() === 3 && d.getDate() === 1 ? "beaver" : choice;
 }
@@ -31,7 +31,7 @@ export function skippedText(list: string[]): string {
 }
 
 /** What an import left out, to follow its "Imported ..." line (empty when nothing was). */
-export function importedSkips(r: Reply): string {
+function importedSkips(r: Reply): string {
   return Array.isArray(r.skipped_pictures) && r.skipped_pictures.length ? ` ${skippedText(r.skipped_pictures as string[])}` : "";
 }
 
