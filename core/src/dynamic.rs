@@ -32,8 +32,12 @@ use std::collections::BTreeMap;
 struct P<'a> {
     s: &'a [u8],
     i: usize,
+    /// how deeply brackets, signs and powers are nested right now (a formula is data from anywhere)
+    d: usize,
     look: &'a dyn Fn(&str) -> Result<f64>,
 }
+
+const MAX_NEST: usize = 64;
 
 impl<'a> P<'a> {
     fn ws(&mut self) {
@@ -51,6 +55,15 @@ impl<'a> P<'a> {
         }
     }
     fn cmp(&mut self) -> Result<f64> {
+        self.d += 1;
+        if self.d > MAX_NEST {
+            bail!("the formula is nested too deeply");
+        }
+        let r = self.cmp_inner();
+        self.d -= 1;
+        r
+    }
+    fn cmp_inner(&mut self) -> Result<f64> {
         let a = self.sum()?;
         for (op, f) in [("<=", 0), (">=", 1), ("<>", 2), ("<", 3), (">", 4), ("=", 5)] {
             if self.eat(op) {
@@ -99,16 +112,26 @@ impl<'a> P<'a> {
     fn pow(&mut self) -> Result<f64> {
         let a = self.unary()?;
         if self.eat("^") {
-            return Ok(a.powf(self.pow()?));
+            self.d += 1;
+            if self.d > MAX_NEST {
+                bail!("the formula is nested too deeply");
+            }
+            let b = self.pow();
+            self.d -= 1;
+            return Ok(a.powf(b?));
         }
         Ok(a)
     }
     fn unary(&mut self) -> Result<f64> {
-        if self.eat("-") {
-            return Ok(-self.unary()?);
-        }
-        if self.eat("+") {
-            return self.unary();
+        if self.eat("-") || self.eat("+") {
+            let neg = self.s[self.i - 1] == b'-';
+            self.d += 1;
+            if self.d > MAX_NEST {
+                bail!("the formula is nested too deeply");
+            }
+            let v = self.unary();
+            self.d -= 1;
+            return Ok(if neg { -v? } else { v? });
         }
         self.atom()
     }
@@ -195,7 +218,7 @@ impl<'a> P<'a> {
 /// Evaluate a formula; names are looked up with `look` (lowercase).
 pub fn eval(expr: &str, look: &dyn Fn(&str) -> Result<f64>) -> Result<f64> {
     let e = expr.trim().trim_start_matches('=');
-    let mut p = P { s: e.as_bytes(), i: 0, look };
+    let mut p = P { s: e.as_bytes(), i: 0, d: 0, look };
     let v = p.cmp()?;
     p.ws();
     if p.i != p.s.len() {
@@ -221,17 +244,50 @@ pub fn attrs_of(inst: &Instance, def: Option<&Definition>) -> BTreeMap<String, S
 /// Every attribute as a number where it is one (formulas worked out), in
 /// the scope of `parent` (the enclosing placement's values).
 pub fn resolve(attrs: &BTreeMap<String, String>, parent: &BTreeMap<String, f64>) -> BTreeMap<String, f64> {
-    fn get(name: &str, attrs: &BTreeMap<String, String>, parent: &BTreeMap<String, f64>, depth: usize) -> Result<f64> {
-        if depth > 32 {
-            bail!("formulas refer to each other in a loop");
-        }
-        if let Some(p) = name.strip_prefix("parent!") {
-            return parent.get(p).copied().ok_or_else(|| anyhow!("the parent has no {p}"));
-        }
-        let raw = attrs.get(name).ok_or_else(|| anyhow!("no attribute {name}"))?;
-        eval(raw, &|n| get(n, attrs, parent, depth + 1))
+    use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
+    /// The most formula text one call works through (every attribute is worked out once, so this is about 1 MB of
+    /// formulas, far more than any real component holds).
+    const WORK_BYTES: usize = 1 << 20;
+    /// How deep names may refer to names (the attribute limit is 256 per placement and per component).
+    const MAX_DEPTH: usize = 520;
+    enum Slot {
+        Busy,
+        Done(Option<f64>),
     }
-    attrs.keys().filter_map(|k| get(k, attrs, parent, 0).ok().map(|v| (k.clone(), v))).collect()
+    struct Cx<'a> {
+        attrs: &'a BTreeMap<String, String>,
+        parent: &'a BTreeMap<String, f64>,
+        memo: RefCell<HashMap<String, Slot>>,
+        work: Cell<usize>,
+    }
+    // each name is worked out once (a chain `a0 = a1 + a1, a1 = a2 + a2 ...` is linear, not 2^n); a name met while it
+    // is being worked out is a loop
+    fn get(name: &str, cx: &Cx, depth: usize) -> Result<f64> {
+        if let Some(p) = name.strip_prefix("parent!") {
+            return cx.parent.get(p).copied().ok_or_else(|| anyhow!("the parent has no {p}"));
+        }
+        match cx.memo.borrow().get(name) {
+            Some(Slot::Busy) => bail!("formulas refer to each other in a loop"),
+            Some(Slot::Done(Some(v))) => return Ok(*v),
+            Some(Slot::Done(None)) => bail!("{name} has no value"),
+            None => {}
+        }
+        if depth > MAX_DEPTH {
+            bail!("formulas refer to each other too deeply");
+        }
+        let raw = cx.attrs.get(name).ok_or_else(|| anyhow!("no attribute {name}"))?;
+        cx.work.set(cx.work.get() + raw.len() + 16);
+        if cx.work.get() > WORK_BYTES {
+            bail!("the formulas are too long to work out");
+        }
+        cx.memo.borrow_mut().insert(name.to_string(), Slot::Busy);
+        let r = eval(raw, &|n| get(n, cx, depth + 1));
+        cx.memo.borrow_mut().insert(name.to_string(), Slot::Done(r.as_ref().ok().copied()));
+        r
+    }
+    let cx = Cx { attrs, parent, memo: RefCell::new(HashMap::new()), work: Cell::new(0) };
+    attrs.keys().filter_map(|k| get(k, &cx, 0).ok().map(|v| (k.clone(), v))).collect()
 }
 
 /// How a placement draws: its transforms (one per copy) and a fill color.
