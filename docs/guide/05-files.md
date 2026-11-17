@@ -29,16 +29,21 @@ file that couldn't be read). Restoring from those works the same way. SketchCraf
 never deletes these without telling you.
 
 Backups made because an AI agent or a plugin did something big are kept in their
-own small share (at most ten each), so they can't push out your own.
+own small share (at most ten each, for a week), so they can't push out your own. Your
+own keep one copy per hour for a day and one per day for a month, however many deletes
+you make. A restore reads files up to 400 MB.
 
 If two programs edit the same model (for example Claude over MCP), **Undo** takes
 back only *your* last step, never the other program's work. If the other program has
-since changed or built on the same objects, Undo says so and skips that step instead
-of guessing.
+since changed or built on the same objects (or something the step would remove, such
+as a colour or group, is now used by the other program), Undo says so and keeps that
+step: try again after the other program takes its change back, or press Undo again to
+skip the step and go one further back. Nothing is guessed.
 
 ## Models that are too big
 
-A model can hold about two million points, edges and faces. A bigger one (an
+A model can hold about two million points, edges and faces and 256 MB of images,
+photos and scans. A bigger one (an
 enormous import) still opens, for looking at and for deleting parts of it; it can't
 be saved over your file until it is under the limit, and the file on disk isn't touched
 meanwhile.

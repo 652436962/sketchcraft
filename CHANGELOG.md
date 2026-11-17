@@ -50,6 +50,21 @@ What changed in each SketchCraft release, newest first. The format follows
   own edits during a run are saved at once. The release workflow keeps the Apple
   secrets out of the job that compiles, and checks the file names it signs.
 
+- **A fifth review.** Undo after another program saved now works on ordinary models
+  (it used to refuse most of the time once you had rotated, scaled or imported
+  anything), carries your history across a save without a pause even on huge models,
+  and keeps a step it had to refuse so it can be tried again (press Undo again to skip
+  it). It also refuses an undo that would leave another program's work pointing at a
+  colour, group or part that the undo removed. Restore no longer reuses part numbers
+  and refuses a damaged backup. Images, photos and scans count against a size limit
+  (256 MB in a model), so a runaway tool can't make the model unopenable or push your
+  backups out; your own big imports (a 215,000-triangle OBJ, a 354,000-line DXF, a
+  300 x 300 terrain) work again. Backups keep one copy per hour for a day and per day
+  for a month however many deletes you make, a few huge backups can't push out all the
+  others, and Restore lists only the set-aside files SketchCraft itself made.
+  Plugins can no longer use Undo and Redo; the release workflow asks the `release`
+  reviewer before the Apple signing secrets can be read.
+
 ### Added
 - **Restore from backup…** (File menu, or Shift+S): the model's earlier copies,
   newest first, with their time, size and what they were taken before ("before New",
@@ -59,7 +74,7 @@ What changed in each SketchCraft release, newest first. The format follows
 - **Undo keeps your own history when another program saves.** Claude or a second
   window saving the model no longer wipes your Undo: it takes back your last step and
   never the other program's work. If the other program changed or built on the same
-  objects, Undo says so and skips that step instead of guessing. A plugin run is
+  objects, Undo says so and keeps that step (press Undo again to skip it) instead of guessing. A plugin run is
   still one step.
 - **Plugins window** (File › Plugins ▸ Manage plugins…, or Shift+S): every
   plugin with its version and author, turn each on or off, remove yours
