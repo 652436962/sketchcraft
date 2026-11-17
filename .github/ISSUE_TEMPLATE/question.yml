@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        The [user guide](https://github.com/jasonsutter87/sketchcraft/tree/main/docs/guide) and the **Learn** panel in the app answer a lot of questions. Still stuck? Ask away.
+        The [user guide](https://github.com/jasonsutter87/sketchcraft/tree/main/docs/guide) and the **Learn** panel in the app answer a lot of questions. Still stuck? **[Discussions](https://github.com/jasonsutter87/sketchcraft/discussions)** is the best place to ask, where others can answer too. Or ask here.
   - type: textarea
     id: question
     attributes:

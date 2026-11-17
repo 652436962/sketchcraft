@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
+  - name: 💬 Ask a question / share what you made
+    url: https://github.com/jasonsutter87/sketchcraft/discussions
+    about: How-to questions, ideas to talk through, and show-and-tell go in Discussions.
   - name: 📖 User guide
     url: https://github.com/jasonsutter87/sketchcraft/tree/main/docs/guide
     about: How to draw, model, import, render and more.
