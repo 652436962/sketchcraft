@@ -96,6 +96,18 @@ What changed in each SketchCraft release, newest first. The format follows
   itself when the file can be read again or is moved, or when you choose New or Open.
   An agent's `open` and library reads have their own smaller size limits, and a
   large import now shows the big-model notice straight away.
+- **An eighth review.** A SketchUp file (or a saved model, or a library part) whose
+  components contain themselves, nest more than 64 levels deep or multiply into
+  millions of faces (a part placed 10 times inside a part placed 10 times, and so on)
+  used to crash the app, and could crash it again on every start. They are now refused
+  with a message, and a saved model like that is set aside like any damaged file
+  instead of crashing the program on launch. Components can't be made, and SketchUp
+  files can't be imported, while you are editing a component (close it first); that
+  also fixes a bug where such an import could make a component contain itself. Opening
+  a SketchUp 2021+ file is held to limits (archive size, pictures and time, at most 30
+  seconds for any file), so a tiny booby-trapped file can't use up the computer's
+  memory or freeze the app. A plugin tool that can't start now says so, and one that
+  sends too many commands is stopped.
 
 ### Changed
 - **Bigger pictures.** Textures and photos may be up to 16,384 px on a side and 100

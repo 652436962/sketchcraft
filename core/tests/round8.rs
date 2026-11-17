@@ -6,6 +6,7 @@ mod skp_fixture;
 use base64::Engine as _;
 use serde_json::{json, Value};
 use skp_fixture::*;
+use sketchcraft::live::Live;
 use sketchcraft::Engine;
 
 fn b64(b: &[u8]) -> String {
@@ -214,4 +215,28 @@ fn many_materials_pointing_at_one_picture_stop_at_the_picture_limit() {
     let textured = e.model.materials.values().filter(|m| m.texture.is_some()).count();
     assert!(textured <= 256, "{textured}");
     assert!(r["skipped_pictures"].is_array(), "the ones left out are said: {r}");
+}
+
+/// The crash loop of R8-MBK-001: a saved model that contains itself used to abort the bridge, the MCP server and the
+/// app on every start. Now the start-up treats it as a damaged file: set aside, a notice, an empty model that draws.
+#[test]
+fn a_saved_loop_is_set_aside_at_start_up_instead_of_crashing_every_launch() {
+    let dir = std::env::temp_dir().join(format!("sc-r8-live-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let doc = dir.join("live.sketchcraft");
+    let mut e = Engine::new();
+    let face = ok(&mut e, json!({"cmd": "rect", "from": [0, 0, 0], "to": [2, 2, 0]}))["face"].clone();
+    let def = ok(&mut e, json!({"cmd": "make_component", "ids": [face], "name": "Part"}))["component"].as_u64().unwrap();
+    ok(&mut e, json!({"cmd": "save", "path": doc.to_str().unwrap()}));
+    let mut v: Value = serde_json::from_str(&std::fs::read_to_string(&doc).unwrap()).unwrap();
+    v["definitions"][def.to_string()]["model"]["instances"] = json!({"900": {"parent": null, "def": def, "name": "self", "transform": [1.0,0.0,0.0,0.0, 0.0,1.0,0.0,0.0, 0.0,0.0,1.0,0.0, 0.0,0.0,0.0,1.0], "tag": null, "hidden": false, "attrs": {}}});
+    std::fs::write(&doc, v.to_string()).unwrap();
+    let l = Live::open(doc.clone());
+    assert!(l.notice.is_some(), "the person is told");
+    assert!(l.engine.model.definitions.is_empty());
+    let scene = l.scene();
+    assert!(scene.is_object());
+    let aside = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().contains("damaged"));
+    assert!(aside, "a copy of the file was kept");
+    std::fs::remove_dir_all(&dir).ok();
 }
