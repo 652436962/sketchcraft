@@ -8,6 +8,19 @@ What changed in each SketchCraft release, newest first. The format follows
 
 ## [0.3.6] - 2026-11-17
 
+### Fixed
+- **SketchUp files from every version open.** Files saved by SketchUp 2013 to
+  2020 were refused ("not a SketchUp 2013+ archive"); they now import with their
+  geometry, components and colours. Files from SketchUp 2021 and later (including
+  SketchUp 27 and SketchUp for Web) now place all their components; some came in
+  looking empty. Tested on SketchUp's own test models from versions 6 to 27, and on
+  hundreds of damaged files, which are refused in under a second. (Textures in
+  2017-2020 files come in as colours for now; that's planned for 0.3.8.) (#1)
+- **The window drags by its title bar while it's focused** on macOS. Before, it
+  only moved when another window was in front. (#2)
+- **Push/Pull repeat** (double-click a face to push it the same distance again)
+  never worked; it does now.
+
 ### Security
 - **Final pre-release pass.**
   - Plugins and agents: a plugin run that changes your model now says so
