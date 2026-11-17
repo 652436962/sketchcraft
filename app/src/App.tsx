@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { UpdateCard, checkForUpdatesNow } from "./updater";
 import { ask, AskHost } from "./ask";
 import { exec, execPlugin, inTauri, loadScene, sync, type Reply, type Scene, type Vec3 } from "./engine";
@@ -6,19 +6,20 @@ import { Icons, Logo } from "./icons";
 import { BuildTools, ContextMenu, contextItems, EntityInfo, Environments, Library, LocationDialog, Outliner, RenderDialog, Sandbox, SheetsDialog, ShortcutSheet, Templates, Textures, Views } from "./panels";
 import { EMPTY, isEmpty, selIds, type Sel } from "./selection";
 import { formatLength, parseLength, UNIT_OPTIONS } from "./units";
-import { pickOpen, pickSave, rememberedFile, rememberFile } from "./files";
+import { pickSave, rememberedFile, rememberFile } from "./files";
 import Viewport, { type Backdrop, type BuildSettings, type FaceStyle, type Styles, type Tool, type ViewportApi } from "./Viewport";
 import { MatchPhoto, type PhotoMatch } from "./matchphoto";
 import { prepareImage } from "./textures";
-import { applySkin, readSkin, SKINS, store, type Skin } from "./skins";
+import { useLook, type Tab } from "./uselook";
 import { CommandPalette, type Command } from "./palette";
-import { TOOL_INFO, WORKSPACES, withEdits, type WorkspaceEdits, type WorkspaceId } from "./workspace";
+import { TOOL_INFO, WORKSPACES } from "./workspace";
 import { AppearanceDialog, WorkspaceDialog } from "./appearance";
 import { WorkspaceStrip } from "./wsstrip";
 import { Toolbar } from "./toolbar";
-import { runRuby } from "./ruby";
-import { pluginSandboxHolds } from "./cspcheck";
-import { RUBY_REPLAY_MS, batcher, cleanForm, cleanResult, loadPlugins, MAX_COMMANDS, PluginFormDialog, PluginResultDialog, PluginsDialog, runPlugin, startPluginTool, type Plugin, type PluginCommand, type PluginForm, type PluginList, type PluginResult, type ToolSession } from "./plugins";
+import { PluginFormDialog, PluginResultDialog, PluginsDialog, type Plugin } from "./plugins";
+import { usePlugins } from "./useplugins";
+import { FileMenu } from "./filemenu";
+import { readFigure, skippedText, useFileActions, type FigureChoice } from "./usefiles";
 import { ErrorBoundary } from "./boundary";
 import { PhotoModeler } from "./photomodel";
 import { RefImageDialog } from "./refimage";
@@ -137,40 +138,6 @@ const SWATCHES: [number, number, number][] = [
 const hex = (c: number[]) => "#" + c.map((x) => Math.round(Math.min(1, Math.max(0, x)) * 255).toString(16).padStart(2, "0")).join("");
 const unhex = (h: string): [number, number, number] => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255) as [number, number, number];
 
-type Tab = "outliner" | "library" | "views";
-
-/** the skin you wore last time (a built-in by id, or a saved one by its data) */
-function rememberedSkin(): Skin {
-  const id = store.get("sketchcraft.skin");
-  const built = SKINS.find((s) => s.id === id);
-  if (built) return built;
-  try {
-    const data = store.get("sketchcraft.skinData");
-    const s = data ? readSkin(JSON.parse(data), "My skin") : null;
-    if (s) return s;
-  } catch {
-    /* fall through */
-  }
-  return SKINS[0];
-}
-function rememberedEdits(): Partial<Record<WorkspaceId, WorkspaceEdits>> {
-  try {
-    return JSON.parse(store.get("sketchcraft.workspaceEdits") ?? "{}");
-  } catch {
-    return {};
-  }
-}
-
-/** Pictures the engine left out of a render, an import or a projection (too big, unreadable), said plainly. */
-function skippedText(list: string[]): string {
-  const shown = list.slice(0, 3).join("; ");
-  return `${list.length} picture${list.length === 1 ? " was" : "s were"} left out: ${shown}${list.length > 3 ? `; and ${list.length - 3} more` : ""}.`;
-}
-
-/** What an import left out, to follow its "Imported ..." line (empty when nothing was). */
-function importedSkips(r: Reply): string {
-  return Array.isArray(r.skipped_pictures) && r.skipped_pictures.length ? ` ${skippedText(r.skipped_pictures as string[])}` : "";
-}
 
 export default function App() {
   const [scene, setScene] = useState<Scene | null>(null);
@@ -223,52 +190,6 @@ export default function App() {
       setSection(false);
     }
   };
-  // skin and workspace, remembered between launches
-  const [skin, setSkinState] = useState<Skin>(rememberedSkin);
-  useEffect(() => applySkin(skin), [skin]);
-  const wearSkin = (s: Skin, useBackdrop: boolean) => {
-    setSkinState(s);
-    store.set("sketchcraft.skin", s.id);
-    store.set("sketchcraft.skinData", JSON.stringify(s));
-    if (useBackdrop) setStyles((st) => ({ ...st, background: s.backdrop ?? "default" }));
-    // picked from the gallery: it brings its layout (Classic docks, ours float)
-    if (useBackdrop && s.layout) setLayout(s.layout);
-  };
-  const [wsId, setWsId] = useState<WorkspaceId>(() => (WORKSPACES.some((w) => w.id === store.get("sketchcraft.workspace")) ? (store.get("sketchcraft.workspace") as WorkspaceId) : "model"));
-  const [wsEdits, setWsEdits] = useState(rememberedEdits);
-  // classic (docked, SketchUp-like, the default) or floating (SketchCraft's own)
-  const [layout, setLayoutState] = useState<"classic" | "floating">(() => {
-    const v = store.get("sketchcraft.layout");
-    return v === "classic" || v === "floating" ? v : (rememberedSkin().layout ?? "classic");
-  });
-  const setLayout = (l: "classic" | "floating") => {
-    setLayoutState(l);
-    store.set("sketchcraft.layout", l);
-    // the layout applies everywhere: drop per-workspace tool bar placements
-    setWsEdits((all) => {
-      const next = Object.fromEntries(Object.entries(all).map(([k, v]) => [k, v ? (({ dock: _d, ...rest }) => rest)(v) : v]));
-      store.set("sketchcraft.workspaceEdits", JSON.stringify(next));
-      return next;
-    });
-  };
-  const ws = withEdits(WORKSPACES.find((w) => w.id === wsId)!, wsEdits[wsId], layout);
-  const editWs = (e: WorkspaceEdits | null) => {
-    const next = { ...wsEdits };
-    if (e) next[wsId] = { ...next[wsId], ...e };
-    else delete next[wsId];
-    setWsEdits(next);
-    store.set("sketchcraft.workspaceEdits", JSON.stringify(next));
-    if (e?.leftTab) setTab(e.leftTab);
-  };
-  const switchWs = (id: WorkspaceId) => {
-    const w = withEdits(WORKSPACES.find((x) => x.id === id)!, wsEdits[id]);
-    setWsId(id);
-    store.set("sketchcraft.workspace", id);
-    setTab(w.leftTab);
-    if (w.styles) setStyles((s) => ({ ...s, ...w.styles }));
-    // a tool that isn't on this workspace's toolbar: back to Select
-    if (!w.tools.flat().includes(tool)) chooseTool("select");
-  };
   const [showSkins, setShowSkins] = useState(false);
   const [showPhotoModel, setShowPhotoModel] = useState(false);
   const [showRef, setShowRef] = useState(false);
@@ -289,45 +210,7 @@ export default function App() {
     }
   };
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const [fileMenu, setFileMenu] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
-  const [pluginsOpen, setPluginsOpen] = useState(false);
-  const [plugins, setPlugins] = useState<PluginList>({ dir: "", plugins: [], problems: [] });
-  const [pluginShown, setPluginShown] = useState<{ result: PluginResult; plugin: Plugin } | null>(null);
   const [showPlugins, setShowPlugins] = useState(false);
-  // plugin commands run this session (the plugins lesson watches it)
-  const [pluginRuns, setPluginRuns] = useState(0);
-  // a plugin's tool in use: its session, and what it shows
-  const toolSession = useRef<ToolSession | null>(null);
-  const [pluginTool, setPluginTool] = useState<{ name: string; hint: string; preview: [number, number, number][][]; anchor: [number, number, number] | null } | null>(null);
-  const [pluginForm, setPluginForm] = useState<{ form: PluginForm; plugin: Plugin; done: (a: Record<string, unknown> | null) => void } | null>(null);
-  const reloadPlugins = () => loadPlugins().then(setPlugins, () => {});
-  // a SketchUp Ruby plugin's commands are the menu items it adds when it loads
-  const [rubyMenus, setRubyMenus] = useState<Record<string, string[] | { error: string }>>({});
-  useEffect(() => {
-    for (const p of plugins.plugins) {
-      if (!p.ruby || p.enabled === false || rubyMenus[p.id]) continue;
-      runRuby(p, {}).then((r) => setRubyMenus((m) => ({ ...m, [p.id]: r.error ? { error: r.error } : r.menu })));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plugins]);
-  // plugins that are on (Ruby ones with the commands they registered)
-  const livePlugins: Plugin[] = plugins.plugins
-    .filter((p) => p.enabled !== false)
-    .map((p) => {
-      if (!p.ruby) return p;
-      const m = rubyMenus[p.id];
-      return { ...p, commands: Array.isArray(m) ? m.map((label, i): PluginCommand => ({ id: String(i), label, hint: `${p.name} (SketchUp Ruby)` })) : [] };
-    });
-  // their commands with icons sit on the tool bar
-  const pluginButtons = useMemo(
-    () => livePlugins.flatMap((pl) => pl.commands.filter((c) => c.icon).map((c) => ({ id: `plugin:${pl.id}:${c.id}`, name: c.label.replace(/…$/, ""), icon: c.icon!, run: () => void runPluginCommandRef.current(pl, c.id) }))),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [plugins, rubyMenus],
-  );
-  useEffect(() => {
-    loadPlugins().then(setPlugins, () => {});
-  }, []);
   // who stands at the origin of a new model, for scale
   const [figure, setFigureRaw] = useState<FigureChoice>(() => readFigure());
   const setFigure = (f: FigureChoice) => {
@@ -406,6 +289,8 @@ export default function App() {
   );
   // what a plugin says is shown as the plugin's, never in the app's own voice
   const sayAs = useCallback((plugin: Plugin, t: string, bad?: boolean) => say(plugin.builtin ? t : `Plugin “${plugin.name.slice(0, 40)}”: ${t}`, bad), [say]);
+  const { plugins, setPlugins, pluginShown, setPluginShown, pluginRuns, toolSession, pluginTool, pluginForm, reloadPlugins, livePlugins, pluginButtons, runPluginCommand } = usePlugins({ sel, scene, tool, setTool, say, sayAs, runForPlugin, refresh });
+  const { file, importFile, runTemplate } = useFileActions({ run, say, refresh, api, scene, figure, currentFile, setCurrentFile, setSel });
 
   // a notice from the engine (a damaged model file was set aside...): say it once
   const lastNotice = useRef("");
@@ -443,6 +328,7 @@ export default function App() {
     setTool(t);
     if (t !== "place") setPlacing(null);
   }, []);
+  const { skin, wearSkin, wsId, layout, setLayout, ws, editWs, switchWs } = useLook({ tool, chooseTool, setStyles, setTab });
 
   const deleteSelection = useCallback(async () => {
     if (isEmpty(sel)) return;
@@ -599,328 +485,6 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [scene, sel, tool, run, deleteSelection, chooseTool]);
 
-  const runTemplate = async (lines: string[]) => {
-    for (const line of lines) {
-      const r = await exec(JSON.parse(line));
-      if (!r.ok) {
-        say(r.error ?? "Template failed", true);
-        break;
-      }
-    }
-    api.current?.fitSoon();
-    await refresh();
-  };
-
-  /** what a CAD import made, in a sentence */
-  const cadSummary = (name: string, r: Reply) =>
-    `Imported ${name}: ${r.layers} layer${r.layers === 1 ? "" : "s"} (as tags), ${r.faces} faces, ${r.labels ? `${r.labels} labels, ` : ""}${r.dimensions ? `${r.dimensions} dimensions, ` : ""}read as ${r.units}${r.skipped ? `; ${r.skipped} hatch/other items skipped` : ""}. A floor plan? Right-click it › Raise walls.`;
-
-  /** after a CAD import: land on where most of the drawing is (not a scaled-up sheet border) */
-  const landOn = (r: Reply) => {
-    const f = r.focus as [number, number, number][] | undefined;
-    if (f && f.length === 2) {
-      const pad = Math.max(f[1][0] - f[0][0], f[1][1] - f[0][1]) * 0.05;
-      api.current?.fitBox([f[0][0] - pad, f[0][1] - pad, f[0][2]], [f[1][0] + pad, f[1][1] + pad, f[1][2]]);
-    } else api.current?.fitSoon();
-  };
-
-  const importFile = async (file: File) => {
-    let r: Reply;
-    const lower = file.name.toLowerCase();
-    if (lower.endsWith(".skp") || lower.endsWith(".fbx")) {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      let bin = "";
-      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-      const fbx = lower.endsWith(".fbx");
-      r = await run({ cmd: fbx ? "import_fbx" : "import_skp", data: btoa(bin), name: file.name.replace(/\.(skp|fbx)$/i, "") });
-    } else if (lower.endsWith(".dxf")) {
-      r = await run({ cmd: "import_dxf", text: await file.text(), name: file.name.replace(/\.dxf$/i, "") });
-    } else if (lower.endsWith(".dwg")) {
-      return say("Open DWG files with File › Import (the desktop app converts them)", true);
-    } else {
-      r = await run({ cmd: "import_obj", text: await file.text(), up: "y" });
-    }
-    if (r.ok) {
-      say(`${r.layers != null ? cadSummary(file.name, r) : `Imported ${file.name}: ${r.faces} faces`}${importedSkips(r)}`, importedSkips(r) !== "");
-      if (r.focus) {
-        await refresh();
-        landOn(r);
-      } else {
-        api.current?.fitSoon();
-        await refresh();
-      }
-    }
-  };
-
-  const importPath = async (path: string) => {
-    const lower = path.toLowerCase();
-    if (/\.(ply|las|laz|xyz|pts|txt)$/.test(lower)) {
-      const r = await run({ cmd: "import_cloud", path });
-      if (r.ok) {
-        const shift = r.shift as number[] | undefined;
-        const moved = shift && shift.some((v) => Math.abs(v) > 0) ? `; moved ${shift.map((v) => v.toFixed(1)).join(", ")} m to the origin` : "";
-        say(`Imported ${path.split("/").pop()}: ${(r.points as number).toLocaleString()} points${r.colored ? " in color" : ""}${moved}. Drawing tools snap to them.`);
-        await refresh();
-        api.current?.fit();
-      }
-      return r.ok;
-    }
-    if (lower.endsWith(".ifc")) {
-      say("Reading the IFC (IfcOpenShell)…");
-      const r = await run({ cmd: "import_ifc", path });
-      if (r.ok) {
-        say(`Imported ${path.split("/").pop()} (${r.schema}): ${r.elements} elements on ${r.storeys} storey${r.storeys === 1 ? "" : "s"}, typed for the Classifier, tagged by storey`);
-        api.current?.fitSoon();
-        await refresh();
-      }
-      return r.ok;
-    }
-    const r = lower.endsWith(".skp")
-      ? await run({ cmd: "import_skp", path })
-      : lower.endsWith(".fbx")
-        ? await run({ cmd: "import_fbx", path })
-        : lower.endsWith(".dxf")
-          ? await run({ cmd: "import_dxf", path })
-          : lower.endsWith(".dwg")
-            ? await run({ cmd: "import_dwg", path })
-            : await run({ cmd: "import_obj", path, up: "y" });
-    if (r.ok) {
-      say(`${r.layers != null ? cadSummary(path.split("/").pop()!, r) : `Imported ${path.split("/").pop()}: ${r.faces} faces`}${importedSkips(r)}`, importedSkips(r) !== "");
-      if (r.focus) {
-        await refresh();
-        landOn(r);
-      } else {
-        api.current?.fitSoon();
-        await refresh();
-      }
-    }
-    return r.ok;
-  };
-
-  // the tool bar's buttons call the latest runner (it reads the current selection)
-  const runPluginCommandRef = useRef<(p: Plugin, c: string) => Promise<void>>(async () => {});
-  // a command marked "tool" starts the plugin's tool instead of running once
-  const startTool = async (plugin: Plugin, toolId: string, label: string) => {
-    const safe = await pluginSandboxHolds();
-    if (!safe.ok) return say(`Plugins are off: ${safe.why}.`, true);
-    toolSession.current?.stop();
-    const name = (plugin.builtin ? label : `${label} · plugin “${plugin.name.slice(0, 40)}”`).replace(/…$/, "");
-    setPluginTool({ name, hint: "", preview: [], anchor: null });
-    const session = startPluginTool(plugin, toolId, {
-      selection: { faces: sel.faces, edges: sel.edges, groups: sel.groups, instances: sel.instances },
-      units: scene?.units || "m",
-      run: (cmd) => runForPlugin(cmd, plugin),
-      show: (result, pl) => setPluginShown({ result, plugin: pl }),
-      toast: (t, bad) => sayAs(plugin, t, bad),
-      ask: (form, pl) => new Promise((resolve) => setPluginForm({ form, plugin: pl, done: (a) => (setPluginForm(null), resolve(a)) })),
-      preview: (lines) => setPluginTool((p) => (p ? { ...p, preview: lines } : p)),
-      hint: (text) => setPluginTool((p) => (p ? { ...p, hint: plugin.builtin ? text : `Plugin: ${text}` } : p)),
-      anchor: (pt) => setPluginTool((p) => (p ? { ...p, anchor: pt } : p)),
-      ended: () => {
-        if (toolSession.current === session) {
-          toolSession.current = null;
-          setPluginTool(null);
-          setTool((t) => (t === "plugin" ? "select" : t));
-          setPluginRuns((n) => n + 1);
-        }
-      },
-    });
-    toolSession.current = session;
-    setTool("plugin");
-  };
-  // picking another tool (or Esc) leaves the plugin's tool
-  useEffect(() => {
-    if (tool !== "plugin" && toolSession.current) {
-      const s = toolSession.current;
-      toolSession.current = null;
-      setPluginTool(null);
-      s.stop();
-    }
-  }, [tool]);
-
-  // a SketchUp Ruby command: run it (asking for its input boxes), then replay
-  // what it recorded, one undoable SketchCraft command at a time
-  const runRubyCommand = async (plugin: Plugin, item: number) => {
-    const answers: string[][] = [];
-    const selection = [
-      ...sel.groups.map((id) => ({ id, name: scene?.groups.find((g) => g.id === id)?.name ?? "", kind: "group" })),
-      ...sel.instances.map((id) => ({ id, name: scene?.instances.find((i) => i.id === id)?.name ?? "", kind: "instance" })),
-      ...sel.faces.map((id) => ({ id, name: "", kind: "face" })),
-    ];
-    for (let round = 0; round < 12; round++) {
-      const r = await runRuby(plugin, { item, answers, selection });
-      if (r.need) {
-        const need = r.need;
-        const got = await new Promise<Record<string, unknown> | null>((resolve) =>
-          setPluginForm({
-            form: cleanForm({
-              title: need.title,
-              fields: need.prompts.map((label, i) => {
-                const list = need.lists[i];
-                return list && list.includes("|") ? { id: `f${i}`, label, type: "choice" as const, options: list.split("|"), value: need.defaults[i] } : { id: `f${i}`, label, type: "text" as const, value: need.defaults[i] ?? "" };
-              }),
-            }),
-            plugin,
-            done: (a) => (setPluginForm(null), resolve(a)),
-          }),
-        );
-        if (!got) return;
-        answers.push(need.prompts.map((_, i) => String(got[`f${i}`] ?? "")));
-        continue;
-      }
-      if (r.error) return say(`${plugin.name}: ${r.error}`, true);
-      if (r.journal.length > MAX_COMMANDS) return say(`${plugin.name} made ${r.journal.length} changes in one run; the most is ${MAX_COMMANDS}, so none were applied.`, true);
-      let failed = "";
-      // everything it recorded is ONE undo step (and one save)
-      const batch = batcher();
-      try {
-        await batch.begin();
-        // replaying has the same wall-clock limit as a JavaScript plugin run (one command can be slow, 10,000 can take hours)
-        const started = Date.now();
-        for (const [i, cmd] of r.journal.entries()) {
-          if (Date.now() - started > RUBY_REPLAY_MS) {
-            failed = `step ${i + 1} (${String(cmd.cmd)}): it took over ${RUBY_REPLAY_MS / 1000} seconds, so the rest was skipped`;
-            break;
-          }
-          // Ruby's recorded commands are plugin commands too: same limits as JavaScript plugins
-          const res = await execPlugin(cmd);
-          if (!res.ok) {
-            failed = `step ${i + 1} (${String(cmd.cmd)}): ${res.error}`;
-            break;
-          }
-        }
-      } finally {
-        await batch.end();
-      }
-      await refresh();
-      setPluginRuns((n) => n + 1);
-      for (const t of r.toasts.slice(0, 5)) sayAs(plugin, String(t).slice(0, 300));
-      if (failed) say(`${plugin.name} stopped at ${failed}. ⌘Z undoes what it did.`, true);
-      if (r.out.trim()) setPluginShown({ result: cleanResult({ title: plugin.name, text: r.out.trim() }), plugin });
-      return;
-    }
-    say(`${plugin.name} kept asking for input, so it was stopped.`, true);
-  };
-
-  const runPluginCommand = (plugin: Plugin, commandId: string) => {
-    if (plugin.ruby) return runRubyCommand(plugin, Number(commandId));
-    const c = plugin.commands.find((x) => x.id === commandId);
-    if (c?.tool) return startTool(plugin, commandId, c.label);
-    return runPlugin(plugin, commandId, {
-      onDone: () => setPluginRuns((n) => n + 1),
-      selection: { faces: sel.faces, edges: sel.edges, groups: sel.groups, instances: sel.instances },
-      units: scene?.units || "m",
-      run: (cmd) => runForPlugin(cmd, plugin),
-      show: (result, pl) => setPluginShown({ result, plugin: pl }),
-      toast: (t, bad) => sayAs(plugin, t, bad),
-      ask: (form, pl) =>
-        new Promise((resolve) =>
-          setPluginForm({
-            form,
-            plugin: pl,
-            done: (a) => {
-              setPluginForm(null);
-              resolve(a);
-            },
-          }),
-        ),
-    });
-  };
-
-  runPluginCommandRef.current = runPluginCommand;
-
-  const file = {
-    new: async () => {
-      await run({ cmd: "new", figure: figureToday(figure) });
-      setCurrentFile(null);
-      setSel(EMPTY);
-      say("New model. ⌘Z brings the last one back.");
-    },
-    open: async () => {
-      const path = await pickOpen();
-      if (!path) return;
-      if (path.toLowerCase().endsWith(".sketchcraft")) {
-        const r = await run({ cmd: "open", path });
-        if (!r.ok) return;
-        setCurrentFile(path);
-        api.current?.fitSoon();
-        await refresh();
-      } else {
-        await run({ cmd: "new" });
-        if (await importPath(path)) setCurrentFile(null);
-      }
-      setSel(EMPTY);
-    },
-    save: async (as = false) => {
-      let path = currentFile;
-      if (!path || as) {
-        path = await pickSave(currentFile?.split("/").pop() ?? "Untitled.sketchcraft", "sketchcraft", "SketchCraft model");
-        if (!path) return;
-        if (!path.toLowerCase().endsWith(".sketchcraft")) path += ".sketchcraft";
-      }
-      const r = await run({ cmd: "save", path });
-      if (r.ok) {
-        setCurrentFile(path);
-        say(`Saved ${path.split("/").pop()}`);
-      }
-    },
-    import: async () => {
-      const path = await pickOpen();
-      if (path) await importPath(path);
-    },
-    export: async (kind: "obj" | "glb" | "stl" | "dae" | "dxf" | "dwg" | "pdf" | "ifc") => {
-      const base = (currentFile?.split("/").pop() ?? "model").replace(/\.sketchcraft$/, "");
-      const path = await pickSave(`${base}.${kind}`, kind, kind.toUpperCase());
-      if (!path) return;
-      const cmd =
-        kind === "stl"
-          ? { cmd: "export_stl", path, scale: 1000 }
-          : kind === "pdf"
-            ? { cmd: "export_pdf", path, width: 2400, height: 1500, camera: api.current!.camera(), title: base }
-            : { cmd: `export_${kind}`, path };
-      const r = await run(cmd);
-      if (r.ok) say(`Exported ${path.split("/").pop()}`);
-    },
-    section: async (kind: "svg" | "dxf") => {
-      const plane = api.current?.sectionPlane();
-      if (!plane) return say("Cut a section first: X, then click a face.", true);
-      const base = (currentFile?.split("/").pop() ?? "model").replace(/\.sketchcraft$/, "");
-      const path = await pickSave(`${base} section.${kind}`, kind, kind.toUpperCase());
-      if (!path) return;
-      const r = await run({ cmd: "section", ...plane, path });
-      if (r.ok) say(`Exported the section cut to ${path.split("/").pop()}`);
-    },
-    blueprint: async () => {
-      const base = (currentFile?.split("/").pop() ?? "model").replace(/\.sketchcraft$/, "");
-      const path = await pickSave(`${base} blueprint.pdf`, "pdf", "PDF");
-      if (!path) return;
-      say("Drawing the blueprint: plans with dimensions and tags, elevations with levels…");
-      const r = await run({ cmd: "blueprint", path, project: base });
-      if (r.ok) say(`Blueprint ready: ${(r.levels as number[]).length} floor plan${(r.levels as number[]).length === 1 ? "" : "s"} + 4 elevations${(r.pages as number) > 2 ? " + door and window schedule" : ""} in ${path.split("/").pop()}`);
-    },
-    report: async () => {
-      const base = (currentFile?.split("/").pop() ?? "model").replace(/\.sketchcraft$/, "");
-      const path = await pickSave(`${base} report.csv`, "csv", "CSV");
-      if (!path) return;
-      const r = await run({ cmd: "report", path });
-      if (r.ok) say(`Report: ${(r.rows as unknown[]).length} groups and components in ${path.split("/").pop()}`);
-    },
-    animation: async () => {
-      const base = (currentFile?.split("/").pop() ?? "model").replace(/\.sketchcraft$/, "");
-      const path = await pickSave(`${base}.mp4`, "mp4", "MP4 video");
-      if (!path) return;
-      say(scene?.views.length && scene.views.length > 1 ? "Rendering the tour through your saved views…" : "No saved views to visit: rendering a turntable…");
-      const r = await run({ cmd: "animate", path, width: 1280, height: 720, fps: 24, transition: 2, delay: 1 });
-      if (r.ok) say(`Exported ${r.frames} frames to ${path.split("/").pop()}`);
-    },
-    render: async () => {
-      const base = (currentFile?.split("/").pop() ?? "model").replace(/\.sketchcraft$/, "");
-      const path = await pickSave(`${base}.png`, "png", "PNG image");
-      if (!path) return;
-      const r = await run({ cmd: "render", out: path, width: 1920, height: 1080, camera: api.current!.camera() });
-      if (r.ok) say(`Rendered ${path.split("/").pop()}`);
-    },
-  };
   /** everything Shift+S can find: tools, then actions from the menus and view bar */
   const commands = (): Command[] => {
     const tools: Command[] = (Object.entries(TOOL_INFO) as [Tool, { name: string; key: string }][]).map(([id, t]) => ({ label: t.name.split(":")[0].split(" (")[0], hint: `Tool${t.name.includes(":") ? ` · ${t.name.split(":")[1].trim()}` : ""}`, key: t.key || undefined, run: () => chooseTool(id) }));
@@ -1001,100 +565,17 @@ export default function App() {
           <Logo />
           <span className="brand-name">SketchCraft</span>
           <span className="sep">/</span>
-          <div className="dropdown">
-            <button className="file-btn" onClick={() => setFileMenu((o) => !o)}>
-              File ▾
-            </button>
-            {fileMenu && (
-              <>
-                <div className="menu-scrim" onPointerDown={() => setFileMenu(false)} />
-                <div className="dropdown-menu file-menu" onClick={() => setFileMenu(false)}>
-                  <button onClick={file.new}>New <kbd>⌘N</kbd></button>
-                  <button onClick={file.open}>Open… <kbd>⌘O</kbd></button>
-                  <button onClick={() => file.save(false)}>Save <kbd>⌘S</kbd></button>
-                  <button onClick={() => file.save(true)}>Save As… <kbd>⇧⌘S</kbd></button>
-                  <button onClick={() => setShowRestore(true)}>Restore from backup…</button>
-                  <hr />
-                  <button onClick={file.import}>Import SketchUp, CAD or OBJ… <kbd>⌘I</kbd></button>
-                  <button onClick={() => fileRef.current?.click()}>Import from browser upload…</button>
-                  <button
-                    className="submenu-btn"
-                    aria-expanded={exportOpen}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setExportOpen((o) => !o);
-                    }}
-                  >
-                    Export <span className="caret">{exportOpen ? "▾" : "▸"}</span>
-                  </button>
-                  {exportOpen && (
-                    <div className="submenu">
-                      <button onClick={() => file.export("glb")}>glTF (.glb)…</button>
-                      <button onClick={() => file.export("obj")}>OBJ…</button>
-                      <button onClick={() => file.export("stl")}>STL (mm)…</button>
-                      <button onClick={() => file.export("dae")}>Collada (.dae)…</button>
-                      <button onClick={() => file.export("dxf")}>3D DXF (mm)…</button>
-                      <button onClick={() => file.export("dwg")}>DWG (AutoCAD)…</button>
-                      <button onClick={() => file.export("ifc")}>IFC (BIM)…</button>
-                      <button onClick={() => file.export("pdf")}>PDF (this view)…</button>
-                      <button onClick={file.render}>PNG (this view)…</button>
-                      <button onClick={file.animation}>Scene tour (MP4)…</button>
-                      {section && (
-                        <>
-                          <button onClick={() => file.section("svg")}>Section cut (SVG)…</button>
-                          <button onClick={() => file.section("dxf")}>Section cut (DXF)…</button>
-                        </>
-                      )}
-                    </div>
-                  )}
-                  <button
-                    className="submenu-btn"
-                    aria-expanded={pluginsOpen}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (!pluginsOpen) loadPlugins().then(setPlugins, () => {});
-                      setPluginsOpen((o) => !o);
-                    }}
-                  >
-                    Plugins <span className="caret">{pluginsOpen ? "▾" : "▸"}</span>
-                  </button>
-                  {pluginsOpen && (
-                    <div className="submenu">
-                      {livePlugins.flatMap((pl) =>
-                        pl.commands.map((c) => (
-                          <button key={`${pl.id}:${c.id}`} title={c.hint ?? pl.description} onClick={() => void runPluginCommand(pl, c.id)}>
-                            {c.label}
-                          </button>
-                        )),
-                      )}
-                      {plugins.problems.map((p) => (
-                        <button key={`x${p.id}`} disabled title={p.error}>
-                          {p.id}: {p.error}
-                        </button>
-                      ))}
-                      <button onClick={() => (reloadPlugins(), setShowPlugins(true))}>Manage plugins…</button>
-                    </div>
-                  )}
-                  <hr />
-                  <button onClick={file.blueprint}>Make blueprint (PDF)…</button>
-                  <button onClick={() => setShowSheets(true)}>Drawing sheets (PDF)…</button>
-                  <button onClick={() => setShowTimeline(true)}>Timeline (video)…</button>
-                  <hr />
-                  <button onClick={() => setShowLocation(true)}>Add location…</button>
-                  <button onClick={() => setShowText3d(true)}>3D Text…</button>
-                  <button onClick={file.report}>Generate report (CSV)…</button>
-                  <hr />
-                  <button onClick={() => setShowKeys(true)}>
-                    Keyboard shortcuts <kbd>?</kbd>
-                  </button>
-                  {inTauri && <button onClick={checkForUpdatesNow}>Check for updates…</button>}
-                  <div className="menu-version" title="The version of SketchCraft you're running">
-                    SketchCraft {__APP_VERSION__}
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
+          <FileMenu
+            file={file}
+            section={section}
+            plugins={plugins}
+            livePlugins={livePlugins}
+            setPlugins={setPlugins}
+            runPluginCommand={runPluginCommand}
+            reloadPlugins={reloadPlugins}
+            fileRef={fileRef}
+            open={{ restore: () => setShowRestore(true), plugins: () => setShowPlugins(true), sheets: () => setShowSheets(true), timeline: () => setShowTimeline(true), location: () => setShowLocation(true), text3d: () => setShowText3d(true), keys: () => setShowKeys(true) }}
+          />
           <span className="doc">{docName}</span>
           <span className="live" title="Claude can edit this model over MCP; changes show up here">
             <i /> Live
@@ -1557,20 +1038,4 @@ export default function App() {
       </aside>
     </div>
   );
-}
-
-type FigureChoice = "person" | "beaver" | "none";
-
-function readFigure(): FigureChoice {
-  try {
-    const v = localStorage.getItem("sketchcraft.figure");
-    if (v === "person" || v === "beaver" || v === "none") return v;
-  } catch {}
-  return "person";
-}
-
-/** The figure for a new model today: on April 1 the beaver clocks in. */
-function figureToday(choice: FigureChoice): FigureChoice {
-  const d = new Date();
-  return choice !== "none" && d.getMonth() === 3 && d.getDate() === 1 ? "beaver" : choice;
 }
