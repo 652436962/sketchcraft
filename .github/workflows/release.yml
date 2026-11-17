@@ -27,9 +27,10 @@ concurrency:
 #     with a --config override.
 #   - Installer jobs install npm packages with --ignore-scripts, so no
 #     package install script runs there.
-#   - Apple signing secrets are given only to steps of the `sign-macos` job, which
-#     compiles nothing and checks out no code (Apple's own tools sign and notarize
-#     the app the `build` job made).
+#   - Apple signing secrets are Environment secrets of `release`, given only to steps of the
+#     `sign-macos` job, which names that environment (so it waits for the reviewer), compiles
+#     nothing and checks out no code (Apple's own tools sign and notarize the app the `build`
+#     job made). The yes/no switch is the repository variable APPLE_SIGNING, not a secret.
 #   - Compiling is separate from signing. The `build` job compiles with
 #     `cargo build --locked` semantics (`-- --locked`) and holds no secrets and
 #     a read-only token. The
@@ -91,14 +92,15 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Says whether the Apple secrets exist, and nothing else. It checks out no code and runs
-  # nothing but one `echo`, so the (compiling) `build` job never names an Apple secret at all.
+  # Says whether Apple signing is switched on, and nothing else. It checks out no code and runs
+  # nothing but one `echo`, and it names no secret at all: the switch is the repository VARIABLE
+  # `APPLE_SIGNING` (set it to `true`; Settings > Secrets and variables > Actions > Variables), because the
+  # Apple secrets live in the `release` Environment, which only `sign-macos` (after its reviewer approves) can read.
   apple-check:
     runs-on: ubuntu-latest
     permissions: {}
     env:
-      # only the yes/no is kept; the value goes nowhere
-      HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      HAS_APPLE: ${{ vars.APPLE_SIGNING == 'true' }}
     outputs:
       has_apple: ${{ steps.apple.outputs.has_apple }}
     steps:
@@ -225,6 +227,10 @@ jobs:
     needs: [build, apple-check]
     if: ${{ needs.apple-check.outputs.has_apple == 'true' }}
     runs-on: macos-latest
+    # the Apple secrets are Environment secrets: the job waits for the `release` reviewer, like `publish`, and a run
+    # started from a branch can't read them. (notarytool --wait has no limit of its own.)
+    environment: release
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:

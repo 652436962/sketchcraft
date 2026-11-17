@@ -11,13 +11,14 @@
 ## macOS: Developer ID and notarization
 
 The release workflow signs and notarizes automatically once these
-repository secrets exist (Settings › Secrets and variables › Actions).
+secrets exist in the `release` Environment and the `APPLE_SIGNING` variable is `true`.
 Without them it builds exactly as today.
 
 1. Join the Apple Developer Program (99 USD a year) at developer.apple.com.
 2. In Xcode or the developer site, create a **Developer ID Application**
    certificate and export it from Keychain Access as a `.p12` with a password.
-3. Add the secrets:
+3. Add the secrets to the **`release` Environment** (Settings › Environments › release › Environment secrets; not
+   repository secrets: only a job that names the environment, after its reviewer approves, can read them):
 
 | Secret | Value |
 | --- | --- |
@@ -28,7 +29,9 @@ Without them it builds exactly as today.
 | `APPLE_PASSWORD` | an **app-specific password** from appleid.apple.com (not your Apple ID password) |
 | `APPLE_TEAM_ID` | the 10-character team id |
 
-4. Push a new tag. The DMG and app are then signed with your Developer ID
+4. Switch it on with a repository **variable** (not a secret): Settings › Secrets and variables › Actions › Variables
+   › `APPLE_SIGNING` = `true`. Without it the workflow builds unsigned, as today.
+5. Push a new tag. The `release` reviewer is asked twice (`sign-macos`, then `publish`). The DMG and app are then signed with your Developer ID
    and notarized, and open with no warning.
 
 ## App updates
@@ -70,8 +73,8 @@ signing. The `build` job compiles with `--locked`, holds no update key and only 
 read-only token (so no dependency's build script or proc-macro can read the key);
 it signs its update packages with a throwaway key made for that run. The `publish`
 job, which compiles nothing, signs them for real with the key from the `release`
-environment and creates the draft release. The Apple secrets (once added) go only to
-steps of the `sign-macos` job, which compiles nothing and checks out no code: it
+environment and creates the draft release. The Apple secrets (once added, as `release` Environment secrets) go only to
+steps of the `sign-macos` job, which names that environment, compiles nothing and checks out no code: it
 takes the unsigned macOS app the `build` job made (built with no secrets, like every
 platform), signs and notarizes it with Apple's own tools, and hands it to `publish`.
 That job has never run, so watch the first tag after adding the Apple secrets (it
@@ -83,8 +86,8 @@ What only the repository owner can switch on (GitHub settings):
    *Required reviewers* and move `TAURI_SIGNING_PRIVATE_KEY` and
    `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` from repository secrets into that
    environment. The `publish` job is the only one that names it, so a release
-   waits for your approval before the key is available. (Leave the `APPLE_*`
-   secrets as repository secrets: the build jobs don't use the environment.)
+   waits for your approval before the key is available. The `APPLE_*` secrets go
+   into the same environment, and `sign-macos` names it too (see "macOS: Developer ID and notarization" above).
    Until you do this, a tag push signs and drafts a release unattended.
 2. **Settings › Rules › Rulesets › New tag ruleset**: target `v*`, restrict
    creation and deletion to yourself (no bypass), so a collaborator's tag can't
