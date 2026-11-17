@@ -148,6 +148,12 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![exec, scene, sync, open_releases, portable, open_guide])
-        .run(tauri::generate_context!())
-        .expect("error while running SketchCraft");
+        .build(tauri::generate_context!())
+        .expect("error while building SketchCraft")
+        .run(|_, event| {
+            // a helper program (ffmpeg, Python, a DWG converter) still running goes with the app
+            if let tauri::RunEvent::Exit = event {
+                sketchcraft::helper::kill_all();
+            }
+        });
 }

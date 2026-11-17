@@ -140,3 +140,30 @@ fn a_plugin_that_says_ruby_is_previewed_and_installed_as_ruby() {
     assert_eq!(p["kind"], "JavaScript plugin");
     std::fs::remove_dir_all(&home).ok();
 }
+
+/// SPECTER-005 and SPECTER-003: agents don't start programs; `--any-path` still keeps the reserved folders.
+#[test]
+fn agents_cannot_start_programs_and_any_path_keeps_the_reserved_folders() {
+    use sketchcraft::policy::{Caller, Workspace};
+    let mut e = Engine::new();
+    let agent = Caller::Mcp(Workspace::anywhere());
+    let dir = scratch("anypath");
+    for cmd in ["animate", "import_ifc", "import_dwg", "export_dwg"] {
+        let r = e.exec_json_as(&agent, &json!({"cmd": cmd, "path": dir.join("x.mp4").to_string_lossy()}).to_string());
+        assert_eq!(r["ok"], false, "{cmd}: {r}");
+        assert!(r["error"].as_str().unwrap().contains("isn't available to agents"), "{r}");
+    }
+    std::fs::create_dir_all(dir.join("Backups")).unwrap();
+    std::fs::create_dir_all(dir.join("Plugins")).unwrap();
+    std::fs::create_dir_all(dir.join(".secret")).unwrap();
+    for bad in ["Backups/live-1.sketchcraft", "Plugins/x.sketchcraft", ".secret/x.sketchcraft", "backups/x.sketchcraft", "live.unsaved-5.sketchcraft"] {
+        let p = dir.join(bad);
+        let r = e.exec_json_as(&agent, &json!({"cmd": "save", "path": p.to_string_lossy()}).to_string());
+        assert_eq!(r["ok"], false, "{bad}: {r}");
+        assert!(!p.exists());
+    }
+    let good = dir.join("fine.sketchcraft");
+    let r = e.exec_json_as(&agent, &json!({"cmd": "save", "path": good.to_string_lossy()}).to_string());
+    assert_eq!(r["ok"], true, "{r}");
+    std::fs::remove_dir_all(&dir).ok();
+}
