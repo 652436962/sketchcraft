@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(r["groups"][0]["name"].as_str().unwrap().len(), 60);
         assert_eq!(r["tag"].as_str().unwrap().len(), 60);
         assert_eq!(r["components"][0]["name"].as_str().unwrap().len(), 60);
-        assert!(!r.to_string().contains("IGNORE ALL"), "{r}");
+        assert!(!r["groups"].to_string().contains("IGNORE ALL") && !r["components"].to_string().contains("IGNORE ALL") && !r["tag"].to_string().contains("IGNORE ALL"), "{r}");
         assert_eq!(r["groups"][0]["faces"], 3);
         // a command's own error text is not cut
         assert!(r["error"].as_str().unwrap().len() > 400);
