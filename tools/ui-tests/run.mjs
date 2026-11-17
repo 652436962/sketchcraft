@@ -3,6 +3,7 @@
 //   node tools/ui-tests/run.mjs                 every suite
 //   node tools/ui-tests/run.mjs tools gestures  only the suites whose file name contains one of these
 //   node tools/ui-tests/run.mjs --list
+//   node tools/ui-tests/run.mjs visual -- --update   (what follows -- is passed to the suites)
 //
 // It makes a scratch folder (SKETCHCRAFT_SCRATCH, else a new one under the system temp folder), points HOME,
 // XDG_CACHE_HOME and SKETCHCRAFT_DOC into it, starts `sketchcraft bridge` and `vite` on SKETCHCRAFT_DEV_PORT /
@@ -30,7 +31,10 @@ if (args.includes('--list')) {
   for (const [n, f] of SUITES) console.log(`${n.padEnd(22)} ${f}`);
   process.exit(0);
 }
-const want = args.filter((a) => !a.startsWith('--'));
+// `run.mjs visual -- --update`: what follows `--` goes to every suite that runs
+const dd = args.indexOf('--');
+const extra = dd >= 0 ? args.slice(dd + 1) : [];
+const want = (dd >= 0 ? args.slice(0, dd) : args).filter((a) => !a.startsWith('--'));
 const chosen = SUITES.filter(([n, f]) => fs.existsSync(path.join(ROOT, f)) && (!want.length || want.some((w) => n.includes(w))));
 if (!chosen.length) {
   console.error('no suite matches', want);
@@ -128,7 +132,7 @@ for (const [name, file, secs] of chosen) {
   const t0 = Date.now();
   console.log(`\n=== ${name} ===`);
   const code = await new Promise((resolve) => {
-    const k = spawn('node', [path.join(ROOT, file)], { env, stdio: 'inherit' });
+    const k = spawn('node', [path.join(ROOT, file), ...extra], { env, stdio: 'inherit' });
     kids.push(k);
     const timer = setTimeout(() => {
       console.error(`${name}: timed out after ${secs}s`);

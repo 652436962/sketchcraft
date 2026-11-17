@@ -99,6 +99,15 @@ jobs:
           SKETCHCRAFT_TRACE_DIR: ${{ runner.temp }}/ui-traces
           SHOT_DIR: ${{ runner.temp }}/ui-shots
         run: node tools/ui-tests/run.mjs
+      # what the visual suite saw, when this platform has no reference pictures yet (tools/ui-tests/visual.mjs)
+      - name: Keep the visual candidates
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: visual-candidates
+          path: ${{ runner.temp }}/ui-shots/visual/candidates
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Keep the screenshots and traces of a failure
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

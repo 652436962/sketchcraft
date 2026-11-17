@@ -7,6 +7,8 @@ node_modules/
 dist/
 app/src-tauri/gen/
 !app/src-tauri/icons/*.png
+# the visual regression suite's reference pictures (tools/ui-tests/visual.mjs)
+!tools/ui-tests/visual-references/*/*.png
 
 # pentest reports stay local until the findings are fixed
 security-reports/
