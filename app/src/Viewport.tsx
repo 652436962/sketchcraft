@@ -465,6 +465,27 @@ type Last =
   | { t: "tape"; d: number }
   | null;
 
+/** The live props once the handlers have checked there is a scene. */
+type Live = Props & { scene: Scene };
+
+/** What the pointer handlers hand each tool's step: the event, the live props, the inference
+ *  environment, the operation in progress and the current selection. */
+interface DownArgs {
+  e: PointerEvent;
+  L: Live;
+  E: InferEnv;
+  op: Op | null;
+  sel: Sel;
+}
+/** The same for a move, with the operation narrowed to the kind this step handles. */
+interface MoveArgs<K extends Op["t"]> {
+  e: PointerEvent;
+  L: Live;
+  E: InferEnv;
+  op: Extract<Op, { t: K }>;
+  lock: Axis | null;
+}
+
 export default function Viewport(props: Props) {
   const { scene, tool, styles, placeAsset } = props;
   const host = useRef<HTMLDivElement>(null);
@@ -2438,6 +2459,311 @@ export default function Viewport(props: Props) {
     const T = t.current!;
     const el = T.renderer.domElement;
 
+    const moveBox = ({ e, E, op }: MoveArgs<"box">) => {
+      op.x1 = e.clientX;
+      op.y1 = e.clientY;
+      setBox({ x0: op.x0 - E.rect.left, y0: op.y0 - E.rect.top, x1: op.x1 - E.rect.left, y1: op.y1 - E.rect.top });
+      return;
+    };
+    const moveLine = ({ e, L, E, op, lock }: MoveArgs<"line" | "tape">) => {
+      const sn = infer(E, e, { anchor: op.p0, lock });
+      op.cur = sn.p;
+      T.preview.add(polyline([op.p0, sn.p], axisColor(sn), false, op.t === "tape"));
+      showSnap(sn);
+      setLive([{ p: op.p0.clone().add(sn.p).multiplyScalar(0.5), text: fmt(sn.p.distanceTo(op.p0)) }]);
+      L.onMeasure("Length", fmt(sn.p.distanceTo(op.p0)));
+      return;
+    };
+    const moveDim = ({ e, L, E, op, lock }: MoveArgs<"dim">) => {
+      if (!op.b) {
+        const sn = infer(E, e, { anchor: op.a, lock });
+        op.cur = sn.p;
+        T.preview.add(polyline([op.a, sn.p], axisColor(sn)));
+        showSnap(sn);
+        setLive([{ p: op.a.clone().add(sn.p).multiplyScalar(0.5), text: fmt(sn.p.distanceTo(op.a)) }]);
+        return;
+      }
+      // pull the dimension out, in the plane of the measured line that faces you
+      const u = op.b.clone().sub(op.a).normalize();
+      const view = new THREE.Vector3();
+      T.camera.getWorldDirection(view);
+      const n = u.clone().cross(view).cross(u).normalize();
+      const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(n.lengthSq() > 0.5 ? n : UP, op.a), new THREE.Vector3());
+      if (!q) return;
+      const d = q.clone().sub(op.a);
+      op.off = d.sub(u.clone().multiplyScalar(d.dot(u)));
+      const segs = dimSegments(op.a, op.b, op.off);
+      for (let i = 0; i < segs.length; i += 6) T.preview.add(polyline([V(segs.slice(i, i + 3)), V(segs.slice(i + 3, i + 6))], 0x33384d));
+      setLive([{ p: op.a.clone().add(op.b).multiplyScalar(0.5).add(op.off), text: fmt(op.a.distanceTo(op.b)) }]);
+      L.onMeasure("Dimension", fmt(op.a.distanceTo(op.b)));
+      return;
+    };
+    const moveWall = ({ e, L, E, op, lock }: MoveArgs<"wall">) => {
+      const last = op.pts[op.pts.length - 1];
+      const sn = infer(E, e, { anchor: last, lock, plane: { origin: op.pts[0], normal: UP } });
+      op.cur = sn.p;
+      T.preview.add(polyline([...op.pts, sn.p], ACCENT));
+      if (op.pts.length > 2 && sn.p.distanceTo(op.pts[0]) < 1e-6) setHint({ ...toScreen2(sn.p), label: "Close room", kind: "endpoint" });
+      else showSnap(sn);
+      setLive([{ p: last.clone().add(sn.p).multiplyScalar(0.5), text: fmt(sn.p.distanceTo(last)) }]);
+      L.onMeasure("Length", fmt(sn.p.distanceTo(last)));
+      return;
+    };
+    const moveStairs = ({ e, L, E, op, lock }: MoveArgs<"stairs">) => {
+      const sn = infer(E, e, { anchor: op.at, lock, plane: { origin: op.at, normal: UP } });
+      op.cur = sn.p;
+      T.preview.add(polyline([op.at, sn.p], ACCENT));
+      showSnap(sn);
+      L.onMeasure("Direction", "click which way it climbs");
+      return;
+    };
+    const moveText = ({ e, E, op }: MoveArgs<"text">) => {
+      const sn = infer(E, e, {});
+      op.cur = sn.p;
+      T.preview.add(polyline([op.leader, sn.p], 0x33384d));
+      setHint(null);
+      return;
+    };
+    const moveCarc = ({ e, L, E, op }: MoveArgs<"carc">) => {
+      if (!op.a) {
+        const sn = infer(E, e, { anchor: op.c, plane: { origin: op.c, normal: op.n } });
+        const r = sn.p.distanceTo(op.c);
+        const [u, v] = basis(op.n);
+        T.preview.add(polyline(Array.from({ length: 48 }, (_, i) => op.c.clone().addScaledVector(u, Math.cos((i / 48) * Math.PI * 2) * r).addScaledVector(v, Math.sin((i / 48) * Math.PI * 2) * r)), 0x8a8ea0, true));
+        T.preview.add(polyline([op.c, sn.p], axisColor(sn)));
+        showSnap(sn);
+        L.onMeasure("Radius", fmt(r));
+        return;
+      }
+      const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(op.n, op.c), new THREE.Vector3());
+      if (!q) return;
+      const r = op.a.distanceTo(op.c);
+      const u = op.a.clone().sub(op.c).normalize();
+      const v = op.n.clone().cross(u);
+      const d = q.clone().sub(op.c);
+      const phi = Math.atan2(d.dot(v), d.dot(u));
+      // follow the swing past half a turn
+      let step = phi - op.last;
+      if (step > Math.PI) step -= Math.PI * 2;
+      if (step < -Math.PI) step += Math.PI * 2;
+      op.ang = Math.max(-Math.PI * 2 + 1e-3, Math.min(Math.PI * 2 - 1e-3, op.ang + step));
+      op.last = phi;
+      const k = Math.max(4, Math.ceil((Math.abs(op.ang) / (Math.PI * 2)) * 48));
+      const pts = Array.from({ length: k + 1 }, (_, i) => op.c.clone().addScaledVector(u, Math.cos((op.ang * i) / k) * r).addScaledVector(v, Math.sin((op.ang * i) / k) * r));
+      T.preview.add(polyline(op.pie ? [op.c, ...pts, op.c] : pts, ACCENT));
+      if (!op.pie) T.preview.add(polyline([op.c, op.a], 0x8a8ea0));
+      L.onMeasure("Angle", `${Math.abs(THREE.MathUtils.radToDeg(op.ang)).toFixed(1)}°`);
+      return;
+    };
+    const moveArc3 = ({ e, L, E, op, lock }: MoveArgs<"arc3">) => {
+      const sn = infer(E, e, { anchor: op.m ?? op.a, lock });
+      op.cur = sn.p;
+      showSnap(sn);
+      if (!op.m) {
+        T.preview.add(polyline([op.a, sn.p], axisColor(sn)));
+        L.onMeasure("Length", fmt(sn.p.distanceTo(op.a)));
+        return;
+      }
+      const k = circleThrough(op.a, op.m, sn.p);
+      if (!k) {
+        T.preview.add(polyline([op.a, op.m, sn.p], 0x8a8ea0));
+        return;
+      }
+      const n = k.n.dot(op.n) < 0 ? k.n.clone().negate() : k.n;
+      const b = bulgeThrough(op.a, op.m, sn.p, n) ?? 0;
+      T.preview.add(polyline(arcPoints(op.a, sn.p, b, n, 32), ACCENT));
+      L.onMeasure("Radius", fmt(k.r));
+      return;
+    };
+    const moveRrect = ({ e, L, E, op, lock }: MoveArgs<"rrect">) => {
+      if (!op.b) {
+        const sn = infer(E, e, { anchor: op.a, lock });
+        op.cur = sn.p;
+        T.preview.add(polyline([op.a, sn.p], axisColor(sn)));
+        showSnap(sn);
+        L.onMeasure("Length", fmt(sn.p.distanceTo(op.a)));
+        return;
+      }
+      const sn = infer(E, e, { anchor: op.b, lock });
+      const along = op.b.clone().sub(op.a).normalize();
+      const d = sn.p.clone().sub(op.b);
+      op.h = d.sub(along.clone().multiplyScalar(d.dot(along)));
+      const pts = [op.a, op.b, op.b.clone().add(op.h), op.a.clone().add(op.h)];
+      T.preview.add(polyline(pts, ACCENT, true));
+      showSnap(sn);
+      setLive([
+        { p: op.a.clone().add(op.b).multiplyScalar(0.5), text: fmt(op.a.distanceTo(op.b)) },
+        { p: op.b.clone().add(pts[2]).multiplyScalar(0.5), text: fmt(op.h.length()) },
+      ]);
+      L.onMeasure("Height", fmt(op.h.length()));
+      return;
+    };
+    const moveAxes = ({ e, L, E, op, lock }: MoveArgs<"axes">) => {
+      const sn = infer(E, e, { anchor: op.x ?? op.o, lock });
+      op.cur = sn.p;
+      showSnap(sn);
+      if (!op.x) {
+        T.preview.add(polyline([op.o, sn.p], AXIS_COLORS[0]));
+        L.onMeasure("Red axis", "click its direction");
+        return;
+      }
+      const x = op.x.clone().sub(op.o).normalize();
+      const d = sn.p.clone().sub(op.o);
+      const y = d.sub(x.clone().multiplyScalar(d.dot(x)));
+      const len = Math.max(1, op.x.distanceTo(op.o));
+      T.preview.add(polyline([op.o, op.o.clone().addScaledVector(x, len)], AXIS_COLORS[0]));
+      if (y.length() > 1e-6) T.preview.add(polyline([op.o, op.o.clone().addScaledVector(y.normalize(), len)], AXIS_COLORS[1]));
+      return;
+    };
+    const moveFree = ({ e, op }: MoveArgs<"free">) => {
+      const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(op.n, op.o), new THREE.Vector3());
+      if (!q) return;
+      const last = op.pts[op.pts.length - 1];
+      const a = toScreen2(last);
+      const b = toScreen2(q);
+      if (Math.hypot(a.x - b.x, a.y - b.y) >= 5) op.pts.push(q);
+      T.preview.add(polyline([...op.pts, q], ACCENT));
+      return;
+    };
+    const moveRect = ({ e, L, E, op, lock }: MoveArgs<"rect">) => {
+      // no axis lock from the first corner: that would squash the rectangle flat
+      const sn = infer(E, e, { plane: { origin: op.p0, normal: op.n } });
+      const d = sn.p.clone().sub(op.p0);
+      op.a = d.dot(op.u);
+      op.b = d.dot(op.v);
+      const pts = rectCorners(op);
+      T.preview.add(polyline(pts, ACCENT, true));
+      const fill = new THREE.BufferGeometry().setFromPoints([pts[0], pts[1], pts[2], pts[0], pts[2], pts[3]]);
+      T.preview.add(new THREE.Mesh(fill, new THREE.MeshBasicMaterial({ color: ACCENT, transparent: true, opacity: 0.14, side: THREE.DoubleSide, depthWrite: false })));
+      showSnap(sn);
+      setLive([
+        { p: pts[0].clone().add(pts[1]).multiplyScalar(0.5), text: fmt(Math.abs(op.a)) },
+        { p: pts[1].clone().add(pts[2]).multiplyScalar(0.5), text: fmt(Math.abs(op.b)) },
+      ]);
+      L.onMeasure("Dimensions", `${Math.abs(op.a).toFixed(2)}, ${Math.abs(op.b).toFixed(2)}`);
+      return;
+    };
+    const moveCircle = ({ e, L, E, op }: MoveArgs<"circle">) => {
+      const sn = infer(E, e, { anchor: op.c, plane: { origin: op.c, normal: op.n } });
+      op.r = sn.p.distanceTo(op.c);
+      const [u, v] = basis(op.n);
+      const pts = Array.from({ length: op.seg }, (_, i) => {
+        const a = (i / op.seg) * Math.PI * 2;
+        return op.c.clone().addScaledVector(u, Math.cos(a) * op.r).addScaledVector(v, Math.sin(a) * op.r);
+      });
+      T.preview.add(polyline(pts, ACCENT, true));
+      T.preview.add(polyline([op.c, sn.p], 0x8a8ea0));
+      showSnap(sn);
+      setLive([{ p: op.c.clone().add(sn.p).multiplyScalar(0.5), text: `r ${fmt(op.r)}` }]);
+      L.onMeasure("Radius", fmt(op.r));
+      return;
+    };
+    const moveArc = ({ e, L, E, op, lock }: MoveArgs<"arc">) => {
+      if (!op.b) {
+        const sn = infer(E, e, { anchor: op.a, lock });
+        op.cur = sn.p;
+        T.preview.add(polyline([op.a, sn.p], axisColor(sn)));
+        showSnap(sn);
+        L.onMeasure("Length", fmt(sn.p.distanceTo(op.a)));
+        return;
+      }
+      const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(op.n, op.a), new THREE.Vector3());
+      if (!q) return;
+      const side = op.n.clone().cross(op.b.clone().sub(op.a).normalize()).normalize();
+      op.bulge = q.clone().sub(op.a.clone().add(op.b).multiplyScalar(0.5)).dot(side);
+      T.preview.add(polyline(arcPoints(op.a, op.b, op.bulge, op.n)));
+      L.onMeasure("Bulge", fmt(op.bulge));
+      return;
+    };
+    const movePush = ({ e, L, E, op }: MoveArgs<"push">) => {
+      op.d = closestOnLine(ray(e), op.origin, op.n).sub(op.origin).dot(op.n);
+      // match the height of a point the cursor hovers (line up with the neighbour's roof)
+      const sn = infer(E, e, {});
+      if (sn.kind === "endpoint" || sn.kind === "midpoint") {
+        op.d = sn.p.clone().sub(op.origin).dot(op.n);
+        showSnap(sn);
+      } else setHint(null);
+      op.dragged = true;
+      const base = op.face.outer.map(V);
+      const off = op.n.clone().multiplyScalar(op.d);
+      const top = base.map((p) => p.clone().add(off));
+      T.preview.add(polyline(top, ACCENT, true));
+      const seg: number[] = [];
+      base.forEach((p, i) => seg.push(p.x, p.y, p.z, top[i].x, top[i].y, top[i].z));
+      T.preview.add(lines(seg, ACCENT, false));
+      const cap = overlayMesh(trianglesOf(new Set([op.face.id])), 0.2);
+      cap.position.copy(off);
+      T.preview.add(cap);
+      const mid = top.reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(top.length);
+      setLive([{ p: mid, text: fmt(op.d) }]);
+      L.onMeasure("Distance", fmt(op.d));
+      return;
+    };
+    const moveOffset = ({ e, L, op }: MoveArgs<"offset">) => {
+      const n = V(op.face.normal);
+      const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(n, op.start), new THREE.Vector3());
+      if (!q) return;
+      const outer = op.face.outer.map(V);
+      const c = outer.reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(outer.length);
+      op.d = q.clone().sub(op.start).dot(c.clone().sub(op.start).normalize());
+      T.preview.add(polyline(offsetOutline(outer, n, op.d), ACCENT, true));
+      L.onMeasure("Distance", fmt(op.d));
+      return;
+    };
+    const moveMove = ({ e, L, E, op, lock }: MoveArgs<"move">) => {
+      const sn = infer(E, e, { anchor: op.base, lock });
+      op.delta = sn.p.clone().sub(op.base);
+      T.preview.add(polyline([op.base, sn.p], axisColor(sn)));
+      if (op.vertex) {
+        // the point's edges, stretched to where it's going
+        for (const q of op.vertex.far) T.preview.add(polyline([q, sn.p], ACCENT));
+      } else ghost(new THREE.Matrix4().makeTranslation(op.delta.x, op.delta.y, op.delta.z));
+      showSnap(sn);
+      setLive([{ p: op.base.clone().add(sn.p).multiplyScalar(0.5), text: fmt(op.delta.length()) }]);
+      L.onMeasure(op.copy ? "Copy" : "Distance", fmt(op.delta.length()));
+      return;
+    };
+    const moveRotate = ({ e, L, op }: MoveArgs<"rotate">) => {
+      const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(op.n, op.center), new THREE.Vector3());
+      if (!q) return;
+      const [u, v] = basis(op.n);
+      const R = Math.max(0.5, q.distanceTo(op.center));
+      const ring = Array.from({ length: 48 }, (_, i) => op.center.clone().addScaledVector(u, Math.cos((i / 48) * Math.PI * 2) * R).addScaledVector(v, Math.sin((i / 48) * Math.PI * 2) * R));
+      T.preview.add(polyline(ring, 0x3e63dd, true));
+      if (!op.ref) {
+        T.preview.add(polyline([op.center, q], 0x8a8ea0));
+        L.onMeasure("Angle", "click a start direction");
+        return;
+      }
+      const a0 = op.ref.clone().sub(op.center);
+      const a1 = q.clone().sub(op.center);
+      let ang = THREE.MathUtils.radToDeg(Math.atan2(a0.clone().cross(a1).dot(op.n), a0.dot(a1)));
+      const s15 = Math.round(ang / 15) * 15;
+      if (Math.abs(ang - s15) < 2.5) ang = s15;
+      op.angle = ang;
+      T.preview.add(polyline([op.center, op.ref], 0x8a8ea0));
+      T.preview.add(polyline([op.center, q], ACCENT));
+      const c = op.center;
+      if (op.ids.length) ghost(new THREE.Matrix4().makeTranslation(c.x, c.y, c.z).multiply(new THREE.Matrix4().makeRotationAxis(op.n, THREE.MathUtils.degToRad(ang))).multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z)));
+      // the protractor: the guide it will lay, long and dashed
+      else {
+        const d = q.clone().sub(c).normalize().multiplyScalar(200);
+        T.preview.add(polyline([c.clone().sub(d), c.clone().add(d)], 0x8a8ea0));
+      }
+      L.onMeasure("Angle", `${ang.toFixed(1)}°`);
+      return;
+    };
+    const moveScale = ({ e, L, op }: MoveArgs<"scale">) => {
+      const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(UP, op.center), new THREE.Vector3());
+      if (!q) return;
+      op.factor = Math.round((q.distanceTo(op.center) / Math.max(op.start.distanceTo(op.center), 1e-6)) * 100) / 100;
+      const c = op.center;
+      const f = op.factor;
+      ghost(new THREE.Matrix4().makeTranslation(c.x, c.y, c.z).multiply(new THREE.Matrix4().makeScale(f, f, f)).multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z)));
+      L.onMeasure("Scale", `${f.toFixed(2)}×`);
+      return;
+    };
+
     const move = (e: PointerEvent) => {
       lastPointer.current = { x: e.clientX, y: e.clientY };
       // camera tools
@@ -2493,311 +2819,45 @@ export default function Viewport(props: Props) {
       }
 
       switch (op?.t) {
-        case "box": {
-          op.x1 = e.clientX;
-          op.y1 = e.clientY;
-          setBox({ x0: op.x0 - E.rect.left, y0: op.y0 - E.rect.top, x1: op.x1 - E.rect.left, y1: op.y1 - E.rect.top });
-          return;
-        }
+        case "box":
+          return moveBox({ e, L: L as Live, E, op, lock });
         case "line":
-        case "tape": {
-          const sn = infer(E, e, { anchor: op.p0, lock });
-          op.cur = sn.p;
-          T.preview.add(polyline([op.p0, sn.p], axisColor(sn), false, op.t === "tape"));
-          showSnap(sn);
-          setLive([{ p: op.p0.clone().add(sn.p).multiplyScalar(0.5), text: fmt(sn.p.distanceTo(op.p0)) }]);
-          L.onMeasure("Length", fmt(sn.p.distanceTo(op.p0)));
-          return;
-        }
-        case "dim": {
-          if (!op.b) {
-            const sn = infer(E, e, { anchor: op.a, lock });
-            op.cur = sn.p;
-            T.preview.add(polyline([op.a, sn.p], axisColor(sn)));
-            showSnap(sn);
-            setLive([{ p: op.a.clone().add(sn.p).multiplyScalar(0.5), text: fmt(sn.p.distanceTo(op.a)) }]);
-            return;
-          }
-          // pull the dimension out, in the plane of the measured line that faces you
-          const u = op.b.clone().sub(op.a).normalize();
-          const view = new THREE.Vector3();
-          T.camera.getWorldDirection(view);
-          const n = u.clone().cross(view).cross(u).normalize();
-          const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(n.lengthSq() > 0.5 ? n : UP, op.a), new THREE.Vector3());
-          if (!q) return;
-          const d = q.clone().sub(op.a);
-          op.off = d.sub(u.clone().multiplyScalar(d.dot(u)));
-          const segs = dimSegments(op.a, op.b, op.off);
-          for (let i = 0; i < segs.length; i += 6) T.preview.add(polyline([V(segs.slice(i, i + 3)), V(segs.slice(i + 3, i + 6))], 0x33384d));
-          setLive([{ p: op.a.clone().add(op.b).multiplyScalar(0.5).add(op.off), text: fmt(op.a.distanceTo(op.b)) }]);
-          L.onMeasure("Dimension", fmt(op.a.distanceTo(op.b)));
-          return;
-        }
-        case "wall": {
-          const last = op.pts[op.pts.length - 1];
-          const sn = infer(E, e, { anchor: last, lock, plane: { origin: op.pts[0], normal: UP } });
-          op.cur = sn.p;
-          T.preview.add(polyline([...op.pts, sn.p], ACCENT));
-          if (op.pts.length > 2 && sn.p.distanceTo(op.pts[0]) < 1e-6) setHint({ ...toScreen2(sn.p), label: "Close room", kind: "endpoint" });
-          else showSnap(sn);
-          setLive([{ p: last.clone().add(sn.p).multiplyScalar(0.5), text: fmt(sn.p.distanceTo(last)) }]);
-          L.onMeasure("Length", fmt(sn.p.distanceTo(last)));
-          return;
-        }
-        case "stairs": {
-          const sn = infer(E, e, { anchor: op.at, lock, plane: { origin: op.at, normal: UP } });
-          op.cur = sn.p;
-          T.preview.add(polyline([op.at, sn.p], ACCENT));
-          showSnap(sn);
-          L.onMeasure("Direction", "click which way it climbs");
-          return;
-        }
-        case "text": {
-          const sn = infer(E, e, {});
-          op.cur = sn.p;
-          T.preview.add(polyline([op.leader, sn.p], 0x33384d));
-          setHint(null);
-          return;
-        }
-        case "carc": {
-          if (!op.a) {
-            const sn = infer(E, e, { anchor: op.c, plane: { origin: op.c, normal: op.n } });
-            const r = sn.p.distanceTo(op.c);
-            const [u, v] = basis(op.n);
-            T.preview.add(polyline(Array.from({ length: 48 }, (_, i) => op.c.clone().addScaledVector(u, Math.cos((i / 48) * Math.PI * 2) * r).addScaledVector(v, Math.sin((i / 48) * Math.PI * 2) * r)), 0x8a8ea0, true));
-            T.preview.add(polyline([op.c, sn.p], axisColor(sn)));
-            showSnap(sn);
-            L.onMeasure("Radius", fmt(r));
-            return;
-          }
-          const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(op.n, op.c), new THREE.Vector3());
-          if (!q) return;
-          const r = op.a.distanceTo(op.c);
-          const u = op.a.clone().sub(op.c).normalize();
-          const v = op.n.clone().cross(u);
-          const d = q.clone().sub(op.c);
-          const phi = Math.atan2(d.dot(v), d.dot(u));
-          // follow the swing past half a turn
-          let step = phi - op.last;
-          if (step > Math.PI) step -= Math.PI * 2;
-          if (step < -Math.PI) step += Math.PI * 2;
-          op.ang = Math.max(-Math.PI * 2 + 1e-3, Math.min(Math.PI * 2 - 1e-3, op.ang + step));
-          op.last = phi;
-          const k = Math.max(4, Math.ceil((Math.abs(op.ang) / (Math.PI * 2)) * 48));
-          const pts = Array.from({ length: k + 1 }, (_, i) => op.c.clone().addScaledVector(u, Math.cos((op.ang * i) / k) * r).addScaledVector(v, Math.sin((op.ang * i) / k) * r));
-          T.preview.add(polyline(op.pie ? [op.c, ...pts, op.c] : pts, ACCENT));
-          if (!op.pie) T.preview.add(polyline([op.c, op.a], 0x8a8ea0));
-          L.onMeasure("Angle", `${Math.abs(THREE.MathUtils.radToDeg(op.ang)).toFixed(1)}°`);
-          return;
-        }
-        case "arc3": {
-          const sn = infer(E, e, { anchor: op.m ?? op.a, lock });
-          op.cur = sn.p;
-          showSnap(sn);
-          if (!op.m) {
-            T.preview.add(polyline([op.a, sn.p], axisColor(sn)));
-            L.onMeasure("Length", fmt(sn.p.distanceTo(op.a)));
-            return;
-          }
-          const k = circleThrough(op.a, op.m, sn.p);
-          if (!k) {
-            T.preview.add(polyline([op.a, op.m, sn.p], 0x8a8ea0));
-            return;
-          }
-          const n = k.n.dot(op.n) < 0 ? k.n.clone().negate() : k.n;
-          const b = bulgeThrough(op.a, op.m, sn.p, n) ?? 0;
-          T.preview.add(polyline(arcPoints(op.a, sn.p, b, n, 32), ACCENT));
-          L.onMeasure("Radius", fmt(k.r));
-          return;
-        }
-        case "rrect": {
-          if (!op.b) {
-            const sn = infer(E, e, { anchor: op.a, lock });
-            op.cur = sn.p;
-            T.preview.add(polyline([op.a, sn.p], axisColor(sn)));
-            showSnap(sn);
-            L.onMeasure("Length", fmt(sn.p.distanceTo(op.a)));
-            return;
-          }
-          const sn = infer(E, e, { anchor: op.b, lock });
-          const along = op.b.clone().sub(op.a).normalize();
-          const d = sn.p.clone().sub(op.b);
-          op.h = d.sub(along.clone().multiplyScalar(d.dot(along)));
-          const pts = [op.a, op.b, op.b.clone().add(op.h), op.a.clone().add(op.h)];
-          T.preview.add(polyline(pts, ACCENT, true));
-          showSnap(sn);
-          setLive([
-            { p: op.a.clone().add(op.b).multiplyScalar(0.5), text: fmt(op.a.distanceTo(op.b)) },
-            { p: op.b.clone().add(pts[2]).multiplyScalar(0.5), text: fmt(op.h.length()) },
-          ]);
-          L.onMeasure("Height", fmt(op.h.length()));
-          return;
-        }
-        case "axes": {
-          const sn = infer(E, e, { anchor: op.x ?? op.o, lock });
-          op.cur = sn.p;
-          showSnap(sn);
-          if (!op.x) {
-            T.preview.add(polyline([op.o, sn.p], AXIS_COLORS[0]));
-            L.onMeasure("Red axis", "click its direction");
-            return;
-          }
-          const x = op.x.clone().sub(op.o).normalize();
-          const d = sn.p.clone().sub(op.o);
-          const y = d.sub(x.clone().multiplyScalar(d.dot(x)));
-          const len = Math.max(1, op.x.distanceTo(op.o));
-          T.preview.add(polyline([op.o, op.o.clone().addScaledVector(x, len)], AXIS_COLORS[0]));
-          if (y.length() > 1e-6) T.preview.add(polyline([op.o, op.o.clone().addScaledVector(y.normalize(), len)], AXIS_COLORS[1]));
-          return;
-        }
-        case "free": {
-          const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(op.n, op.o), new THREE.Vector3());
-          if (!q) return;
-          const last = op.pts[op.pts.length - 1];
-          const a = toScreen2(last);
-          const b = toScreen2(q);
-          if (Math.hypot(a.x - b.x, a.y - b.y) >= 5) op.pts.push(q);
-          T.preview.add(polyline([...op.pts, q], ACCENT));
-          return;
-        }
-        case "rect": {
-          // no axis lock from the first corner: that would squash the rectangle flat
-          const sn = infer(E, e, { plane: { origin: op.p0, normal: op.n } });
-          const d = sn.p.clone().sub(op.p0);
-          op.a = d.dot(op.u);
-          op.b = d.dot(op.v);
-          const pts = rectCorners(op);
-          T.preview.add(polyline(pts, ACCENT, true));
-          const fill = new THREE.BufferGeometry().setFromPoints([pts[0], pts[1], pts[2], pts[0], pts[2], pts[3]]);
-          T.preview.add(new THREE.Mesh(fill, new THREE.MeshBasicMaterial({ color: ACCENT, transparent: true, opacity: 0.14, side: THREE.DoubleSide, depthWrite: false })));
-          showSnap(sn);
-          setLive([
-            { p: pts[0].clone().add(pts[1]).multiplyScalar(0.5), text: fmt(Math.abs(op.a)) },
-            { p: pts[1].clone().add(pts[2]).multiplyScalar(0.5), text: fmt(Math.abs(op.b)) },
-          ]);
-          L.onMeasure("Dimensions", `${Math.abs(op.a).toFixed(2)}, ${Math.abs(op.b).toFixed(2)}`);
-          return;
-        }
-        case "circle": {
-          const sn = infer(E, e, { anchor: op.c, plane: { origin: op.c, normal: op.n } });
-          op.r = sn.p.distanceTo(op.c);
-          const [u, v] = basis(op.n);
-          const pts = Array.from({ length: op.seg }, (_, i) => {
-            const a = (i / op.seg) * Math.PI * 2;
-            return op.c.clone().addScaledVector(u, Math.cos(a) * op.r).addScaledVector(v, Math.sin(a) * op.r);
-          });
-          T.preview.add(polyline(pts, ACCENT, true));
-          T.preview.add(polyline([op.c, sn.p], 0x8a8ea0));
-          showSnap(sn);
-          setLive([{ p: op.c.clone().add(sn.p).multiplyScalar(0.5), text: `r ${fmt(op.r)}` }]);
-          L.onMeasure("Radius", fmt(op.r));
-          return;
-        }
-        case "arc": {
-          if (!op.b) {
-            const sn = infer(E, e, { anchor: op.a, lock });
-            op.cur = sn.p;
-            T.preview.add(polyline([op.a, sn.p], axisColor(sn)));
-            showSnap(sn);
-            L.onMeasure("Length", fmt(sn.p.distanceTo(op.a)));
-            return;
-          }
-          const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(op.n, op.a), new THREE.Vector3());
-          if (!q) return;
-          const side = op.n.clone().cross(op.b.clone().sub(op.a).normalize()).normalize();
-          op.bulge = q.clone().sub(op.a.clone().add(op.b).multiplyScalar(0.5)).dot(side);
-          T.preview.add(polyline(arcPoints(op.a, op.b, op.bulge, op.n)));
-          L.onMeasure("Bulge", fmt(op.bulge));
-          return;
-        }
-        case "push": {
-          op.d = closestOnLine(ray(e), op.origin, op.n).sub(op.origin).dot(op.n);
-          // match the height of a point the cursor hovers (line up with the neighbour's roof)
-          const sn = infer(E, e, {});
-          if (sn.kind === "endpoint" || sn.kind === "midpoint") {
-            op.d = sn.p.clone().sub(op.origin).dot(op.n);
-            showSnap(sn);
-          } else setHint(null);
-          op.dragged = true;
-          const base = op.face.outer.map(V);
-          const off = op.n.clone().multiplyScalar(op.d);
-          const top = base.map((p) => p.clone().add(off));
-          T.preview.add(polyline(top, ACCENT, true));
-          const seg: number[] = [];
-          base.forEach((p, i) => seg.push(p.x, p.y, p.z, top[i].x, top[i].y, top[i].z));
-          T.preview.add(lines(seg, ACCENT, false));
-          const cap = overlayMesh(trianglesOf(new Set([op.face.id])), 0.2);
-          cap.position.copy(off);
-          T.preview.add(cap);
-          const mid = top.reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(top.length);
-          setLive([{ p: mid, text: fmt(op.d) }]);
-          L.onMeasure("Distance", fmt(op.d));
-          return;
-        }
-        case "offset": {
-          const n = V(op.face.normal);
-          const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(n, op.start), new THREE.Vector3());
-          if (!q) return;
-          const outer = op.face.outer.map(V);
-          const c = outer.reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(outer.length);
-          op.d = q.clone().sub(op.start).dot(c.clone().sub(op.start).normalize());
-          T.preview.add(polyline(offsetOutline(outer, n, op.d), ACCENT, true));
-          L.onMeasure("Distance", fmt(op.d));
-          return;
-        }
-        case "move": {
-          const sn = infer(E, e, { anchor: op.base, lock });
-          op.delta = sn.p.clone().sub(op.base);
-          T.preview.add(polyline([op.base, sn.p], axisColor(sn)));
-          if (op.vertex) {
-            // the point's edges, stretched to where it's going
-            for (const q of op.vertex.far) T.preview.add(polyline([q, sn.p], ACCENT));
-          } else ghost(new THREE.Matrix4().makeTranslation(op.delta.x, op.delta.y, op.delta.z));
-          showSnap(sn);
-          setLive([{ p: op.base.clone().add(sn.p).multiplyScalar(0.5), text: fmt(op.delta.length()) }]);
-          L.onMeasure(op.copy ? "Copy" : "Distance", fmt(op.delta.length()));
-          return;
-        }
-        case "rotate": {
-          const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(op.n, op.center), new THREE.Vector3());
-          if (!q) return;
-          const [u, v] = basis(op.n);
-          const R = Math.max(0.5, q.distanceTo(op.center));
-          const ring = Array.from({ length: 48 }, (_, i) => op.center.clone().addScaledVector(u, Math.cos((i / 48) * Math.PI * 2) * R).addScaledVector(v, Math.sin((i / 48) * Math.PI * 2) * R));
-          T.preview.add(polyline(ring, 0x3e63dd, true));
-          if (!op.ref) {
-            T.preview.add(polyline([op.center, q], 0x8a8ea0));
-            L.onMeasure("Angle", "click a start direction");
-            return;
-          }
-          const a0 = op.ref.clone().sub(op.center);
-          const a1 = q.clone().sub(op.center);
-          let ang = THREE.MathUtils.radToDeg(Math.atan2(a0.clone().cross(a1).dot(op.n), a0.dot(a1)));
-          const s15 = Math.round(ang / 15) * 15;
-          if (Math.abs(ang - s15) < 2.5) ang = s15;
-          op.angle = ang;
-          T.preview.add(polyline([op.center, op.ref], 0x8a8ea0));
-          T.preview.add(polyline([op.center, q], ACCENT));
-          const c = op.center;
-          if (op.ids.length) ghost(new THREE.Matrix4().makeTranslation(c.x, c.y, c.z).multiply(new THREE.Matrix4().makeRotationAxis(op.n, THREE.MathUtils.degToRad(ang))).multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z)));
-          // the protractor: the guide it will lay, long and dashed
-          else {
-            const d = q.clone().sub(c).normalize().multiplyScalar(200);
-            T.preview.add(polyline([c.clone().sub(d), c.clone().add(d)], 0x8a8ea0));
-          }
-          L.onMeasure("Angle", `${ang.toFixed(1)}°`);
-          return;
-        }
-        case "scale": {
-          const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(UP, op.center), new THREE.Vector3());
-          if (!q) return;
-          op.factor = Math.round((q.distanceTo(op.center) / Math.max(op.start.distanceTo(op.center), 1e-6)) * 100) / 100;
-          const c = op.center;
-          const f = op.factor;
-          ghost(new THREE.Matrix4().makeTranslation(c.x, c.y, c.z).multiply(new THREE.Matrix4().makeScale(f, f, f)).multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z)));
-          L.onMeasure("Scale", `${f.toFixed(2)}×`);
-          return;
-        }
+        case "tape":
+          return moveLine({ e, L: L as Live, E, op, lock });
+        case "dim":
+          return moveDim({ e, L: L as Live, E, op, lock });
+        case "wall":
+          return moveWall({ e, L: L as Live, E, op, lock });
+        case "stairs":
+          return moveStairs({ e, L: L as Live, E, op, lock });
+        case "text":
+          return moveText({ e, L: L as Live, E, op, lock });
+        case "carc":
+          return moveCarc({ e, L: L as Live, E, op, lock });
+        case "arc3":
+          return moveArc3({ e, L: L as Live, E, op, lock });
+        case "rrect":
+          return moveRrect({ e, L: L as Live, E, op, lock });
+        case "axes":
+          return moveAxes({ e, L: L as Live, E, op, lock });
+        case "free":
+          return moveFree({ e, L: L as Live, E, op, lock });
+        case "rect":
+          return moveRect({ e, L: L as Live, E, op, lock });
+        case "circle":
+          return moveCircle({ e, L: L as Live, E, op, lock });
+        case "arc":
+          return moveArc({ e, L: L as Live, E, op, lock });
+        case "push":
+          return movePush({ e, L: L as Live, E, op, lock });
+        case "offset":
+          return moveOffset({ e, L: L as Live, E, op, lock });
+        case "move":
+          return moveMove({ e, L: L as Live, E, op, lock });
+        case "rotate":
+          return moveRotate({ e, L: L as Live, E, op, lock });
+        case "scale":
+          return moveScale({ e, L: L as Live, E, op, lock });
       }
 
       // nothing in progress: show what a click would hit
@@ -2813,6 +2873,413 @@ export default function Viewport(props: Props) {
           drawOverlay();
         }
       }
+    };
+
+    const downSelect = async ({ e, L, sel }: DownArgs) => {
+      const he = pickEdge(e);
+      const h = he == null ? pick(e) : null;
+      if (e.detail >= 2) {
+        // double-click: open a group or component; outside closes it
+        if (h) {
+          const ent = entityOf(h);
+          if (ent.kind === "groups" && L.scene.cages?.[String(ent.id)]) {
+            enterCage(ent.id);
+            L.onToast("SubD mode: 1 points, 2 edges, 3 faces; drag to shape. Enter when done.");
+            return;
+          }
+          if (ent.kind === "groups" || ent.kind === "instances") {
+            await run({ cmd: "edit", id: ent.id });
+            L.setSel(EMPTY);
+            L.onToast(`Editing ${ent.kind === "groups" ? "group" : "component"}. Esc or double-click outside to close.`);
+            return;
+          }
+          // loose geometry: double-click takes the face and its edges,
+          // triple-click everything connected (SketchUp's select)
+          if (ent.kind === "faces") {
+            const r = await exec({ cmd: "connected", id: ent.id, all: e.detail >= 3 });
+            if (r.ok) L.setSel(combine(sel, { ...EMPTY, faces: r.faces as number[], edges: r.edges as number[] }, selMode(e)));
+            return;
+          }
+        } else if (he != null) {
+          const r = await exec({ cmd: "connected", id: he, all: e.detail >= 3 });
+          if (r.ok) L.setSel(combine(sel, { ...EMPTY, faces: r.faces as number[], edges: r.edges as number[] }, selMode(e)));
+          return;
+        } else {
+          await L.run({ cmd: "close" });
+          return;
+        }
+      }
+      if (he != null) return L.setSel(combine(sel, { ...EMPTY, edges: curveOf(he) }, selMode(e)));
+      if (h) {
+        const ent = entityOf(h);
+        return L.setSel(toggle(sel, ent.kind, ent.id, selMode(e)));
+      }
+      st.current.op = { t: "box", x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY, mode: selMode(e) };
+      el.setPointerCapture(e.pointerId);
+      return;
+    };
+    const downLine = async ({ e, E, op }: DownArgs) => {
+      const sn = infer(E, e, op?.t === "line" ? { anchor: op.p0, lock: st.current.lock } : {});
+      if (op?.t === "line") {
+        if (e.detail >= 2) return cancel();
+        return void (await commitLine(sn.p));
+      }
+      st.current.op = { t: "line", p0: sn.p, start: sn.p, cur: sn.p };
+      return;
+    };
+    const downRect = async ({ e, E, op }: DownArgs) => {
+      if (op?.t === "rect") return void (await commitRect());
+      const sn = infer(E, e, {});
+      const n = sn.face ? V(sn.face.normal) : UP.clone();
+      const [u, v] = basis(n);
+      st.current.op = { t: "rect", p0: sn.p, n, u, v, a: 0, b: 0 };
+      return;
+    };
+    const downArccenter = async ({ e, L, E, op }: DownArgs) => {
+      if (op?.t === "carc") {
+        if (!op.a) {
+          const sn = infer(E, e, { anchor: op.c, plane: { origin: op.c, normal: op.n } });
+          if (sn.p.distanceTo(op.c) > 1e-4) {
+            op.a = sn.p;
+            op.ang = 0;
+            op.last = 0;
+          }
+          return;
+        }
+        return void (await commitCarc());
+      }
+      const sn = infer(E, e, {});
+      st.current.op = { t: "carc", c: sn.p, n: sn.face ? V(sn.face.normal) : UP.clone(), a: null, ang: 0, last: 0, pie: L.tool === "pie" };
+      return;
+    };
+    const downArc3 = async ({ e, E, op }: DownArgs) => {
+      if (op?.t === "arc3") {
+        const sn = infer(E, e, { anchor: op.m ?? op.a, lock: st.current.lock });
+        if (!op.m) {
+          if (sn.p.distanceTo(op.a) > 1e-4) op.m = sn.p;
+          return;
+        }
+        return void (await commitArc3(sn.p));
+      }
+      const sn = infer(E, e, {});
+      st.current.op = { t: "arc3", a: sn.p, m: null, n: sn.face ? V(sn.face.normal) : UP.clone(), cur: sn.p };
+      return;
+    };
+    const downRrect = async ({ e, E, op }: DownArgs) => {
+      if (op?.t === "rrect") {
+        if (!op.b) {
+          if (op.cur.distanceTo(op.a) > 1e-4) op.b = op.cur.clone();
+          return;
+        }
+        return void (await commitRrect());
+      }
+      const sn = infer(E, e, {});
+      st.current.op = { t: "rrect", a: sn.p, b: null, h: new THREE.Vector3(), cur: sn.p };
+      return;
+    };
+    const downAxes = async ({ e, L, E, op }: DownArgs) => {
+      const sn = infer(E, e, op?.t === "axes" ? { anchor: op.x ?? op.o, lock: st.current.lock } : {});
+      if (op?.t !== "axes") {
+        st.current.op = { t: "axes", o: sn.p, x: null, cur: sn.p };
+        return;
+      }
+      if (!op.x) {
+        if (sn.p.distanceTo(op.o) > 1e-4) op.x = sn.p;
+        return;
+      }
+      const x = op.x.clone().sub(op.o).normalize();
+      const y = sn.p.clone().sub(op.o);
+      if (y.clone().sub(x.clone().multiplyScalar(y.dot(x))).length() < 1e-4) return;
+      st.current.op = null;
+      clearPreview();
+      await run({ cmd: "set_axes", origin: arr(op.o), x: arr(x), y: arr(y) });
+      L.onToast("Axes moved: drawing lines up with them now. Shift+S › Reset axes puts them back.");
+      L.setTool("select");
+      return;
+    };
+    const downFreehand = async ({ e, E }: DownArgs) => {
+      const sn = infer(E, e, {});
+      st.current.op = { t: "free", pts: [sn.p], n: sn.face ? V(sn.face.normal) : UP.clone(), o: sn.p };
+      el.setPointerCapture(e.pointerId);
+      return;
+    };
+    const downCircle = async ({ e, L, E, op }: DownArgs) => {
+      if (op?.t === "circle") return void (await commitCircle());
+      const sn = infer(E, e, {});
+      st.current.op = { t: "circle", c: sn.p, n: sn.face ? V(sn.face.normal) : UP.clone(), r: 0, seg: L.tool === "polygon" ? st.current.segs.polygon : st.current.segs.circle };
+      return;
+    };
+    const downArc = async ({ e, E, op }: DownArgs) => {
+      if (op?.t === "arc") {
+        if (!op.b) {
+          const sn = infer(E, e, { anchor: op.a, lock: st.current.lock });
+          if (sn.p.distanceTo(op.a) > 1e-4) op.b = sn.p;
+          return;
+        }
+        return void (await commitArc());
+      }
+      const sn = infer(E, e, {});
+      st.current.op = { t: "arc", a: sn.p, b: null, n: sn.face ? V(sn.face.normal) : UP.clone(), bulge: 0, cur: sn.p };
+      return;
+    };
+    const downPush = async ({ e, op }: DownArgs) => {
+      if (op?.t === "push") return void (await commitPush()); // click-move-click
+      const h = pick(e);
+      if (!h?.face) return;
+      if (e.detail >= 2 && st.current.last?.t === "push") {
+        // double-click: same distance as last time
+        await run({ cmd: "pushpull", face: h.face.id, distance: st.current.last.d });
+        return;
+      }
+      st.current.op = { t: "push", face: h.face, origin: h.point.clone(), n: V(h.face.normal), d: 0, dragged: false };
+      el.setPointerCapture(e.pointerId);
+      return;
+    };
+    const downOffset = async ({ e, op }: DownArgs) => {
+      if (op?.t === "offset") return void (await commitOffset());
+      const h = pick(e);
+      if (h?.face) st.current.op = { t: "offset", face: h.face, start: h.point.clone(), d: 0 };
+      return;
+    };
+    const downFollowme = async ({ e, L, sel }: DownArgs) => {
+      const h = pick(e);
+      if (!h?.face) return;
+      if (sel.edges.length) await run({ cmd: "follow_me", face: h.face.id, edges: sel.edges });
+      else if (sel.faces.length === 1 && sel.faces[0] !== h.face.id) await run({ cmd: "follow_me", face: h.face.id, around: sel.faces[0] });
+      else return L.onToast("Select the path first (edges, or a face to go around), then click the profile.", true);
+      L.setSel(EMPTY);
+      return;
+    };
+    const downProtractor = async ({ e, E, op }: DownArgs) => {
+      if (op?.t === "rotate") {
+        if (op.ref) return void (await commitRotate());
+        const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(op.n, op.center), new THREE.Vector3());
+        if (q && q.distanceTo(op.center) > 1e-4) op.ref = q;
+        return;
+      }
+      const sn = infer(E, e, {});
+      st.current.op = { t: "rotate", center: sn.p, n: sn.face ? V(sn.face.normal) : UP.clone(), ref: null, angle: 0, ids: [] };
+      return;
+    };
+    const downMove = async ({ e, L, E, op, sel }: DownArgs) => {
+      if (op?.t === "move") return void (await commitMove());
+      if (op?.t === "scale") return void (await commitScale());
+      if (op?.t === "rotate") {
+        if (op.ref) return void (await commitRotate());
+        const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(op.n, op.center), new THREE.Vector3());
+        if (q && q.distanceTo(op.center) > 1e-4) op.ref = q;
+        return;
+      }
+      // nothing selected, Move on a corner: grab just that point (the faces around it follow)
+      if (L.tool === "move" && selIds(sel).length === 0 && !e.altKey && !e.ctrlKey) {
+        const v = vertexUnder(e);
+        if (v) {
+          st.current.op = { t: "move", base: v.p, ids: [v.id], delta: new THREE.Vector3(), copy: false, vertex: { far: v.far } };
+          return;
+        }
+      }
+      // nothing selected: grab what's under the cursor
+      let s2 = sel;
+      if (selIds(sel).length === 0) {
+        const he = pickEdge(e);
+        const h = he == null ? pick(e) : null;
+        if (he != null) s2 = { ...EMPTY, edges: curveOf(he) };
+        else if (h) {
+          const ent = entityOf(h);
+          s2 = toggle(EMPTY, ent.kind, ent.id, false);
+        } else return;
+        st.current.selOverride = s2;
+        L.setSel(s2);
+      }
+      const ids = selIds(s2);
+      const sn = infer(E, e, {});
+      if (L.tool === "move") st.current.op = { t: "move", base: sn.p, ids, delta: new THREE.Vector3(), copy: e.altKey || e.ctrlKey };
+      else if (L.tool === "rotate") st.current.op = { t: "rotate", center: sn.p, n: sn.face ? V(sn.face.normal) : UP.clone(), ref: null, angle: 0, ids, copy: e.altKey || e.ctrlKey };
+      else {
+        const pos = trianglesOf(ownersOf(s2));
+        const b = new THREE.Box3();
+        for (let i = 0; i < pos.length; i += 3) b.expandByPoint(new THREE.Vector3(pos[i], pos[i + 1], pos[i + 2]));
+        const c = b.isEmpty() ? sn.p : new THREE.Vector3((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, b.min.z);
+        const start = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(UP, c), new THREE.Vector3()) ?? sn.p;
+        st.current.op = { t: "scale", center: c, start, factor: 1, ids };
+      }
+      return;
+    };
+    const downTape = async ({ e, E, op }: DownArgs) => {
+      if (op?.t === "tape") return void (await commitTape(infer(E, e, { anchor: op.p0, lock: st.current.lock }).p));
+      const sn = infer(E, e, {});
+      st.current.op = { t: "tape", p0: sn.p, along: sn.kind === "on-edge" && sn.along ? sn.along : null, cur: sn.p };
+      return;
+    };
+    const downDimension = async ({ e, E, op }: DownArgs) => {
+      if (op?.t === "dim") {
+        if (!op.b) {
+          const sn = infer(E, e, { anchor: op.a, lock: st.current.lock });
+          if (sn.p.distanceTo(op.a) > 1e-4) op.b = sn.p;
+          return;
+        }
+        st.current.op = null;
+        clearPreview();
+        await run({ cmd: "dimension", from: arr(op.a), to: arr(op.b), offset: arr(op.off) });
+        return;
+      }
+      const sn = infer(E, e, {});
+      st.current.op = { t: "dim", a: sn.p, b: null, off: new THREE.Vector3(), cur: sn.p };
+      return;
+    };
+    const downText = async ({ e, E, op }: DownArgs) => {
+      if (op?.t === "text") {
+        st.current.op = null;
+        clearPreview();
+        const text = await ask("Label text", "");
+        if (text?.trim()) await run({ cmd: "text", at: arr(op.cur), text: text.trim(), leader: arr(op.leader) });
+        return;
+      }
+      const sn = infer(E, e, {});
+      st.current.op = { t: "text", leader: sn.p, cur: sn.p };
+      return;
+    };
+    const downWall = async ({ e, E, op }: DownArgs) => {
+      if (op?.t === "wall") {
+        const last = op.pts[op.pts.length - 1];
+        const sn = infer(E, e, { anchor: last, lock: st.current.lock, plane: { origin: op.pts[0], normal: UP } });
+        if (op.pts.length > 2 && sn.p.distanceTo(op.pts[0]) < 1e-6) return void (await commitWall(true));
+        if (e.detail >= 2) return void (await commitWall(false));
+        if (sn.p.distanceTo(last) > 1e-4) op.pts.push(sn.p);
+        st.current.lock = null;
+        return;
+      }
+      const sn = infer(E, e, {});
+      st.current.op = { t: "wall", pts: [sn.p], cur: sn.p };
+      return;
+    };
+    const downStairs = async ({ e, L, E, op }: DownArgs) => {
+      if (op?.t === "stairs") {
+        const d = op.cur.clone().sub(op.at);
+        if (d.length() < 1e-3) return;
+        st.current.op = null;
+        clearPreview();
+        const b = L.build;
+        const r = await run({ cmd: "stairs", at: arr(op.at), rise: b.stairRise, width: b.stairWidth, direction: r4(THREE.MathUtils.radToDeg(Math.atan2(d.y, d.x))) });
+        if (r.ok) L.onToast(`${r.risers} risers of ${fmt(r.riser_height as number)}`);
+        return;
+      }
+      const sn = infer(E, e, {});
+      st.current.op = { t: "stairs", at: sn.p, cur: sn.p };
+      return;
+    };
+    const downRoof = async ({ e, L }: DownArgs) => {
+      const h = pick(e);
+      if (!h?.face) return L.onToast("Click a flat top face (a ceiling or the top of walls).", true);
+      const b = L.build;
+      await run({ cmd: "roof", face: h.face.id, kind: b.roofKind, pitch: b.roofPitch, overhang: b.roofOverhang });
+      return;
+    };
+    const downSmoove = async ({ e, L, sel }: DownArgs) => {
+      const h = pick(e);
+      const group = h?.face?.group;
+      if (group == null) return L.onToast("Click on a terrain (a group of triangles).", true);
+      const b = L.build;
+      if (L.tool === "smoove") {
+        // Shift digs instead of raising
+        await run({ cmd: "smoove", group, at: arr(h!.point), radius: b.smooveRadius, height: e.shiftKey ? -b.smooveHeight : b.smooveHeight });
+      } else if (L.tool === "stamp") {
+        const fp = sel.faces.find((f) => faceById(f)?.group !== group);
+        if (fp == null) return L.onToast("Select the footprint face first (a rectangle above the terrain), then click the terrain.", true);
+        await run({ cmd: "stamp", group, face: fp, offset: b.stampOffset });
+      } else {
+        if (!sel.edges.length) return L.onToast("Select the lines to drape first, then click the terrain.", true);
+        await run({ cmd: "drape", group, ids: sel.edges });
+      }
+      return;
+    };
+    const downFlipedge = async ({ e, L }: DownArgs) => {
+      const he = pickEdge(e);
+      if (he == null) return L.onToast("Click an edge between two triangles.", true);
+      await run({ cmd: "flip_edge", edge: he });
+      return;
+    };
+    const downColumn = async ({ e, L, E }: DownArgs) => {
+      const sn = infer(E, e, {});
+      const b = L.build;
+      await run({ cmd: "column", at: arr(sn.p), size: b.columnSize, height: b.columnHeight, round: b.columnRound });
+      return;
+    };
+    const downPaint = async ({ e, L }: DownArgs) => {
+      const h = pick(e);
+      if (!h) return;
+      if (e.altKey || e.metaKey) {
+        // eyedropper (Option on Windows-style keys, Cmd on Mac, as in SketchUp): a texture if the face has one, else its color
+        const s = L.scene;
+        const i = s.triFace.indexOf(h.owner);
+        if (i >= 0 && s.triTex?.[i] >= 0) return L.setPaintMaterial(s.textures[s.triTex[i]]);
+        if (i >= 0) {
+          L.setPaintMaterial(null);
+          L.setColor([s.colors[i * 3], s.colors[i * 3 + 1], s.colors[i * 3 + 2]]);
+        }
+        return;
+      }
+      const ent = entityOf(h);
+      if (ent.kind === "instances") return L.onToast("Double-click a component with Select to open it, then paint inside.", true);
+      let targets = [ent.id];
+      if (e.shiftKey && ent.kind === "faces") {
+        // Shift: every face here that has the same material (SketchUp's Replace)
+        const s = L.scene;
+        const f0 = s.faces.find((f) => f.id === ent.id);
+        if (f0) targets = s.faces.filter((f) => f.group === f0.group && f.material === f0.material && !f.hidden).map((f) => f.id);
+      }
+      await run(L.paintMaterial ? { cmd: "paint", ids: targets, material: L.paintMaterial } : { cmd: "paint", ids: targets, color: L.color });
+      return;
+    };
+    const downErase = async ({ e }: DownArgs) => {
+      const he = pickEdge(e);
+      const soften = e.altKey || e.ctrlKey;
+      if (he != null) {
+        if (soften) return void (await run({ cmd: "soften", ids: curveOf(he), soft: !e.shiftKey }));
+        return void (await run({ cmd: e.shiftKey ? "hide" : "delete", ids: curveOf(he) }));
+      }
+      const h = pick(e);
+      if (h && !soften) await run({ cmd: e.shiftKey ? "hide" : "delete", ids: [entityOf(h).id] });
+      return;
+    };
+    const downSection = async ({ e, L }: DownArgs) => {
+      const h = pick(e);
+      if (!h?.face) return;
+      const n = V(h.face.normal).negate();
+      // 1 cm into the solid behind the clicked face, keeping the far side; a named plane
+      const o = h.point.clone().addScaledVector(n, 0.01);
+      await L.run({ cmd: "section_plane", origin: arr(o), normal: arr(n) });
+      L.setTool("select");
+      return;
+    };
+    const downPlugin = async ({ e, L, E }: DownArgs) => {
+      if (!L.pluginTool) return;
+      const P = L.pluginTool;
+      const sn = infer(E, e, { anchor: P.anchor ? V(P.anchor) : null, lock: st.current.lock });
+      P.click(pluginPoint(sn, e));
+      return;
+    };
+    const downPlace = async ({ e, L, E }: DownArgs) => {
+      if (!L.placeAsset) return;
+      const sn = infer(E, e, {});
+      const n = sn.face ? V(sn.face.normal) : UP;
+      // doors and windows face out of the wall they're dropped on
+      const wall = Math.abs(n.z) < 0.5;
+      const rot = wall ? THREE.MathUtils.radToDeg(Math.atan2(n.y, n.x)) + 90 : 0;
+      const at = sn.p.clone();
+      // doors stand on the bottom of the wall they're dropped on
+      if (wall && sn.face && (L.placeAsset === "door" || L.placeAsset === "garage_door")) at.z = Math.min(...sn.face.outer.map((q) => q[2]));
+      const k = L.placeAsset;
+      // a library file, a component already in the model, or a starter asset
+      // dropped on a face: doors, windows (and components set to) cut their opening there
+      const host = wall && sn.face ? sn.face.id : undefined;
+      let r: Reply;
+      if (k.startsWith("file:")) r = await run({ cmd: "insert_file", path: k.slice(5), at: arr(at), rotate: r4(rot) });
+      else if (k.startsWith("component:")) r = await run({ cmd: "place", component: Number(k.slice(10)), at: arr(at), rotate: r4(rot), host });
+      else r = await run({ cmd: "insert", asset: k, at: arr(at), rotate: r4(rot), host });
+      const op = r.opening as { error?: string } | null | undefined;
+      if (op?.error) L.onToast(`Placed, but no opening: ${op.error}`, true);
+      return;
     };
 
     const down = async (e: PointerEvent) => {
@@ -2872,418 +3339,70 @@ export default function Viewport(props: Props) {
       if (["line", "rect", "circle", "polygon", "tape", "dimension", "move"].includes(L.tool)) el.setPointerCapture(e.pointerId);
 
       switch (L.tool) {
-        case "select": {
-          const he = pickEdge(e);
-          const h = he == null ? pick(e) : null;
-          if (e.detail >= 2) {
-            // double-click: open a group or component; outside closes it
-            if (h) {
-              const ent = entityOf(h);
-              if (ent.kind === "groups" && L.scene.cages?.[String(ent.id)]) {
-                enterCage(ent.id);
-                L.onToast("SubD mode: 1 points, 2 edges, 3 faces; drag to shape. Enter when done.");
-                return;
-              }
-              if (ent.kind === "groups" || ent.kind === "instances") {
-                await run({ cmd: "edit", id: ent.id });
-                L.setSel(EMPTY);
-                L.onToast(`Editing ${ent.kind === "groups" ? "group" : "component"}. Esc or double-click outside to close.`);
-                return;
-              }
-              // loose geometry: double-click takes the face and its edges,
-              // triple-click everything connected (SketchUp's select)
-              if (ent.kind === "faces") {
-                const r = await exec({ cmd: "connected", id: ent.id, all: e.detail >= 3 });
-                if (r.ok) L.setSel(combine(sel, { ...EMPTY, faces: r.faces as number[], edges: r.edges as number[] }, selMode(e)));
-                return;
-              }
-            } else if (he != null) {
-              const r = await exec({ cmd: "connected", id: he, all: e.detail >= 3 });
-              if (r.ok) L.setSel(combine(sel, { ...EMPTY, faces: r.faces as number[], edges: r.edges as number[] }, selMode(e)));
-              return;
-            } else {
-              await L.run({ cmd: "close" });
-              return;
-            }
-          }
-          if (he != null) return L.setSel(combine(sel, { ...EMPTY, edges: curveOf(he) }, selMode(e)));
-          if (h) {
-            const ent = entityOf(h);
-            return L.setSel(toggle(sel, ent.kind, ent.id, selMode(e)));
-          }
-          st.current.op = { t: "box", x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY, mode: selMode(e) };
-          el.setPointerCapture(e.pointerId);
-          return;
-        }
-        case "line": {
-          const sn = infer(E, e, op?.t === "line" ? { anchor: op.p0, lock: st.current.lock } : {});
-          if (op?.t === "line") {
-            if (e.detail >= 2) return cancel();
-            return void (await commitLine(sn.p));
-          }
-          st.current.op = { t: "line", p0: sn.p, start: sn.p, cur: sn.p };
-          return;
-        }
-        case "rect": {
-          if (op?.t === "rect") return void (await commitRect());
-          const sn = infer(E, e, {});
-          const n = sn.face ? V(sn.face.normal) : UP.clone();
-          const [u, v] = basis(n);
-          st.current.op = { t: "rect", p0: sn.p, n, u, v, a: 0, b: 0 };
-          return;
-        }
+        case "select":
+          return downSelect({ e, L: L as Live, E, op, sel });
+        case "line":
+          return downLine({ e, L: L as Live, E, op, sel });
+        case "rect":
+          return downRect({ e, L: L as Live, E, op, sel });
         case "arccenter":
-        case "pie": {
-          if (op?.t === "carc") {
-            if (!op.a) {
-              const sn = infer(E, e, { anchor: op.c, plane: { origin: op.c, normal: op.n } });
-              if (sn.p.distanceTo(op.c) > 1e-4) {
-                op.a = sn.p;
-                op.ang = 0;
-                op.last = 0;
-              }
-              return;
-            }
-            return void (await commitCarc());
-          }
-          const sn = infer(E, e, {});
-          st.current.op = { t: "carc", c: sn.p, n: sn.face ? V(sn.face.normal) : UP.clone(), a: null, ang: 0, last: 0, pie: L.tool === "pie" };
-          return;
-        }
-        case "arc3": {
-          if (op?.t === "arc3") {
-            const sn = infer(E, e, { anchor: op.m ?? op.a, lock: st.current.lock });
-            if (!op.m) {
-              if (sn.p.distanceTo(op.a) > 1e-4) op.m = sn.p;
-              return;
-            }
-            return void (await commitArc3(sn.p));
-          }
-          const sn = infer(E, e, {});
-          st.current.op = { t: "arc3", a: sn.p, m: null, n: sn.face ? V(sn.face.normal) : UP.clone(), cur: sn.p };
-          return;
-        }
-        case "rrect": {
-          if (op?.t === "rrect") {
-            if (!op.b) {
-              if (op.cur.distanceTo(op.a) > 1e-4) op.b = op.cur.clone();
-              return;
-            }
-            return void (await commitRrect());
-          }
-          const sn = infer(E, e, {});
-          st.current.op = { t: "rrect", a: sn.p, b: null, h: new THREE.Vector3(), cur: sn.p };
-          return;
-        }
-        case "axes": {
-          const sn = infer(E, e, op?.t === "axes" ? { anchor: op.x ?? op.o, lock: st.current.lock } : {});
-          if (op?.t !== "axes") {
-            st.current.op = { t: "axes", o: sn.p, x: null, cur: sn.p };
-            return;
-          }
-          if (!op.x) {
-            if (sn.p.distanceTo(op.o) > 1e-4) op.x = sn.p;
-            return;
-          }
-          const x = op.x.clone().sub(op.o).normalize();
-          const y = sn.p.clone().sub(op.o);
-          if (y.clone().sub(x.clone().multiplyScalar(y.dot(x))).length() < 1e-4) return;
-          st.current.op = null;
-          clearPreview();
-          await run({ cmd: "set_axes", origin: arr(op.o), x: arr(x), y: arr(y) });
-          L.onToast("Axes moved: drawing lines up with them now. Shift+S › Reset axes puts them back.");
-          L.setTool("select");
-          return;
-        }
-        case "freehand": {
-          const sn = infer(E, e, {});
-          st.current.op = { t: "free", pts: [sn.p], n: sn.face ? V(sn.face.normal) : UP.clone(), o: sn.p };
-          el.setPointerCapture(e.pointerId);
-          return;
-        }
+        case "pie":
+          return downArccenter({ e, L: L as Live, E, op, sel });
+        case "arc3":
+          return downArc3({ e, L: L as Live, E, op, sel });
+        case "rrect":
+          return downRrect({ e, L: L as Live, E, op, sel });
+        case "axes":
+          return downAxes({ e, L: L as Live, E, op, sel });
+        case "freehand":
+          return downFreehand({ e, L: L as Live, E, op, sel });
         case "circle":
-        case "polygon": {
-          if (op?.t === "circle") return void (await commitCircle());
-          const sn = infer(E, e, {});
-          st.current.op = { t: "circle", c: sn.p, n: sn.face ? V(sn.face.normal) : UP.clone(), r: 0, seg: L.tool === "polygon" ? st.current.segs.polygon : st.current.segs.circle };
-          return;
-        }
-        case "arc": {
-          if (op?.t === "arc") {
-            if (!op.b) {
-              const sn = infer(E, e, { anchor: op.a, lock: st.current.lock });
-              if (sn.p.distanceTo(op.a) > 1e-4) op.b = sn.p;
-              return;
-            }
-            return void (await commitArc());
-          }
-          const sn = infer(E, e, {});
-          st.current.op = { t: "arc", a: sn.p, b: null, n: sn.face ? V(sn.face.normal) : UP.clone(), bulge: 0, cur: sn.p };
-          return;
-        }
-        case "push": {
-          if (op?.t === "push") return void (await commitPush()); // click-move-click
-          const h = pick(e);
-          if (!h?.face) return;
-          if (e.detail >= 2 && st.current.last?.t === "push") {
-            // double-click: same distance as last time
-            await run({ cmd: "pushpull", face: h.face.id, distance: st.current.last.d });
-            return;
-          }
-          st.current.op = { t: "push", face: h.face, origin: h.point.clone(), n: V(h.face.normal), d: 0, dragged: false };
-          el.setPointerCapture(e.pointerId);
-          return;
-        }
-        case "offset": {
-          if (op?.t === "offset") return void (await commitOffset());
-          const h = pick(e);
-          if (h?.face) st.current.op = { t: "offset", face: h.face, start: h.point.clone(), d: 0 };
-          return;
-        }
-        case "followme": {
-          const h = pick(e);
-          if (!h?.face) return;
-          if (sel.edges.length) await run({ cmd: "follow_me", face: h.face.id, edges: sel.edges });
-          else if (sel.faces.length === 1 && sel.faces[0] !== h.face.id) await run({ cmd: "follow_me", face: h.face.id, around: sel.faces[0] });
-          else return L.onToast("Select the path first (edges, or a face to go around), then click the profile.", true);
-          L.setSel(EMPTY);
-          return;
-        }
-        case "protractor": {
-          if (op?.t === "rotate") {
-            if (op.ref) return void (await commitRotate());
-            const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(op.n, op.center), new THREE.Vector3());
-            if (q && q.distanceTo(op.center) > 1e-4) op.ref = q;
-            return;
-          }
-          const sn = infer(E, e, {});
-          st.current.op = { t: "rotate", center: sn.p, n: sn.face ? V(sn.face.normal) : UP.clone(), ref: null, angle: 0, ids: [] };
-          return;
-        }
+        case "polygon":
+          return downCircle({ e, L: L as Live, E, op, sel });
+        case "arc":
+          return downArc({ e, L: L as Live, E, op, sel });
+        case "push":
+          return downPush({ e, L: L as Live, E, op, sel });
+        case "offset":
+          return downOffset({ e, L: L as Live, E, op, sel });
+        case "followme":
+          return downFollowme({ e, L: L as Live, E, op, sel });
+        case "protractor":
+          return downProtractor({ e, L: L as Live, E, op, sel });
         case "move":
         case "rotate":
-        case "scale": {
-          if (op?.t === "move") return void (await commitMove());
-          if (op?.t === "scale") return void (await commitScale());
-          if (op?.t === "rotate") {
-            if (op.ref) return void (await commitRotate());
-            const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(op.n, op.center), new THREE.Vector3());
-            if (q && q.distanceTo(op.center) > 1e-4) op.ref = q;
-            return;
-          }
-          // nothing selected, Move on a corner: grab just that point (the faces around it follow)
-          if (L.tool === "move" && selIds(sel).length === 0 && !e.altKey && !e.ctrlKey) {
-            const v = vertexUnder(e);
-            if (v) {
-              st.current.op = { t: "move", base: v.p, ids: [v.id], delta: new THREE.Vector3(), copy: false, vertex: { far: v.far } };
-              return;
-            }
-          }
-          // nothing selected: grab what's under the cursor
-          let s2 = sel;
-          if (selIds(sel).length === 0) {
-            const he = pickEdge(e);
-            const h = he == null ? pick(e) : null;
-            if (he != null) s2 = { ...EMPTY, edges: curveOf(he) };
-            else if (h) {
-              const ent = entityOf(h);
-              s2 = toggle(EMPTY, ent.kind, ent.id, false);
-            } else return;
-            st.current.selOverride = s2;
-            L.setSel(s2);
-          }
-          const ids = selIds(s2);
-          const sn = infer(E, e, {});
-          if (L.tool === "move") st.current.op = { t: "move", base: sn.p, ids, delta: new THREE.Vector3(), copy: e.altKey || e.ctrlKey };
-          else if (L.tool === "rotate") st.current.op = { t: "rotate", center: sn.p, n: sn.face ? V(sn.face.normal) : UP.clone(), ref: null, angle: 0, ids, copy: e.altKey || e.ctrlKey };
-          else {
-            const pos = trianglesOf(ownersOf(s2));
-            const b = new THREE.Box3();
-            for (let i = 0; i < pos.length; i += 3) b.expandByPoint(new THREE.Vector3(pos[i], pos[i + 1], pos[i + 2]));
-            const c = b.isEmpty() ? sn.p : new THREE.Vector3((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, b.min.z);
-            const start = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(UP, c), new THREE.Vector3()) ?? sn.p;
-            st.current.op = { t: "scale", center: c, start, factor: 1, ids };
-          }
-          return;
-        }
-        case "tape": {
-          if (op?.t === "tape") return void (await commitTape(infer(E, e, { anchor: op.p0, lock: st.current.lock }).p));
-          const sn = infer(E, e, {});
-          st.current.op = { t: "tape", p0: sn.p, along: sn.kind === "on-edge" && sn.along ? sn.along : null, cur: sn.p };
-          return;
-        }
-        case "dimension": {
-          if (op?.t === "dim") {
-            if (!op.b) {
-              const sn = infer(E, e, { anchor: op.a, lock: st.current.lock });
-              if (sn.p.distanceTo(op.a) > 1e-4) op.b = sn.p;
-              return;
-            }
-            st.current.op = null;
-            clearPreview();
-            await run({ cmd: "dimension", from: arr(op.a), to: arr(op.b), offset: arr(op.off) });
-            return;
-          }
-          const sn = infer(E, e, {});
-          st.current.op = { t: "dim", a: sn.p, b: null, off: new THREE.Vector3(), cur: sn.p };
-          return;
-        }
-        case "text": {
-          if (op?.t === "text") {
-            st.current.op = null;
-            clearPreview();
-            const text = await ask("Label text", "");
-            if (text?.trim()) await run({ cmd: "text", at: arr(op.cur), text: text.trim(), leader: arr(op.leader) });
-            return;
-          }
-          const sn = infer(E, e, {});
-          st.current.op = { t: "text", leader: sn.p, cur: sn.p };
-          return;
-        }
-        case "wall": {
-          if (op?.t === "wall") {
-            const last = op.pts[op.pts.length - 1];
-            const sn = infer(E, e, { anchor: last, lock: st.current.lock, plane: { origin: op.pts[0], normal: UP } });
-            if (op.pts.length > 2 && sn.p.distanceTo(op.pts[0]) < 1e-6) return void (await commitWall(true));
-            if (e.detail >= 2) return void (await commitWall(false));
-            if (sn.p.distanceTo(last) > 1e-4) op.pts.push(sn.p);
-            st.current.lock = null;
-            return;
-          }
-          const sn = infer(E, e, {});
-          st.current.op = { t: "wall", pts: [sn.p], cur: sn.p };
-          return;
-        }
-        case "stairs": {
-          if (op?.t === "stairs") {
-            const d = op.cur.clone().sub(op.at);
-            if (d.length() < 1e-3) return;
-            st.current.op = null;
-            clearPreview();
-            const b = L.build;
-            const r = await run({ cmd: "stairs", at: arr(op.at), rise: b.stairRise, width: b.stairWidth, direction: r4(THREE.MathUtils.radToDeg(Math.atan2(d.y, d.x))) });
-            if (r.ok) L.onToast(`${r.risers} risers of ${fmt(r.riser_height as number)}`);
-            return;
-          }
-          const sn = infer(E, e, {});
-          st.current.op = { t: "stairs", at: sn.p, cur: sn.p };
-          return;
-        }
-        case "roof": {
-          const h = pick(e);
-          if (!h?.face) return L.onToast("Click a flat top face (a ceiling or the top of walls).", true);
-          const b = L.build;
-          await run({ cmd: "roof", face: h.face.id, kind: b.roofKind, pitch: b.roofPitch, overhang: b.roofOverhang });
-          return;
-        }
+        case "scale":
+          return downMove({ e, L: L as Live, E, op, sel });
+        case "tape":
+          return downTape({ e, L: L as Live, E, op, sel });
+        case "dimension":
+          return downDimension({ e, L: L as Live, E, op, sel });
+        case "text":
+          return downText({ e, L: L as Live, E, op, sel });
+        case "wall":
+          return downWall({ e, L: L as Live, E, op, sel });
+        case "stairs":
+          return downStairs({ e, L: L as Live, E, op, sel });
+        case "roof":
+          return downRoof({ e, L: L as Live, E, op, sel });
         case "smoove":
         case "stamp":
-        case "drape": {
-          const h = pick(e);
-          const group = h?.face?.group;
-          if (group == null) return L.onToast("Click on a terrain (a group of triangles).", true);
-          const b = L.build;
-          if (L.tool === "smoove") {
-            // Shift digs instead of raising
-            await run({ cmd: "smoove", group, at: arr(h!.point), radius: b.smooveRadius, height: e.shiftKey ? -b.smooveHeight : b.smooveHeight });
-          } else if (L.tool === "stamp") {
-            const fp = sel.faces.find((f) => faceById(f)?.group !== group);
-            if (fp == null) return L.onToast("Select the footprint face first (a rectangle above the terrain), then click the terrain.", true);
-            await run({ cmd: "stamp", group, face: fp, offset: b.stampOffset });
-          } else {
-            if (!sel.edges.length) return L.onToast("Select the lines to drape first, then click the terrain.", true);
-            await run({ cmd: "drape", group, ids: sel.edges });
-          }
-          return;
-        }
-        case "flipedge": {
-          const he = pickEdge(e);
-          if (he == null) return L.onToast("Click an edge between two triangles.", true);
-          await run({ cmd: "flip_edge", edge: he });
-          return;
-        }
-        case "column": {
-          const sn = infer(E, e, {});
-          const b = L.build;
-          await run({ cmd: "column", at: arr(sn.p), size: b.columnSize, height: b.columnHeight, round: b.columnRound });
-          return;
-        }
-        case "paint": {
-          const h = pick(e);
-          if (!h) return;
-          if (e.altKey || e.metaKey) {
-            // eyedropper (Option on Windows-style keys, Cmd on Mac, as in SketchUp): a texture if the face has one, else its color
-            const s = L.scene;
-            const i = s.triFace.indexOf(h.owner);
-            if (i >= 0 && s.triTex?.[i] >= 0) return L.setPaintMaterial(s.textures[s.triTex[i]]);
-            if (i >= 0) {
-              L.setPaintMaterial(null);
-              L.setColor([s.colors[i * 3], s.colors[i * 3 + 1], s.colors[i * 3 + 2]]);
-            }
-            return;
-          }
-          const ent = entityOf(h);
-          if (ent.kind === "instances") return L.onToast("Double-click a component with Select to open it, then paint inside.", true);
-          let targets = [ent.id];
-          if (e.shiftKey && ent.kind === "faces") {
-            // Shift: every face here that has the same material (SketchUp's Replace)
-            const s = L.scene;
-            const f0 = s.faces.find((f) => f.id === ent.id);
-            if (f0) targets = s.faces.filter((f) => f.group === f0.group && f.material === f0.material && !f.hidden).map((f) => f.id);
-          }
-          await run(L.paintMaterial ? { cmd: "paint", ids: targets, material: L.paintMaterial } : { cmd: "paint", ids: targets, color: L.color });
-          return;
-        }
-        case "erase": {
-          const he = pickEdge(e);
-          const soften = e.altKey || e.ctrlKey;
-          if (he != null) {
-            if (soften) return void (await run({ cmd: "soften", ids: curveOf(he), soft: !e.shiftKey }));
-            return void (await run({ cmd: e.shiftKey ? "hide" : "delete", ids: curveOf(he) }));
-          }
-          const h = pick(e);
-          if (h && !soften) await run({ cmd: e.shiftKey ? "hide" : "delete", ids: [entityOf(h).id] });
-          return;
-        }
-        case "section": {
-          const h = pick(e);
-          if (!h?.face) return;
-          const n = V(h.face.normal).negate();
-          // 1 cm into the solid behind the clicked face, keeping the far side; a named plane
-          const o = h.point.clone().addScaledVector(n, 0.01);
-          await L.run({ cmd: "section_plane", origin: arr(o), normal: arr(n) });
-          L.setTool("select");
-          return;
-        }
-        case "plugin": {
-          if (!L.pluginTool) return;
-          const P = L.pluginTool;
-          const sn = infer(E, e, { anchor: P.anchor ? V(P.anchor) : null, lock: st.current.lock });
-          P.click(pluginPoint(sn, e));
-          return;
-        }
-        case "place": {
-          if (!L.placeAsset) return;
-          const sn = infer(E, e, {});
-          const n = sn.face ? V(sn.face.normal) : UP;
-          // doors and windows face out of the wall they're dropped on
-          const wall = Math.abs(n.z) < 0.5;
-          const rot = wall ? THREE.MathUtils.radToDeg(Math.atan2(n.y, n.x)) + 90 : 0;
-          const at = sn.p.clone();
-          // doors stand on the bottom of the wall they're dropped on
-          if (wall && sn.face && (L.placeAsset === "door" || L.placeAsset === "garage_door")) at.z = Math.min(...sn.face.outer.map((q) => q[2]));
-          const k = L.placeAsset;
-          // a library file, a component already in the model, or a starter asset
-          // dropped on a face: doors, windows (and components set to) cut their opening there
-          const host = wall && sn.face ? sn.face.id : undefined;
-          let r: Reply;
-          if (k.startsWith("file:")) r = await run({ cmd: "insert_file", path: k.slice(5), at: arr(at), rotate: r4(rot) });
-          else if (k.startsWith("component:")) r = await run({ cmd: "place", component: Number(k.slice(10)), at: arr(at), rotate: r4(rot), host });
-          else r = await run({ cmd: "insert", asset: k, at: arr(at), rotate: r4(rot), host });
-          const op = r.opening as { error?: string } | null | undefined;
-          if (op?.error) L.onToast(`Placed, but no opening: ${op.error}`, true);
-          return;
-        }
+        case "drape":
+          return downSmoove({ e, L: L as Live, E, op, sel });
+        case "flipedge":
+          return downFlipedge({ e, L: L as Live, E, op, sel });
+        case "column":
+          return downColumn({ e, L: L as Live, E, op, sel });
+        case "paint":
+          return downPaint({ e, L: L as Live, E, op, sel });
+        case "erase":
+          return downErase({ e, L: L as Live, E, op, sel });
+        case "section":
+          return downSection({ e, L: L as Live, E, op, sel });
+        case "plugin":
+          return downPlugin({ e, L: L as Live, E, op, sel });
+        case "place":
+          return downPlace({ e, L: L as Live, E, op, sel });
       }
     };
 
