@@ -5,7 +5,8 @@
 import { useEffect, useState } from "react";
 import { ask } from "./ask";
 import { exec, type Reply, type Scene } from "./engine";
-import { contextItems, ENVIRONMENTS } from "./panels";
+import { contextItems } from "./contextmenu";
+import { ENVIRONMENTS } from "./environments";
 import type { Sel } from "./selection";
 import type { ViewportApi } from "./Viewport";
 import type { WorkspaceId } from "./workspace";
