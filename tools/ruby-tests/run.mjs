@@ -4,7 +4,7 @@
 //   node tools/ruby-tests/run.mjs
 import fs from 'node:fs';
 import path from 'node:path';
-import { authHeaders, BRIDGE, launch, PAGE, ROOT } from '../demos/lib.mjs';
+import { BRIDGE, jsonHeaders, launch, PAGE, pageExec, ROOT } from '../demos/lib.mjs';
 
 const dir = path.join(ROOT, 'tools/ruby-tests');
 const b64 = (f) => fs.readFileSync(f).toString('base64');
@@ -19,8 +19,8 @@ const p = await (await b.newContext()).newPage();
 await p.goto(PAGE);
 await p.waitForSelector('.viewport canvas');
 // X: as the person using the app (installing plugins, new model); the page's own calls carry the token too
-const HDR = { 'Content-Type': 'application/json', ...authHeaders() };
-const X = (c) => p.evaluate(async ({ c, BRIDGE, HDR }) => (await fetch(BRIDGE + '/exec', { method: 'POST', headers: HDR, body: JSON.stringify(c) })).json(), { c, BRIDGE, HDR });
+const HDR = jsonHeaders();
+const X = (c) => pageExec(p, c);
 let failed = 0;
 const check = (ok, what) => {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}`);

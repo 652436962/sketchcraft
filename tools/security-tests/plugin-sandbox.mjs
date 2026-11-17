@@ -7,7 +7,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { authHeaders, BRIDGE, launch, PAGE } from '../demos/lib.mjs';
+import { BRIDGE, jsonHeaders, launch, PAGE, pageExec } from '../demos/lib.mjs';
 
 if (!process.env.SKETCHCRAFT_DOC) {
   console.error('Set SKETCHCRAFT_DOC to a scratch model path (and run the bridge with the same) so nothing real is touched.');
@@ -60,7 +60,7 @@ const runJs = (code) =>
       });
       return { replies, toasts };
     },
-    { code, BRIDGE, HDR: { 'Content-Type': 'application/json', ...authHeaders() } },
+    { code, BRIDGE, HDR: jsonHeaders() },
   );
 
 // 1. no nested workers, no network of any kind from the plugin
@@ -120,7 +120,7 @@ const res = await p.evaluate(
     }
     return { out, error: run.error, menu: run.menu };
   },
-  { ruby, BRIDGE, HDR: { 'Content-Type': 'application/json', ...authHeaders() } },
+  { ruby, BRIDGE, HDR: jsonHeaders() },
 );
 check(res.out.length === 4 && res.out.every(([, ok]) => ok === false), `Ruby plugin: ${res.out.length} emitted commands all refused (${res.out.map((x) => x[0]).join(', ')}) ${res.error ?? ''}`);
 check(!fs.existsSync(marker) && !fs.existsSync(marker + '.obj'), 'Ruby plugin: no file was written');
@@ -132,7 +132,7 @@ await p.evaluate(async () => {
 });
 check(await p.evaluate(() => window.__ok === true), 'a malformed result is cleaned');
 // 5. a plugin run is ONE undo step, and the window's policy is shown to hold in workers
-const X = (c, as) => p.evaluate(async ({ c, as, BRIDGE, HDR }) => (await fetch(BRIDGE + '/exec' + (as ? '?as=plugin' : ''), { method: 'POST', headers: HDR, body: JSON.stringify(c) })).json(), { c, as, BRIDGE, HDR: { 'Content-Type': 'application/json', ...authHeaders() } });
+const X = (c, as) => pageExec(p, c, as);
 await X({ cmd: 'new' });
 await X({ cmd: 'rect', from: [0, 0, 0], to: [2, 2, 0] });
 const before = (await X({ cmd: 'info' })).faces;

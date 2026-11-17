@@ -65,6 +65,16 @@ export async function launch() {
   throw new Error(`no browser: ${last?.message?.split('\n')[0]}`);
 }
 
+/** Headers for a JSON call to the bridge, with the token. */
+export const jsonHeaders = () => ({ 'Content-Type': 'application/json', ...authHeaders() });
+
+/** Send one engine command to the bridge from inside the page `p` (the bridge answers the page's origin). `as: 'plugin'` sends it as a plugin would. */
+export const pageExec = (p, c, as) =>
+  p.evaluate(async ({ c, as, BRIDGE, HDR }) => (await fetch(BRIDGE + '/exec' + (as ? '?as=plugin' : ''), { method: 'POST', headers: HDR, body: JSON.stringify(c) })).json(), { c, as, BRIDGE, HDR: jsonHeaders() });
+
+/** The live scene, fetched from inside the page `p`. */
+export const pageScene = (p) => p.evaluate(async ({ BRIDGE, HDR }) => (await fetch(BRIDGE + '/scene', { headers: HDR })).json(), { BRIDGE, HDR: jsonHeaders() });
+
 /** Send one engine command to the bridge. */
 export async function exec(cmd) {
   const r = await fetch(BRIDGE + '/exec', { method: 'POST', headers: authHeaders(), body: JSON.stringify(cmd) }).then((r) => r.json());

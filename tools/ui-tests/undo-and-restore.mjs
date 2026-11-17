@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { authHeaders, BRIDGE, launch, PAGE, ROOT } from '../demos/lib.mjs';
+import { launch, PAGE, pageExec, pageScene, ROOT } from '../demos/lib.mjs';
 
 const doc = process.env.SKETCHCRAFT_DOC;
 if (!doc) {
@@ -25,9 +25,8 @@ const problems = [];
 p.on('pageerror', (e) => problems.push(String(e)));
 await p.goto(PAGE);
 await p.waitForSelector('.viewport canvas');
-const HDR = { 'Content-Type': 'application/json', ...authHeaders() };
-const X = (c) => p.evaluate(async ({ c, BRIDGE, HDR }) => (await fetch(BRIDGE + '/exec', { method: 'POST', headers: HDR, body: JSON.stringify(c) })).json(), { c, BRIDGE, HDR });
-const scene = () => p.evaluate(async ({ BRIDGE, HDR }) => (await fetch(BRIDGE + '/scene', { headers: HDR })).json(), { BRIDGE, HDR });
+const X = (c) => pageExec(p, c);
+const scene = () => pageScene(p);
 const lefts = async () => (await scene()).faces.map((f) => Math.round(Math.min(...f.outer.map((v) => v[0])))).sort((a, c) => a - c);
 let failed = 0;
 const check = (ok, what) => {
