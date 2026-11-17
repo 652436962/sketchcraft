@@ -1,0 +1,19 @@
+// The notice for a model saved by a newer SketchCraft (readonlybanner.tsx): stays over the view, never dismissed,
+// out of the way of the title bar and menus (it lets clicks through).
+.readonly-bar {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  max-width: min(760px, 92vw);
+  padding: 8px 18px;
+  text-align: center;
+  font: 600 13px/1.4 system-ui, sans-serif;
+  color: #3b2a00;
+  background: #ffd866;
+  border: 1px solid #c9a227;
+  border-radius: 999px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  pointer-events: none;
+}

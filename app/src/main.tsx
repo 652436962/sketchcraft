@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { ErrorBoundary } from "./boundary";
+import { ReadOnlyBanner } from "./readonlybanner";
 // the brand's type, bundled (the app's security policy allows no web fonts)
 import "@fontsource-variable/bricolage-grotesque/opsz.css";
 import "@fontsource/ibm-plex-mono/400.css";
@@ -20,6 +21,7 @@ createRoot(document.getElementById("root")!).render(
       )}
     >
       <App />
+      <ReadOnlyBanner />
     </ErrorBoundary>
   </StrictMode>
 );
