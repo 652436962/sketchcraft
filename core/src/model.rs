@@ -1365,11 +1365,17 @@ fn jsz<T: Serialize + ?Sized>(v: &T) -> usize {
 /// Largest coordinate (meters) the model accepts anywhere.
 pub const MAX_COORD: f64 = 1e9;
 
-fn sane(v: f64) -> bool {
+/// Every number of a point or direction is finite (no range check: see `sane3`).
+pub fn finite3(v: &[f64; 3]) -> bool {
+    v.iter().all(|x| x.is_finite())
+}
+
+/// A number the model can hold: finite and within `MAX_COORD`.
+pub fn sane(v: f64) -> bool {
     v.is_finite() && v.abs() <= MAX_COORD
 }
 
-fn sane3(v: DVec3) -> bool {
+pub fn sane3(v: DVec3) -> bool {
     sane(v.x) && sane(v.y) && sane(v.z)
 }
 
@@ -1466,7 +1472,7 @@ impl Model {
             return bad("a cage");
         }
         for c in self.clouds.values() {
-            if !c.points.iter().all(|&x| x.is_finite() && (x as f64).abs() <= MAX_COORD) {
+            if !c.points.iter().all(|&x| sane(x as f64)) {
                 return bad("a point cloud");
             }
         }

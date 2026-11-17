@@ -150,7 +150,7 @@ impl Engine {
             }
             Command::SectionPlane { name, origin, normal } => {
                 let n = DVec3::from(normal);
-                if !(n.length() > 1e-9) || !origin.iter().all(|x| x.is_finite()) {
+                if !(n.length() > 1e-9) || !crate::model::finite3(&origin) {
                     bail!("a section plane needs a point and a direction");
                 }
                 let id = m.new_id();
@@ -172,7 +172,7 @@ impl Engine {
                 if let Some(n) = name.filter(|n| !n.trim().is_empty()) {
                     s.name = n.trim().chars().take(80).collect();
                 }
-                if let Some(o) = origin.filter(|o| o.iter().all(|x| x.is_finite())) {
+                if let Some(o) = origin.filter(crate::model::finite3) {
                     s.origin = o;
                 }
                 if let Some(n) = normal.map(DVec3::from).filter(|n| n.length() > 1e-9) {

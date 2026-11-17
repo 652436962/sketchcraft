@@ -1757,12 +1757,66 @@ impl Engine {
         }
         // each area's arms live in commands/<area>.rs
         match cmd {
-            c @ (Command::New { .. } | Command::Rect { .. } | Command::Polygon { .. } | Command::Line { .. } | Command::Circle { .. } | Command::Arc { .. } | Command::Offset { .. } | Command::FollowMe { .. } | Command::Pushpull { .. } | Command::Move { .. } | Command::Rotate { .. } | Command::Scale { .. } | Command::Duplicate { .. } | Command::Array { .. } | Command::Delete { .. } | Command::Reverse { .. } | Command::RaiseWalls { .. } | Command::Weld { .. } | Command::ExplodeCurve { .. } | Command::OrientFaces { .. } | Command::Text3d { .. } | Command::Subd { .. } | Command::CageEdit { .. } | Command::Subdivide { .. } | Command::DoorSwing { .. } | Command::TerrainFromContours { .. } | Command::TerrainGrid { .. } | Command::Smoove { .. } | Command::Stamp { .. } | Command::Drape { .. } | Command::FlipEdge { .. } | Command::Bevel { .. } | Command::Divide { .. } | Command::Slice { .. } | Command::Intersect { .. } | Command::Flip { .. } | Command::Solid { .. } | Command::Volume { .. } | Command::Wall { .. } | Command::Stairs { .. } | Command::Roof { .. } | Command::Column { .. } | Command::Insert { .. } | Command::Assets { .. }) => self.run_draw(c),
-            c @ (Command::BeginGroup { .. } | Command::EndGroup { .. } | Command::Group { .. } | Command::Faces { .. } | Command::Pick { .. } | Command::Copy { .. } | Command::MakeComponent { .. } | Command::Place { .. } | Command::ComponentFaceMe { .. } | Command::ComponentCuts { .. } | Command::Edit { .. } | Command::Close { .. } | Command::Explode { .. } | Command::Components { .. } | Command::Hide { .. } | Command::Unhide { .. } | Command::Tag { .. } | Command::TagVisible { .. } | Command::TagColor { .. } | Command::RenameTag { .. } | Command::SetParent { .. } | Command::Ungroup { .. } | Command::Lock { .. } | Command::Soften { .. } | Command::Rename { .. } | Command::MakeUnique { .. } | Command::Opacity { .. } | Command::Connected { .. } | Command::SameAs { .. } | Command::Resize { .. } | Command::SetAxes { .. } | Command::SetAttrs { .. } | Command::Classify { .. } | Command::Reveal { .. }) => self.run_structure(c),
-            c @ (Command::Paint { .. } | Command::Texture { .. } | Command::Photoreal { .. } | Command::Render { .. } | Command::Environment { .. } | Command::Sun { .. } | Command::Section { .. } | Command::SectionPlane { .. } | Command::SectionEdit { .. } | Command::SectionOff { .. } | Command::AddLocation { .. } | Command::Thumbnail { .. } | Command::Purge { .. } | Command::DeleteMaterial { .. } | Command::PurgeMaterials { .. } | Command::Skins { .. } | Command::SaveSkin { .. } | Command::Material { .. } | Command::SaveImage { .. }) => self.run_look(c),
-            c @ (Command::Guide { .. } | Command::Dimension { .. } | Command::Text { .. } | Command::Units { .. } | Command::ClearGuides { .. } | Command::ShowView { .. } | Command::SaveView { .. } | Command::MatchPhoto { .. } | Command::DeleteView { .. } | Command::Parts { .. } | Command::Info { .. } | Command::ProjectPhoto { .. } | Command::PhotoSolve { .. } | Command::Finish { .. } | Command::Options { .. } | Command::Report { .. }) => self.run_annotate(c),
-            c @ (Command::Plugins { .. } | Command::PluginEnable { .. } | Command::InstallPlugin { .. } | Command::RemovePlugin { .. } | Command::SaveText { .. } | Command::Save { .. } | Command::Open { .. } | Command::ExportGlb { .. } | Command::ExportStl { .. } | Command::Animate { .. } | Command::Blueprint { .. } | Command::Levels { .. } | Command::Timeline { .. } | Command::TimelineFrames { .. } | Command::VideoFrame { .. } | Command::VideoFinish { .. } | Command::ImportDxf { .. } | Command::ImportDwg { .. } | Command::ExportDwg { .. } | Command::Sheets { .. } | Command::ExportIfc { .. } | Command::ExportDae { .. } | Command::ExportDxf { .. } | Command::ExportPdf { .. } | Command::ImportObj { .. } | Command::ImportSkp { .. } | Command::ImportCloud { .. } | Command::CloudData { .. } | Command::Cloud { .. } | Command::ImportIfc { .. } | Command::Library { .. } | Command::InsertFile { .. } | Command::SaveToLibrary { .. } | Command::LibraryAdd { .. } | Command::ImportFbx { .. } | Command::ExportObj { .. }) => self.run_files(c),
-            c @ (Command::BeginBatch { .. } | Command::EndBatch { .. } | Command::Undo { .. } | Command::Redo { .. }) => self.run_session(c),
+            c @ (
+                Command::New { .. } | Command::Rect { .. } | Command::Polygon { .. } | Command::Line { .. } |
+                Command::Circle { .. } | Command::Arc { .. } | Command::Offset { .. } | Command::FollowMe { .. } |
+                Command::Pushpull { .. } | Command::Move { .. } | Command::Rotate { .. } | Command::Scale { .. } |
+                Command::Duplicate { .. } | Command::Array { .. } | Command::Delete { .. } |
+                Command::Reverse { .. } | Command::RaiseWalls { .. } | Command::Weld { .. } |
+                Command::ExplodeCurve { .. } | Command::OrientFaces { .. } | Command::Text3d { .. } |
+                Command::Subd { .. } | Command::CageEdit { .. } | Command::Subdivide { .. } |
+                Command::DoorSwing { .. } | Command::TerrainFromContours { .. } | Command::TerrainGrid { .. } |
+                Command::Smoove { .. } | Command::Stamp { .. } | Command::Drape { .. } | Command::FlipEdge { .. } |
+                Command::Bevel { .. } | Command::Divide { .. } | Command::Slice { .. } | Command::Intersect { .. } |
+                Command::Flip { .. } | Command::Solid { .. } | Command::Volume { .. } | Command::Wall { .. } |
+                Command::Stairs { .. } | Command::Roof { .. } | Command::Column { .. } | Command::Insert { .. } |
+                Command::Assets { .. }
+            ) => self.run_draw(c),
+            c @ (
+                Command::BeginGroup { .. } | Command::EndGroup { .. } | Command::Group { .. } |
+                Command::Faces { .. } | Command::Pick { .. } | Command::Copy { .. } | Command::MakeComponent { .. } |
+                Command::Place { .. } | Command::ComponentFaceMe { .. } | Command::ComponentCuts { .. } |
+                Command::Edit { .. } | Command::Close { .. } | Command::Explode { .. } | Command::Components { .. } |
+                Command::Hide { .. } | Command::Unhide { .. } | Command::Tag { .. } | Command::TagVisible { .. } |
+                Command::TagColor { .. } | Command::RenameTag { .. } | Command::SetParent { .. } |
+                Command::Ungroup { .. } | Command::Lock { .. } | Command::Soften { .. } | Command::Rename { .. } |
+                Command::MakeUnique { .. } | Command::Opacity { .. } | Command::Connected { .. } |
+                Command::SameAs { .. } | Command::Resize { .. } | Command::SetAxes { .. } |
+                Command::SetAttrs { .. } | Command::Classify { .. } | Command::Reveal { .. }
+            ) => self.run_structure(c),
+            c @ (
+                Command::Paint { .. } | Command::Texture { .. } | Command::Photoreal { .. } |
+                Command::Render { .. } | Command::Environment { .. } | Command::Sun { .. } |
+                Command::Section { .. } | Command::SectionPlane { .. } | Command::SectionEdit { .. } |
+                Command::SectionOff { .. } | Command::AddLocation { .. } | Command::Thumbnail { .. } |
+                Command::Purge { .. } | Command::DeleteMaterial { .. } | Command::PurgeMaterials { .. } |
+                Command::Skins { .. } | Command::SaveSkin { .. } | Command::Material { .. } |
+                Command::SaveImage { .. }
+            ) => self.run_look(c),
+            c @ (
+                Command::Guide { .. } | Command::Dimension { .. } | Command::Text { .. } | Command::Units { .. } |
+                Command::ClearGuides { .. } | Command::ShowView { .. } | Command::SaveView { .. } |
+                Command::MatchPhoto { .. } | Command::DeleteView { .. } | Command::Parts { .. } |
+                Command::Info { .. } | Command::ProjectPhoto { .. } | Command::PhotoSolve { .. } |
+                Command::Finish { .. } | Command::Options { .. } | Command::Report { .. }
+            ) => self.run_annotate(c),
+            c @ (
+                Command::Plugins { .. } | Command::PluginEnable { .. } | Command::InstallPlugin { .. } |
+                Command::RemovePlugin { .. } | Command::SaveText { .. } | Command::Save { .. } |
+                Command::Open { .. } | Command::ExportGlb { .. } | Command::ExportStl { .. } |
+                Command::Animate { .. } | Command::Blueprint { .. } | Command::Levels { .. } |
+                Command::Timeline { .. } | Command::TimelineFrames { .. } | Command::VideoFrame { .. } |
+                Command::VideoFinish { .. } | Command::ImportDxf { .. } | Command::ImportDwg { .. } |
+                Command::ExportDwg { .. } | Command::Sheets { .. } | Command::ExportIfc { .. } |
+                Command::ExportDae { .. } | Command::ExportDxf { .. } | Command::ExportPdf { .. } |
+                Command::ImportObj { .. } | Command::ImportSkp { .. } | Command::ImportCloud { .. } |
+                Command::CloudData { .. } | Command::Cloud { .. } | Command::ImportIfc { .. } |
+                Command::Library { .. } | Command::InsertFile { .. } | Command::SaveToLibrary { .. } |
+                Command::LibraryAdd { .. } | Command::ImportFbx { .. } | Command::ExportObj { .. }
+            ) => self.run_files(c),
+            c @ (
+                Command::BeginBatch { .. } | Command::EndBatch { .. } | Command::Undo { .. } | Command::Redo { .. }
+            ) => self.run_session(c),
         }
     }
 }

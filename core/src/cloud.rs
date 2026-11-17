@@ -125,7 +125,7 @@ pub fn read(path: &str, bytes: &[u8], scale: f64, max_points: usize) -> Result<(
 /// A point the model can hold: finite and within the model's range (a value
 /// past f32 or past the range would be stored as infinity or break the scene).
 fn usable(p: DVec3) -> bool {
-    p.is_finite() && p.abs().max_element() <= crate::model::MAX_COORD
+    crate::model::sane3(p)
 }
 
 /// Points to a cloud: scaled, thinned to the budget, moved near the origin

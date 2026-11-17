@@ -222,7 +222,7 @@ impl Engine {
                 let x = DVec3::from(x).normalize_or_zero();
                 let y = DVec3::from(y);
                 let y = (y - x * y.dot(x)).normalize_or_zero();
-                if x == DVec3::ZERO || y == DVec3::ZERO || !o.iter().all(|v| v.is_finite()) {
+                if x == DVec3::ZERO || y == DVec3::ZERO || !crate::model::finite3(&o) {
                     bail!("the red and green directions need to be different");
                 }
                 m.axes = Some([o, x.to_array(), y.to_array()]);
