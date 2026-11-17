@@ -560,3 +560,33 @@ fn plugins_cannot_undo_or_redo_the_persons_steps_but_agents_keep_their_own() {
     let r = e.exec_json_as(&Caller::Mcp(Workspace::anywhere()), &json!({"cmd": "undo"}).to_string());
     assert_eq!(r["ok"], true, "{r}");
 }
+
+/// R5-BRN-004 measurement (run by hand: `cargo test --release --test round5 -- --ignored --nocapture`): a model of about a million
+/// entities, a few steps, another program's save, then one Undo.
+#[test]
+#[ignore]
+fn big_model_costs() {
+    let dir = scratch("big");
+    let doc = dir.join("live.sketchcraft");
+    let mut a = Live::open(doc.clone());
+    let t = std::time::Instant::now();
+    ok(&mut a, json!({"cmd": "terrain_grid", "at": [0, 0, 0], "width": 420, "depth": 420, "spacing": 1}));
+    println!("terrain: {} entities in {:?}", a.engine.model.entity_count(), t.elapsed());
+    for i in 0..8 {
+        ok(&mut a, json!({"cmd": "rect", "from": [1000.0 + i as f64 * 7.0, 0, 0], "to": [1004.0 + i as f64 * 7.0, 4, 0]}));
+    }
+    pause();
+    let mut b = Live::open(doc.clone());
+    ok(&mut b, json!({"cmd": "rect", "from": [-50, 0, 0], "to": [-46, 4, 0]}));
+    pause();
+    let t = std::time::Instant::now();
+    a.sync();
+    println!("reload with {} steps: {:?} (notice {:?})", a.engine.undo_depth(), t.elapsed(), a.notice);
+    let t = std::time::Instant::now();
+    ok(&mut a, json!({"cmd": "undo"}));
+    println!("first undo: {:?}", t.elapsed());
+    let t = std::time::Instant::now();
+    ok(&mut a, json!({"cmd": "undo"}));
+    println!("second undo: {:?}", t.elapsed());
+    std::fs::remove_dir_all(&dir).ok();
+}

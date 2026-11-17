@@ -14,7 +14,7 @@ use glam::DVec3;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// One scan.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Cloud {
     pub name: String,
     /// x, y, z per point (meters, model space)

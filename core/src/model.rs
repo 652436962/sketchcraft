@@ -18,14 +18,14 @@ pub type Id = u32;
 pub const WELD: f64 = 1e-6;
 const PLANAR: f64 = 1e-5;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Vertex {
     pub p: DVec3,
     #[serde(default)]
     pub group: Option<Id>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct Edge {
     pub a: Id,
     pub b: Id,
@@ -47,7 +47,7 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct Face {
     /// Counter-clockwise about the face normal.
     pub outer: Vec<Id>,
@@ -62,7 +62,7 @@ pub struct Face {
     pub hidden: bool,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct Group {
     pub name: String,
     #[serde(default)]
@@ -100,7 +100,7 @@ pub struct Definition {
     pub face_me: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Instance {
     pub def: Id,
     pub name: String,
@@ -169,7 +169,7 @@ pub struct View {
     pub section: Option<[f64; 6]>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Material {
     /// The color (for textures: the image's average color, used by renders).
     pub color: [f32; 3],
@@ -221,7 +221,7 @@ fn is_one(v: &f32) -> bool {
 /// An image material. Faces show it at `width` x `height` meters per tile,
 /// laid along each face, or, with `project`, projected along one direction so
 /// the picture runs across every face it's painted on.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Texture {
     /// a data: URL (PNG or JPEG)
     pub data: String,

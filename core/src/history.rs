@@ -136,12 +136,16 @@ impl Patch {
 
     /// Put `forward` (false: the step's "before") on top of `current`. Err names what stands in the way.
     pub fn apply(&self, current: &Model, forward: bool) -> Result<Model, String> {
-        let mut v = serde_json::to_value(current).map_err(|e| e.to_string())?;
+        // the small parts of the model go through JSON; the big maps (points, edges, faces...) are worked entry by entry
+        let mut v = serde_json::to_value(skeleton(current)).map_err(|e| e.to_string())?;
         let Some(obj) = v.as_object_mut() else { return Err("the model couldn't be read".into()) };
         let mut conflicts: Vec<String> = vec![];
+        // what the step left there (to be replaced) and what it should become
+        let pick = |before: &Option<Value>, after: &Option<Value>| if forward { (before.clone(), after.clone()) } else { (after.clone(), before.clone()) };
         for (name, change) in &self.parts {
-            // what the step left there (to be replaced) and what it should become
-            let pick = |before: &Option<Value>, after: &Option<Value>| if forward { (before.clone(), after.clone()) } else { (after.clone(), before.clone()) };
+            if TYPED.contains(&name.as_str()) {
+                continue;
+            }
             match change {
                 Change::Whole(b, a) => {
                     let (expect, to) = pick(b, a);
@@ -179,18 +183,155 @@ impl Patch {
                 }
             }
         }
+        let mut model: Model = serde_json::from_value(v).map_err(|e| format!("the result wasn't a model ({e})"))?;
+        model.vertices = current.vertices.clone();
+        model.edges = current.edges.clone();
+        model.faces = current.faces.clone();
+        model.groups = current.groups.clone();
+        model.materials = current.materials.clone();
+        model.definitions = current.definitions.clone();
+        model.instances = current.instances.clone();
+        model.clouds = current.clouds.clone();
+        for (name, change) in &self.parts {
+            let Change::Keys(keys) = change else { continue };
+            match name.as_str() {
+                "vertices" => apply_map(&mut model.vertices, name, keys, forward, &mut conflicts),
+                "edges" => apply_map(&mut model.edges, name, keys, forward, &mut conflicts),
+                "faces" => apply_map(&mut model.faces, name, keys, forward, &mut conflicts),
+                "groups" => apply_map(&mut model.groups, name, keys, forward, &mut conflicts),
+                "materials" => apply_map(&mut model.materials, name, keys, forward, &mut conflicts),
+                "definitions" => apply_map(&mut model.definitions, name, keys, forward, &mut conflicts),
+                "instances" => apply_map(&mut model.instances, name, keys, forward, &mut conflicts),
+                "clouds" => apply_map(&mut model.clouds, name, keys, forward, &mut conflicts),
+                _ => {}
+            }
+        }
         if !conflicts.is_empty() {
             return Err(conflicts_text(&conflicts));
         }
-        let model: Model = serde_json::from_value(v).map_err(|e| format!("the result wasn't a model ({e})"))?;
         model.check_sane().map_err(|e| e.to_string())?;
         // nothing may be left pointing at something the step took away (another program built on it): a point, an
         // edge, a group, a material... Problems the model already had before are not this step's doing.
-        let had = current.broken_refs(true);
-        if let Some(what) = model.broken_refs(true).into_iter().find(|w| !had.contains(w)) {
-            return Err(format!("{what} now depends on it"));
+        let now = model.broken_refs(true);
+        if !now.is_empty() {
+            let had = current.broken_refs(true);
+            if let Some(what) = now.into_iter().find(|w| !had.contains(w)) {
+                return Err(format!("{what} now depends on it"));
+            }
         }
         Ok(model)
+    }
+}
+
+/// The parts of a model that are big maps by id or name, compared and changed entry by entry on the typed model
+/// (not through JSON of the whole model, which on a million-entity model takes seconds).
+const TYPED: [&str; 8] = ["vertices", "edges", "faces", "groups", "materials", "definitions", "instances", "clouds"];
+
+/// The model with the big maps left empty (what is left is small, or at least rarely changes).
+fn skeleton(m: &Model) -> Model {
+    // every field is named, so a field added to the model is a compile error here until it is placed
+    let Model { next_id, vertices: _, edges: _, faces: _, groups: _, materials: _, active_group, tags, environment, tag_colors, definitions: _, instances: _, guides, photo_points, cages, photo_edges, photo_guides, views, timeline, annotations, units, classes, location, clouds: _, sections, active_section, axes, deadline: _ } = m;
+    Model {
+        next_id: *next_id,
+        vertices: Default::default(),
+        edges: Default::default(),
+        faces: Default::default(),
+        groups: Default::default(),
+        materials: Default::default(),
+        active_group: *active_group,
+        tags: tags.clone(),
+        environment: environment.clone(),
+        tag_colors: tag_colors.clone(),
+        definitions: Default::default(),
+        instances: Default::default(),
+        guides: guides.clone(),
+        photo_points: photo_points.clone(),
+        cages: cages.clone(),
+        photo_edges: photo_edges.clone(),
+        photo_guides: photo_guides.clone(),
+        views: views.clone(),
+        timeline: timeline.clone(),
+        annotations: annotations.clone(),
+        units: units.clone(),
+        classes: classes.clone(),
+        location: location.clone(),
+        clouds: Default::default(),
+        sections: sections.clone(),
+        active_section: *active_section,
+        axes: *axes,
+        deadline: None,
+    }
+}
+
+type Entry = (String, Option<Value>, Option<Value>);
+
+fn value_of<V: serde::Serialize>(v: &V) -> Option<Value> {
+    serde_json::to_value(v).ok().filter(|v| !v.is_null())
+}
+
+/// The entries that differ between two maps (compared as typed values; only those that differ are turned into JSON).
+fn diff_map<K: Ord + ToString, V: serde::Serialize>(b: &std::collections::BTreeMap<K, V>, a: &std::collections::BTreeMap<K, V>, same: impl Fn(&V, &V) -> bool) -> Vec<Entry> {
+    let mut out = vec![];
+    let (mut ib, mut ia) = (b.iter().peekable(), a.iter().peekable());
+    loop {
+        match (ib.peek(), ia.peek()) {
+            (None, None) => break,
+            (Some((kb, vb)), None) => {
+                out.push((kb.to_string(), value_of(*vb), None));
+                ib.next();
+            }
+            (None, Some((ka, va))) => {
+                out.push((ka.to_string(), None, value_of(*va)));
+                ia.next();
+            }
+            (Some((kb, vb)), Some((ka, va))) => match kb.cmp(ka) {
+                std::cmp::Ordering::Less => {
+                    out.push((kb.to_string(), value_of(*vb), None));
+                    ib.next();
+                }
+                std::cmp::Ordering::Greater => {
+                    out.push((ka.to_string(), None, value_of(*va)));
+                    ia.next();
+                }
+                std::cmp::Ordering::Equal => {
+                    if !same(vb, va) {
+                        let (vb, va) = (value_of(*vb), value_of(*va));
+                        if vb != va {
+                            out.push((kb.to_string(), vb, va));
+                        }
+                    }
+                    ib.next();
+                    ia.next();
+                }
+            },
+        }
+    }
+    out
+}
+
+/// Apply entry changes to a typed map: each entry must be as the step left it (give or take the last digit of a number).
+fn apply_map<K: Ord + std::str::FromStr, V: serde::Serialize + serde::de::DeserializeOwned>(map: &mut std::collections::BTreeMap<K, V>, part: &str, keys: &[Entry], forward: bool, conflicts: &mut Vec<String>) {
+    for (k, b, a) in keys {
+        let (expect, to) = if forward { (b, a) } else { (a, b) };
+        let Ok(key) = k.parse::<K>() else {
+            conflicts.push(format!("{part} {k}"));
+            continue;
+        };
+        if !close(&map.get(&key).and_then(value_of), expect) {
+            conflicts.push(format!("{part} {k}"));
+            continue;
+        }
+        match to {
+            Some(t) => match serde_json::from_value::<V>(t.clone()) {
+                Ok(v) => {
+                    map.insert(key, v);
+                }
+                Err(_) => conflicts.push(format!("{part} {k}")),
+            },
+            None => {
+                map.remove(&key);
+            }
+        }
     }
 }
 
@@ -293,7 +434,23 @@ fn clone_change(c: &Change) -> Change {
 
 /// The changes between two models, as a patch (empty when the step changed nothing in the model's content).
 pub fn patch_between(before: &Model, after: &Model) -> Patch {
-    let b = serde_json::to_value(before).unwrap_or(Value::Null);
-    let a = serde_json::to_value(after).unwrap_or(Value::Null);
-    Patch::between(&b, &a)
+    let b = serde_json::to_value(skeleton(before)).unwrap_or(Value::Null);
+    let a = serde_json::to_value(skeleton(after)).unwrap_or(Value::Null);
+    let mut p = Patch::between(&b, &a);
+    let mut add = |name: &str, keys: Vec<Entry>| {
+        if !keys.is_empty() {
+            p.bytes += keys.iter().map(|(k, b, a)| k.len() + size_of(b) + size_of(a) + 48).sum::<usize>();
+            p.parts.push((name.to_string(), Change::Keys(keys)));
+        }
+    };
+    add("vertices", diff_map(&before.vertices, &after.vertices, |x, y| x == y));
+    add("edges", diff_map(&before.edges, &after.edges, |x, y| x == y));
+    add("faces", diff_map(&before.faces, &after.faces, |x, y| x == y));
+    add("groups", diff_map(&before.groups, &after.groups, |x, y| x == y));
+    add("materials", diff_map(&before.materials, &after.materials, |x, y| x == y));
+    // a component's own model is shared between steps unless it was edited: the same Arc is the same content
+    add("definitions", diff_map(&before.definitions, &after.definitions, |x, y| std::sync::Arc::ptr_eq(&x.model, &y.model) && x.name == y.name && x.attrs == y.attrs && x.source == y.source && x.cuts == y.cuts && x.face_me == y.face_me));
+    add("instances", diff_map(&before.instances, &after.instances, |x, y| x == y));
+    add("clouds", diff_map(&before.clouds, &after.clouds, |x, y| x == y));
+    p
 }
