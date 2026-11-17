@@ -141,6 +141,12 @@ const mid = (await X({ cmd: 'info' })).faces;
 await X({ cmd: 'undo' });
 const after = (await X({ cmd: 'info' })).faces;
 check(mid === before + 6 && after === before, `a plugin run of 6 commands is one Undo (faces ${before} -> ${mid} -> ${after})`);
+// R5-MBK-003: a plugin can't undo or redo (it would be stepping back through the person's own steps)
+for (const c of ['undo', 'redo']) {
+  const pr = await X({ cmd: c }, true);
+  check(pr.ok === false, `a plugin's "${c}" is refused (${JSON.stringify(pr).slice(0, 80)})`);
+}
+check((await X({ cmd: 'info' })).faces === after, 'and the model is as it was');
 const sandbox = await p.evaluate(async () => (await import('/src/cspcheck.ts')).pluginSandboxHolds());
 check(sandbox.ok === true, `the window's policy blocks fetch, import() and eval inside workers (${JSON.stringify(sandbox)})`);
 check(problems.length === 0, `no page errors (${problems.join('; ').slice(0, 200)})`);

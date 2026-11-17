@@ -64,7 +64,7 @@ export function RestoreDialog({ run, onClose, onToast }: { run: Run; onClose: ()
           <span className="muted small">{d.toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>
         </span>
         <span className="restore-what">{it.label}</span>
-        <span className="restore-size muted small">{bytes(it.size)}</span>
+        <span className="restore-size muted small" title={it.size > 100 * 1024 * 1024 ? "A big file: restoring it takes a few seconds and a lot of memory." : undefined}>{bytes(it.size)}{it.size > 100 * 1024 * 1024 ? " (big)" : ""}</span>
         <span className="restore-acts">
           <button className="btn small" disabled={busy !== null} onClick={() => act(it, "replace")} title="Replace the model with this version. One undo step.">
             Restore
@@ -97,7 +97,7 @@ export function RestoreDialog({ run, onClose, onToast }: { run: Run; onClose: ()
             <ul className="restore-list">{aside.map(row)}</ul>
           </>
         )}
-        <p className="muted small">Restore replaces the model with that version as one step (⌘Z takes it back), and the model it replaces is kept in the backups first.</p>
+        <p className="muted small">Restore replaces the model with that version as one step (⌘Z takes it back), and the model it replaces is kept in the backups first. Files over 400 MB are too big to restore here.</p>
       </div>
     </div>
   );

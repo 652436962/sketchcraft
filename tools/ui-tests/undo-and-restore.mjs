@@ -60,6 +60,24 @@ await p.keyboard.press('Control+Shift+z');
 await wait(800);
 check(JSON.stringify(await lefts()) === '[0,10,20]', 'redo brings the person\'s rectangle back, theirs untouched');
 
+// R5-BRN-001: the same on ordinary (non-round) numbers: a rectangle at odd coordinates, turned by 33.3 degrees,
+// then another program saves; Ctrl+Z takes back the turn, Ctrl+Shift+Z does it again
+await X({ cmd: 'new' });
+const rr = await X({ cmd: 'rect', from: [5.123456789, 0.7071067811, 0], to: [9.456789012, 4.3217654321, 0] });
+await X({ cmd: 'rotate', ids: [rr.face], center: [1.5, 2.5, 0], axis: [0, 0, 1], angle: 33.3 });
+const turned = await lefts();
+await wait(1200);
+other([{ cmd: 'rect', from: [50, 0, 0], to: [54, 4, 0] }]);
+await wait(2200);
+check(JSON.stringify(await lefts()) === JSON.stringify([...turned, 50]), 'odd-number model: the page picked up the other program\'s rectangle');
+await p.locator('.viewport canvas').click({ position: { x: 5, y: 5 } }).catch(() => {});
+await p.keyboard.press('Control+z');
+await wait(800);
+check(JSON.stringify(await lefts()) === '[5,50]', `odd-number model: Ctrl+Z took back the turn only (${JSON.stringify(await lefts())})`);
+await p.keyboard.press('Control+Shift+z');
+await wait(800);
+check(JSON.stringify(await lefts()) === JSON.stringify([...turned, 50].sort((a, c) => a - c)), 'odd-number model: redo turns it again');
+
 // ---- Restore from backup ---------------------------------------------------------------
 await X({ cmd: 'new' });
 await wait(300);
