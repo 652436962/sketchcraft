@@ -178,6 +178,9 @@ pub struct Engine {
     /// the model was opened with more geometry than the limit allows: it can be looked at and
     /// cut down, but nothing that adds geometry runs and it can't be saved until it is under
     pub oversize: bool,
+    /// the model came from a file saved by a newer SketchCraft (see `format`): it can be looked at, but nothing changes it
+    /// and nothing is saved over its file, so an older program can never damage it. New, Open and Restore end it.
+    pub read_only: Option<crate::format::ReadOnly>,
     /// the last Undo (true) or Redo (false) that was refused because of another program's change, and left
     /// its step in the list: asking again skips that step
     refused: Option<bool>,
@@ -469,6 +472,7 @@ impl Engine {
         self.redo.clear();
         self.ctx = None;
         self.names.clear();
+        self.read_only = None;
         self.oversize = over;
         self.revision += 1;
         self.trim_undo();
@@ -573,6 +577,14 @@ impl Engine {
     /// or absurd number in the model changes nothing (and costs no undo step).
     pub fn exec(&mut self, cmd: Command) -> Value {
         let is_env = matches!(cmd, Command::Environment { .. });
+        // a model from a newer SketchCraft is only looked at: whatever would change it, or write it out as a model file, is refused
+        if let Some(ro) = &self.read_only {
+            if (cmd.mutates() || is_env || matches!(cmd, Command::Undo | Command::Redo | Command::BeginBatch | Command::Save { .. })) && !matches!(cmd, Command::New { .. } | Command::Open { .. }) {
+                return json!({"ok": false, "error": ro.refusal(), "read_only": true});
+            }
+        }
+        let was_read_only = self.read_only.clone();
+        let is_new = matches!(cmd, Command::New { .. });
         // opening a file replaces the model and the history with it: Undo must never
         // step back to a model that isn't the one on disk
         let is_open = matches!(cmd, Command::Open { .. });
@@ -609,6 +621,9 @@ impl Engine {
             }
             crate::safety::take_skipped();
             self.run(cmd).map(|mut v| {
+                if is_new {
+                    self.read_only = None;
+                }
                 v["ok"] = json!(true);
                 // pictures left out of a render, an import or a projection are said, never dropped silently
                 let skipped = crate::safety::take_skipped();
@@ -620,6 +635,7 @@ impl Engine {
         }));
         let restore = |e: &mut Engine, saved: Option<(Model, Option<Id>, HashMap<String, Id>, usize)>| {
             if let Some((model, ctx, names, depth)) = saved {
+                e.read_only = was_read_only.clone();
                 e.model = model;
                 e.ctx = ctx;
                 e.names = names;

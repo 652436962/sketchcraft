@@ -171,7 +171,7 @@ impl Live {
         // a file that holds exactly what memory holds (a touch, a sync tool, our own save seen late)
         // is not a change: the undo history stays
         if !at_start && !self.dirty {
-            if let (Ok(file), Ok(mem)) = (std::fs::read(&self.doc), serde_json::to_vec(&self.engine.model)) {
+            if let (Ok(file), Ok(mem)) = (std::fs::read(&self.doc), crate::format::to_vec(&self.engine.model)) {
                 if file == mem {
                     return true;
                 }
@@ -362,7 +362,7 @@ impl Live {
             }
             n += 1;
         };
-        let bytes = serde_json::to_vec(&self.engine.model).map_err(|e| e.to_string())?;
+        let bytes = crate::format::to_vec(&self.engine.model).map_err(|e| e.to_string())?;
         write_atomic(&path, &bytes).map_err(|e| e.to_string())?;
         self.index_side(&path);
         self.sticky = Some(path.clone());
@@ -478,7 +478,7 @@ impl Live {
         let had_batch = self.unsaved_batch;
         let changed = changed || (r["ok"] == true && self.unsaved_batch);
         self.unsaved_batch = false;
-        if changed && self.persist {
+        if changed && self.persist && self.engine.read_only.is_none() {
             // a change that drops a quarter of the model (or a destructive command, or a plugin run that did) keeps
             // the file as it was in Backups first. Forced backups are paced per origin (see `backup`).
             let size_after = size(&self.engine);
@@ -548,6 +548,10 @@ impl Live {
     }
 
     fn save_with(&mut self, force: Option<Force>) -> Result<(), String> {
+        // a model from a newer SketchCraft is only looked at: never written to the file (see `format`)
+        if let Some(ro) = &self.engine.read_only {
+            return Err(ro.refusal());
+        }
         if self.blocked {
             return Err("saving is off because the model file couldn't be read (see the notice)".into());
         }
@@ -558,7 +562,7 @@ impl Live {
             return Err(format!("the model is over the size limits ({} points, edges and faces, about {} MB): delete parts of it and saving resumes", self.engine.model.entity_count(), self.engine.model.size_estimate() >> 20));
         }
         self.engine.model.check_sane().map_err(|e| e.to_string())?;
-        let bytes = serde_json::to_vec(&self.engine.model).map_err(|e| e.to_string())?;
+        let bytes = crate::format::to_vec(&self.engine.model).map_err(|e| e.to_string())?;
         if let Some(dir) = self.doc.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
@@ -748,10 +752,14 @@ impl Live {
         let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::scene::build(&self.engine.model, self.engine.ctx)));
         let mut s = built.unwrap_or_else(|_| json!({"faces": [], "edges": [], "error": "SketchCraft couldn't draw this model (it holds something inconsistent). Restore from a backup (File > Restore from backup...) or open another file."}));
         s["doc"] = json!(self.doc);
+        s["read_only"] = json!(self.engine.read_only.as_ref().map(|r| r.reasons.clone()));
         // who made the step Undo (and Redo) would take back, so the buttons can say
         s["undo_origin"] = json!(self.engine.undo_origin());
         s["redo_origin"] = json!(self.engine.redo_origin());
-        if let (Some(n), Some(at)) = (&self.notice, self.notice_at) {
+        if self.engine.read_only.is_some() {
+            // stays for as long as the model is open this way
+            s["notice"] = json!(crate::format::NOTICE);
+        } else if let (Some(n), Some(at)) = (&self.notice, self.notice_at) {
             if SystemTime::now().duration_since(at).unwrap_or_default() < NOTICE_FOR || self.blocked || self.dirty || self.engine.oversize || self.sticky.as_ref().is_some_and(|p| p.exists()) {
                 s["notice"] = json!(n);
             }
@@ -862,7 +870,19 @@ impl Live {
             }
         }
         self.sync();
-        let model: crate::model::Model = match std::fs::read(&src).map_err(|e| e.to_string()).and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string())) {
+        // a model from a newer SketchCraft is only looked at: a restore would write over its file (the copy option keeps every byte)
+        if let Some(ro) = &self.engine.read_only {
+            return json!({"ok": false, "error": format!("{} \"Save a copy\" of the backup still works.", ro.refusal()), "read_only": true});
+        }
+        let bytes = match std::fs::read(&src) {
+            Ok(b) => b,
+            Err(e) => return json!({"ok": false, "error": format!("couldn't read it: {e}")}),
+        };
+        // and a backup from a newer SketchCraft would come back without what this version doesn't know
+        if let Some(ro) = crate::format::check(&bytes) {
+            return json!({"ok": false, "error": format!("That backup was saved by a newer SketchCraft ({}), so it can't be restored over your model by this version: update SketchCraft to restore it. \"Save a copy\" keeps it as it is.", ro.reasons.join("; ")), "read_only": true});
+        }
+        let model: crate::model::Model = match serde_json::from_slice(&bytes) {
             Ok(m) => m,
             Err(e) => return json!({"ok": false, "error": format!("that file isn't a model SketchCraft can read ({e})")}),
         };

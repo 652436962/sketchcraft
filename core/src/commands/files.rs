@@ -10,7 +10,7 @@ impl Engine {
             Command::Save { path } => {
                 // never write a model with NaN or absurd numbers: it couldn't be opened again
                 self.model.check_sane()?;
-                crate::safety::write_atomic(&path, serde_json::to_string(&self.model)?.as_bytes())?;
+                crate::safety::write_atomic(&path, crate::format::to_string(&self.model)?.as_bytes())?;
                 json!({"path": path})
             }
             Command::Open { path } => {
@@ -23,7 +23,11 @@ impl Engine {
                 if self.untrusted && len > MAX_OPEN_BYTES_UNTRUSTED {
                     bail!("{path} is {} MB; an agent or a plugin can open models up to {} MB (the person can open larger ones)", len >> 20, MAX_OPEN_BYTES_UNTRUSTED >> 20);
                 }
-                let mut opened: Model = serde_json::from_str(&std::fs::read_to_string(&path)?).map_err(|e| anyhow::anyhow!("{path} isn't a model SketchCraft can read: {e}"))?;
+                let text = std::fs::read_to_string(&path)?;
+                // the file's top level is looked at before the model is read: a newer file opens read-only (see `format`)
+                let read_only = crate::format::check(text.as_bytes());
+                let mut opened: Model = serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("{path} isn't a model SketchCraft can read: {e}"))?;
+                drop(text);
                 if let Some(what) = opened.broken_refs(false).first() {
                     bail!("{path} isn't a consistent model ({what} refers to something that isn't there)");
                 }
@@ -41,13 +45,14 @@ impl Engine {
                 opened.check_sane_with(false)?;
                 self.oversize = opened.over_limits();
                 self.model = opened;
+                self.read_only = read_only;
                 // which group was open for editing is a matter of the program that saved it, not of the model: a program
                 // that opens the file must not draw into someone else's open group (and tie its work to that group's undo)
                 self.model.active_group = None;
                 self.batch = None;
                 self.ctx = None;
                 self.names.clear();
-                json!({"path": path, "faces": self.model.faces.len()})
+                json!({"path": path, "faces": self.model.faces.len(), "read_only": self.read_only.as_ref().map(|r| r.reasons.clone())})
             }
             Command::ExportGlb { path } => json!({"path": path, "triangles": export::write_glb(&self.model, &path)?}),
             Command::ExportStl { path, scale } => json!({"path": path, "triangles": export::write_stl(&self.model, &path, scale)?}),

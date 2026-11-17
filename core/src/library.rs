@@ -82,7 +82,12 @@ pub fn load_file(path: &str) -> Result<Model> {
     let mut m = Model::default();
     match ext.as_str() {
         "sketchcraft" => {
-            m = serde_json::from_str(&std::fs::read_to_string(p)?).with_context(|| format!("{name} isn't a SketchCraft file"))?;
+            let text = std::fs::read_to_string(p)?;
+            // a part from a newer SketchCraft would come into the model without what this version doesn't know: not placed
+            if let Some(ro) = crate::format::check(text.as_bytes()) {
+                bail!("{name} was saved by a newer SketchCraft ({}), so it can't be placed here: update SketchCraft to use it", ro.reasons.join("; "));
+            }
+            m = serde_json::from_str(&text).with_context(|| format!("{name} isn't a SketchCraft file"))?;
             // a file from outside: the same checks as opening it (consistent, ids above every id in it)
             if let Some(what) = m.broken_refs(false).first() {
                 bail!("{name} isn't a consistent model ({what} refers to something that isn't there)");

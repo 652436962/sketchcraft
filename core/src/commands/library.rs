@@ -53,7 +53,7 @@ impl Engine {
                     bail!("that folder is the model's Backups or Plugins folder; the library never writes there");
                 }
                 let base = crate::library::safe(&name.unwrap_or_else(|| m.definitions[&component].name.clone()));
-                let bytes = serde_json::to_string(&model)?;
+                let bytes = crate::format::to_string(&model)?;
                 // a new file every time: never over an existing one (create_new also settles a race)
                 let mut k = 1;
                 let path = loop {

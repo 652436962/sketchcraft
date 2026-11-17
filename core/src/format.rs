@@ -1,0 +1,193 @@
+//! The file format guard: what a model file says about itself, and what this build can safely do with it.
+//!
+//! A `.sketchcraft` file is the JSON of a `Model`, plus a top-level `format` number. Unknown fields are ignored when a
+//! file is read, so a build that opens a file from a newer SketchCraft and saves it would silently throw away whatever
+//! it doesn't know. The guard looks at the file's top level BEFORE the model is read; a file this build can't fully
+//! understand opens read-only (see `Engine::read_only`): nothing is ever written back over it.
+//!
+//! - `format`: this build writes `FORMAT` (1). Files from before the guard have none, which means 1. A file with a higher
+//!   number is from a newer SketchCraft.
+//! - `needs`: an optional list of features a reader must understand. Anything not in `KNOWN_NEEDS` is unknown.
+//! - top-level keys: any key that isn't in `KNOWN_KEYS` is data this build would lose.
+
+use anyhow::Result;
+use serde::de::{IgnoredAny, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
+
+/// The format number this build writes, and the highest it reads for editing.
+pub const FORMAT: u64 = 1;
+
+/// Features (the `needs` list) this build understands. None yet; 0.3.8 adds "sheets".
+pub const KNOWN_NEEDS: &[&str] = &[];
+
+/// Every top-level key this build knows: the serialized fields of `Model` (kept in step by the test
+/// `known_keys_match_the_model_struct`, which reads model.rs) and the two the guard adds.
+pub const KNOWN_KEYS: &[&str] = &[
+    "format", "needs",
+    "next_id", "vertices", "edges", "faces", "groups", "materials", "active_group", "tags", "environment", "tag_colors", "definitions",
+    "instances", "guides", "photo_points", "cages", "photo_edges", "photo_guides", "views", "timeline", "annotations", "units", "classes",
+    "location", "clouds", "sections", "active_section", "axes",
+];
+
+/// What the person is told, as it appears in the app.
+pub const NOTICE: &str = "Saved by a newer SketchCraft \u{2014} update to edit. You can look, but changes won't be saved here.";
+
+/// Why a file opened read-only (one entry per reason), e.g. "its format is 2 (this version reads up to 1)".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadOnly {
+    pub reasons: Vec<String>,
+}
+
+impl ReadOnly {
+    /// The reply to a command that would change the model, or save it.
+    pub fn refusal(&self) -> String {
+        format!("This model was saved by a newer SketchCraft ({}), so it is open read-only: changes aren't made and nothing is written to its file. Update SketchCraft to edit it; \"new\" or \"open\" another model to carry on.", self.reasons.join("; "))
+    }
+}
+
+/// The top level of a file, read without building the whole tree: a model can be hundreds of megabytes.
+#[derive(Default)]
+struct Skim {
+    keys: Vec<String>,
+    format: Option<Value>,
+    needs: Option<Value>,
+}
+
+impl<'de> Deserialize<'de> for Skim {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = Skim;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a JSON object")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut m: A) -> std::result::Result<Skim, A::Error> {
+                let mut s = Skim::default();
+                while let Some(k) = m.next_key::<String>()? {
+                    match k.as_str() {
+                        "format" => s.format = Some(m.next_value()?),
+                        "needs" => s.needs = Some(m.next_value()?),
+                        _ => {
+                            m.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                    s.keys.push(k);
+                }
+                Ok(s)
+            }
+        }
+        d.deserialize_map(V)
+    }
+}
+
+/// Look at a file's top level. `None`: this build understands all of it (or it isn't JSON at all, which reading the
+/// model reports in its own words). `Some`: it opens read-only, and why.
+pub fn check(bytes: &[u8]) -> Option<ReadOnly> {
+    let skim: Skim = serde_json::from_slice(bytes).ok()?;
+    Some(ReadOnly { reasons: reasons(&skim) }).filter(|r| !r.reasons.is_empty())
+}
+
+fn reasons(s: &Skim) -> Vec<String> {
+    let mut why = vec![];
+    match &s.format {
+        None => {}
+        Some(Value::Number(n)) if n.as_u64().is_some_and(|f| f <= FORMAT) => {}
+        Some(Value::Number(n)) if n.as_u64().is_some() => why.push(format!("its format is {n}, and this version reads up to {FORMAT}")),
+        Some(_) => why.push("its format number isn't one this version knows".into()),
+    }
+    match &s.needs {
+        None => {}
+        Some(Value::Array(a)) => {
+            let unknown: Vec<String> = a.iter().map(|x| x.as_str().map(str::to_string).unwrap_or_else(|| x.to_string())).filter(|n| !KNOWN_NEEDS.contains(&n.as_str())).collect();
+            if !unknown.is_empty() {
+                why.push(format!("it needs {}, which this version doesn't have", unknown.join(", ")));
+            }
+        }
+        Some(_) => why.push("its list of needed features isn't one this version can read".into()),
+    }
+    let mut extra: Vec<&str> = s.keys.iter().map(String::as_str).filter(|k| !KNOWN_KEYS.contains(k)).collect();
+    extra.sort_unstable();
+    extra.dedup();
+    if !extra.is_empty() {
+        why.push(format!("it holds {} this version doesn't know", extra.iter().map(|k| format!("\"{k}\"")).collect::<Vec<_>>().join(", ")));
+    }
+    why
+}
+
+/// A model as a file: the model's own fields with `format` first.
+#[derive(Serialize)]
+struct Stamped<'a> {
+    format: u64,
+    #[serde(flatten)]
+    model: &'a crate::model::Model,
+}
+
+pub fn to_vec(m: &crate::model::Model) -> Result<Vec<u8>> {
+    Ok(serde_json::to_vec(&Stamped { format: FORMAT, model: m })?)
+}
+
+pub fn to_string(m: &crate::model::Model) -> Result<String> {
+    Ok(serde_json::to_string(&Stamped { format: FORMAT, model: m })?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The serialized field names of `Model`, read from its source: a field added there without a line in `KNOWN_KEYS`
+    /// would make every file this build writes look like a newer one to itself, and fail here first.
+    fn model_fields() -> Vec<String> {
+        let src = include_str!("model.rs");
+        let start = src.find("pub struct Model {").expect("Model struct");
+        let body = &src[start..];
+        let body = &body[..body.find("\n}\n").expect("end of Model")];
+        let mut out = vec![];
+        let mut skipped = false;
+        for line in body.lines().skip(1) {
+            let t = line.trim();
+            if t.starts_with("#[serde(skip)]") {
+                skipped = true;
+            } else if let Some(rest) = t.strip_prefix("pub ") {
+                if !skipped {
+                    out.push(rest.split(':').next().unwrap().trim().to_string());
+                }
+                skipped = false;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn known_keys_match_the_model_struct() {
+        let mut fields = model_fields();
+        assert!(fields.len() > 20, "couldn't read the Model fields: {fields:?}");
+        fields.extend(["format".to_string(), "needs".to_string()]);
+        fields.sort();
+        let mut known: Vec<String> = KNOWN_KEYS.iter().map(|s| s.to_string()).collect();
+        known.sort();
+        assert_eq!(fields, known, "format::KNOWN_KEYS and the fields of model::Model differ: update KNOWN_KEYS (and decide whether the new field needs a `needs` entry)");
+    }
+
+    #[test]
+    fn plain_and_old_files_are_fine() {
+        assert!(check(br#"{"next_id":1}"#).is_none());
+        assert!(check(br#"{"format":1,"next_id":1,"needs":[]}"#).is_none());
+        assert!(check(b"not json").is_none());
+        assert!(check(b"[1,2]").is_none());
+    }
+
+    #[test]
+    fn newer_files_are_read_only_with_reasons() {
+        let r = check(br#"{"format":2,"next_id":1}"#).unwrap();
+        assert!(r.reasons[0].contains("format is 2"), "{r:?}");
+        let r = check(br#"{"needs":["sheets"]}"#).unwrap();
+        assert!(r.reasons[0].contains("sheets"), "{r:?}");
+        let r = check(br#"{"sheets":{},"next_id":1}"#).unwrap();
+        assert!(r.reasons[0].contains("\"sheets\""), "{r:?}");
+        assert!(check(br#"{"format":"two"}"#).is_some());
+        assert!(check(br#"{"format":-1}"#).is_some());
+        assert!(check(br#"{"format":1.5}"#).is_some());
+        assert!(check(br#"{"needs":"sheets"}"#).is_some());
+    }
+}

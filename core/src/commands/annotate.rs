@@ -102,6 +102,7 @@ impl Engine {
                     "tags": &m.tags,
                     "views": m.views.iter().map(|v| &v.name).collect::<Vec<_>>(),
                     "bounds": b,
+                    "read_only": self.read_only.as_ref().map(|r| r.reasons.clone()),
                 })
             }
             Command::ProjectPhoto { view, ids, size } => {
