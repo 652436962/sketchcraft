@@ -7,12 +7,16 @@ use sketchcraft::Engine;
 use serde_json::{json, Value};
 
 fn triangle_skp() -> Vec<u8> {
+    triangle_skp_saved_by("{7.1.6087}")
+}
+
+fn triangle_skp_saved_by(version: &str) -> Vec<u8> {
     let mut w = W(Vec::new());
     w.0.extend([0xFF, 0xFE, 0xFF, 0x0E]);
     for u in "SketchUp Model".encode_utf16() {
         w.u16(u);
     }
-    w.ustr("{7.1.6087}");
+    w.ustr(version);
     w.0.extend([0u8; 64]);
     // definition #9's entities: [def + 1][0][count]
     let base = 11u32;
@@ -115,4 +119,17 @@ fn imports_a_sketchup_27_skp() {
     assert_eq!(faces.len(), 1, "the face inside the nested component draws");
     let min_x = faces[0].outer.iter().map(|p| p.x).fold(f64::MAX, f64::min);
     assert!((min_x - 10.0 * 0.0254).abs() < 1e-9, "placed by the instance transform: {min_x}");
+}
+
+/// Files from SketchUp 2013-2020 use the classic layout, not the 2021+ ZIP
+/// (issue #1: they were refused as "not a SketchUp 2013+ archive").
+#[test]
+fn a_2015_file_goes_to_the_classic_reader() {
+    use base64::Engine as _;
+    let mut e = Engine::new();
+    let data = base64::engine::general_purpose::STANDARD.encode(triangle_skp_saved_by("{15.0.0}"));
+    let r = run(&mut e, json!({"cmd":"import_skp","data":data}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["version"], "{15.0.0}");
+    assert_eq!(e.model.world_faces().len(), 1);
 }

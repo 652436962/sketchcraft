@@ -659,7 +659,9 @@ pub fn parse(d: &[u8]) -> Result<SkpFile> {
     let mut r = Reader { d, p: 0x20, counter: 0, classes: HashMap::new(), names: HashMap::new(), objects: HashMap::new(), depth: 0 };
     file.version = r.cstring().unwrap_or_default();
     let major: u32 = file.version.trim_start_matches('{').split('.').next().and_then(|v| v.parse().ok()).unwrap_or(0);
-    if major >= 13 || crate::skp_vff::zip_start(d).is_some() {
+    // 2021 and later wrap the model in a ZIP; up to 2020 it is the classic
+    // binary layout this reader handles (checked on 2013-2016 files)
+    if crate::skp_vff::zip_start(d).is_some() {
         return crate::skp_vff::parse(d, file.version);
     }
 
@@ -771,6 +773,9 @@ pub fn parse(d: &[u8]) -> Result<SkpFile> {
         i += 1;
     }
     if file.definitions.is_empty() && file.roots.is_empty() {
+        if (17..21).contains(&major) {
+            bail!("SketchUp 2017-2020 files can't be read yet; in SketchUp, File > Save As a 2021 or later version (or 2016 or earlier), then import that");
+        }
         bail!("no geometry found in this SketchUp file");
     }
     Ok(file)
