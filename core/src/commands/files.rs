@@ -1,5 +1,5 @@
-//! Files in and out: save/open, exports, imports, the library, plugins, animation and video.
-//! (Arms of `Engine::run`; each runs on the model being edited: the open component's definition inside `edit`.)
+//! Files in and out: save and open, the exports and the importers.
+//! Arms of `Engine::run`; each works on the model being edited (inside `edit`, the open component's definition).
 
 use super::*;
 
@@ -7,25 +7,6 @@ impl Engine {
     pub(super) fn run_files(&mut self, cmd: Command) -> Result<Value> {
         let m: &mut Model = active_model!(self);
         Ok(match cmd {
-            Command::Plugins => crate::plugins::list(),
-            Command::PluginEnable { id, on } => crate::plugins::enable(&id, on)?,
-            Command::InstallPlugin { path, data, name, preview, replace } => {
-                let name = name.or_else(|| path.clone());
-                let bytes = match (path, data) {
-                    (Some(p), _) => std::fs::read(&p)?,
-                    (None, Some(d)) => {
-                        use base64::Engine as _;
-                        base64::engine::general_purpose::STANDARD.decode(d.trim().trim_start_matches("data:application/zip;base64,"))?
-                    }
-                    _ => bail!("install_plugin needs a path or data"),
-                };
-                crate::plugins::install(&bytes, name.as_deref(), &crate::plugins::InstallOpts { preview, replace })?
-            }
-            Command::RemovePlugin { id } => crate::plugins::remove(&id)?,
-            Command::SaveText { path, text } => {
-                crate::safety::write_atomic(&path, text.as_bytes())?;
-                json!({"path": path})
-            }
             Command::Save { path } => {
                 // never write a model with NaN or absurd numbers: it couldn't be opened again
                 self.model.check_sane()?;
@@ -63,70 +44,6 @@ impl Engine {
             }
             Command::ExportGlb { path } => json!({"path": path, "triangles": export::write_glb(&self.model, &path)?}),
             Command::ExportStl { path, scale } => json!({"path": path, "triangles": export::write_stl(&self.model, &path, scale)?}),
-            Command::Animate { path, fps, transition, delay, views, turntable, timeline, opts } => {
-                let fps = fps.clamp(1.0, 60.0);
-                if timeline {
-                    let model = &self.model;
-                    let fs = crate::timeline::frames(model, &model.timeline, fps, &|d, t| timeline_sun(model, d, t))?;
-                    if fs.is_empty() {
-                        bail!("the timeline is empty: add a clip first");
-                    }
-                    return Ok(json!({"path": path, "frames": crate::animate::animate_cams(model, &path, &crate::timeline::cameras(&fs), fps, &opts)?}));
-                }
-                let a = crate::animate::Anim { fps, transition, delay, views, turntable };
-                json!({"path": path, "frames": crate::animate::animate(&self.model, &path, &a, &opts)?})
-            }
-            Command::Blueprint { path, sheet, project, notes } => {
-                let project = project.unwrap_or_else(|| std::path::Path::new(&path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Project".into()));
-                let building = crate::environment::without(&self.model);
-                json!({"path": path, "pages": crate::layout::blueprint(&building, &path, &sheet, &project, &notes)?, "levels": crate::layout::floor_levels(&building)})
-            }
-            Command::Levels => json!({"levels": crate::layout::floor_levels(&crate::environment::without(&self.model))}),
-            Command::Timeline { clips } => {
-                m.timeline = crate::timeline::Timeline { clips };
-                // check it now, so a bad clip is caught when it's made
-                let model = &*m;
-                let n = crate::timeline::frames(model, &model.timeline, 10.0, &|d, t| timeline_sun(model, d, t))?.len();
-                json!({"clips": m.timeline.clips.len(), "seconds": m.timeline.clips.iter().map(|c| c.seconds).sum::<f64>(), "frames_at_10fps": n})
-            }
-            Command::TimelineFrames { fps } => {
-                let fps = fps.clamp(1.0, 60.0);
-                let model = &self.model;
-                let fs = crate::timeline::frames(model, &model.timeline, fps, &|d, t| timeline_sun(model, d, t))?;
-                json!({"fps": fps, "frames": fs})
-            }
-            Command::VideoFrame { session, index, data } => {
-                use base64::Engine as _;
-                if index >= crate::timeline::MAX_FRAMES || data.len() > 40 << 20 {
-                    bail!("that frame is out of range");
-                }
-                let dir = video_dir(&session)?;
-                std::fs::create_dir_all(&dir)?;
-                let (head, b64) = data.split_once(',').unwrap_or(("", &data));
-                let ext = if head.contains("jpeg") { "jpg" } else { "png" };
-                let bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim())?;
-                std::fs::write(dir.join(format!("frame_{index:05}.{ext}")), bytes)?;
-                json!({"index": index})
-            }
-            Command::VideoFinish { session, path, fps } => {
-                let dir = video_dir(&session)?;
-                let ext = if dir.join("frame_00000.jpg").exists() { "jpg" } else { "png" };
-                let out = std::process::Command::new("ffmpeg")
-                    .args(["-y", "-loglevel", "error", "-framerate"])
-                    .arg(format!("{}", fps.clamp(1.0, 60.0)))
-                    .arg("-i")
-                    .arg(dir.join(format!("frame_%05d.{ext}")))
-                    .args(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"])
-                    .arg(crate::safety::path_arg(&path))
-                    .output();
-                let frames = std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0);
-                std::fs::remove_dir_all(&dir).ok();
-                match out {
-                    Ok(o) if o.status.success() => json!({"path": path, "frames": frames}),
-                    Ok(o) => bail!("ffmpeg couldn't make the video: {}", String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("")),
-                    Err(_) => bail!("making a video needs ffmpeg installed (brew install ffmpeg)"),
-                }
-            }
             Command::ImportDxf { path, text, units, at, name } => {
                 let text = match (text, &path) {
                     (Some(t), _) => t,
@@ -156,10 +73,6 @@ impl Engine {
                 let dxf = tmp.join(format!("{stem}.dxf"));
                 let r = crate::export2::write_dxf(&self.model, dxf.to_str().unwrap()).and_then(|n| crate::dwg::from_dxf(&dxf, std::path::Path::new(&path)).map(|_| n));
                 json!({"path": path, "triangles": r?})
-            }
-            Command::Sheets { path, sheet, project, pages, blueprint, notes } => {
-                let project = project.unwrap_or_else(|| std::path::Path::new(&path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Project".into()));
-                json!({"path": path, "pages": crate::layout::write_sheets(&self.model, &path, &sheet, &project, pages, blueprint, &notes)?})
             }
             Command::ExportIfc { path, project } => {
                 let project = project.unwrap_or_else(|| std::path::Path::new(&path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Project".into()));
@@ -241,54 +154,6 @@ impl Engine {
             Command::ImportIfc { path } => {
                 let r = crate::ifcin::import(m, std::path::Path::new(&path))?;
                 json!({"group": r.group, "elements": r.elements, "faces": r.faces, "storeys": r.storeys, "schema": r.schema})
-            }
-            Command::Library { dir } => {
-                let d = dir.map(std::path::PathBuf::from).unwrap_or_else(crate::library::default_dir);
-                std::fs::create_dir_all(&d).ok();
-                json!({"dir": d.to_string_lossy(), "entries": crate::library::list(&d)})
-            }
-            Command::InsertFile { path, at, rotate } => {
-                let def = crate::library::definition_for(m, &path)?;
-                json!({"instance": m.place(def, v3(at), rotate, None)?, "component": def})
-            }
-            Command::SaveToLibrary { component, name, collection, dir } => {
-                let model = crate::library::standalone(m, component)?;
-                let d = dir.map(std::path::PathBuf::from).unwrap_or_else(crate::library::default_dir);
-                let folder = match collection.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
-                    Some(c) => {
-                        let c = crate::library::safe(c);
-                        if crate::library::reserved(&c) {
-                            bail!("{c:?} is a reserved folder name (Backups and Plugins are not library collections)");
-                        }
-                        d.join(c)
-                    }
-                    None => d.clone(),
-                };
-                std::fs::create_dir_all(&folder)?;
-                if crate::library::is_protected(&folder, &d) {
-                    bail!("that folder is the model's Backups or Plugins folder; the library never writes there");
-                }
-                let base = crate::library::safe(&name.unwrap_or_else(|| m.definitions[&component].name.clone()));
-                let bytes = serde_json::to_string(&model)?;
-                // a new file every time: never over an existing one (create_new also settles a race)
-                let mut k = 1;
-                let path = loop {
-                    let path = folder.join(if k == 1 { format!("{base}.sketchcraft") } else { format!("{base} {k}.sketchcraft") });
-                    match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-                        Ok(mut f) => {
-                            use std::io::Write;
-                            f.write_all(bytes.as_bytes())?;
-                            break path;
-                        }
-                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && k < 10_000 => k += 1,
-                        Err(e) => return Err(e.into()),
-                    }
-                };
-                json!({"path": path.to_string_lossy()})
-            }
-            Command::LibraryAdd { paths, collection, dir } => {
-                let d = dir.map(std::path::PathBuf::from).unwrap_or_else(crate::library::default_dir);
-                json!({"added": crate::library::add_files(&d, &paths, collection.as_deref().unwrap_or(""), true)?})
             }
             Command::ImportFbx { path, data, at, name } => {
                 use base64::Engine as _;

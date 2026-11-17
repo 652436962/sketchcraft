@@ -31,11 +31,18 @@ macro_rules! active_model {
 }
 
 mod annotate;
+mod build;
 mod draw;
 mod files;
-mod look;
+mod groups;
+mod library;
+mod media;
+mod paint;
+mod rendering;
+mod sections;
 mod session;
-mod structure;
+mod shape;
+mod tags;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -1761,38 +1768,49 @@ impl Engine {
                 Command::New { .. } | Command::Rect { .. } | Command::Polygon { .. } | Command::Line { .. } |
                 Command::Circle { .. } | Command::Arc { .. } | Command::Offset { .. } | Command::FollowMe { .. } |
                 Command::Pushpull { .. } | Command::Move { .. } | Command::Rotate { .. } | Command::Scale { .. } |
-                Command::Duplicate { .. } | Command::Array { .. } | Command::Delete { .. } |
-                Command::Reverse { .. } | Command::RaiseWalls { .. } | Command::Weld { .. } |
-                Command::ExplodeCurve { .. } | Command::OrientFaces { .. } | Command::Text3d { .. } |
-                Command::Subd { .. } | Command::CageEdit { .. } | Command::Subdivide { .. } |
-                Command::DoorSwing { .. } | Command::TerrainFromContours { .. } | Command::TerrainGrid { .. } |
-                Command::Smoove { .. } | Command::Stamp { .. } | Command::Drape { .. } | Command::FlipEdge { .. } |
-                Command::Bevel { .. } | Command::Divide { .. } | Command::Slice { .. } | Command::Intersect { .. } |
-                Command::Flip { .. } | Command::Solid { .. } | Command::Volume { .. } | Command::Wall { .. } |
-                Command::Stairs { .. } | Command::Roof { .. } | Command::Column { .. } | Command::Insert { .. } |
-                Command::Assets { .. }
+                Command::Duplicate { .. } | Command::Array { .. } | Command::Delete { .. } | Command::Reverse { .. }
             ) => self.run_draw(c),
+            c @ (
+                Command::Weld { .. } | Command::ExplodeCurve { .. } | Command::OrientFaces { .. } |
+                Command::Text3d { .. } | Command::Subd { .. } | Command::CageEdit { .. } |
+                Command::Subdivide { .. } | Command::FlipEdge { .. } | Command::Bevel { .. } |
+                Command::Divide { .. } | Command::Slice { .. } | Command::Intersect { .. } | Command::Flip { .. } |
+                Command::Solid { .. } | Command::Volume { .. }
+            ) => self.run_shape(c),
+            c @ (
+                Command::RaiseWalls { .. } | Command::DoorSwing { .. } | Command::TerrainFromContours { .. } |
+                Command::TerrainGrid { .. } | Command::Smoove { .. } | Command::Stamp { .. } |
+                Command::Drape { .. } | Command::Wall { .. } | Command::Stairs { .. } | Command::Roof { .. } |
+                Command::Column { .. } | Command::Insert { .. } | Command::Assets { .. }
+            ) => self.run_build(c),
             c @ (
                 Command::BeginGroup { .. } | Command::EndGroup { .. } | Command::Group { .. } |
                 Command::Faces { .. } | Command::Pick { .. } | Command::Copy { .. } | Command::MakeComponent { .. } |
                 Command::Place { .. } | Command::ComponentFaceMe { .. } | Command::ComponentCuts { .. } |
                 Command::Edit { .. } | Command::Close { .. } | Command::Explode { .. } | Command::Components { .. } |
+                Command::Ungroup { .. } | Command::MakeUnique { .. } | Command::Connected { .. } |
+                Command::SameAs { .. } | Command::Resize { .. } | Command::SetAxes { .. }
+            ) => self.run_groups(c),
+            c @ (
                 Command::Hide { .. } | Command::Unhide { .. } | Command::Tag { .. } | Command::TagVisible { .. } |
                 Command::TagColor { .. } | Command::RenameTag { .. } | Command::SetParent { .. } |
-                Command::Ungroup { .. } | Command::Lock { .. } | Command::Soften { .. } | Command::Rename { .. } |
-                Command::MakeUnique { .. } | Command::Opacity { .. } | Command::Connected { .. } |
-                Command::SameAs { .. } | Command::Resize { .. } | Command::SetAxes { .. } |
+                Command::Lock { .. } | Command::Soften { .. } | Command::Rename { .. } | Command::Opacity { .. } |
                 Command::SetAttrs { .. } | Command::Classify { .. } | Command::Reveal { .. }
-            ) => self.run_structure(c),
+            ) => self.run_tags(c),
             c @ (
-                Command::Paint { .. } | Command::Texture { .. } | Command::Photoreal { .. } |
-                Command::Render { .. } | Command::Environment { .. } | Command::Sun { .. } |
-                Command::Section { .. } | Command::SectionPlane { .. } | Command::SectionEdit { .. } |
-                Command::SectionOff { .. } | Command::AddLocation { .. } | Command::Thumbnail { .. } |
-                Command::Purge { .. } | Command::DeleteMaterial { .. } | Command::PurgeMaterials { .. } |
-                Command::Skins { .. } | Command::SaveSkin { .. } | Command::Material { .. } |
+                Command::Paint { .. } | Command::Texture { .. } | Command::Purge { .. } |
+                Command::DeleteMaterial { .. } | Command::PurgeMaterials { .. } | Command::Skins { .. } |
+                Command::SaveSkin { .. } | Command::Material { .. }
+            ) => self.run_paint(c),
+            c @ (
+                Command::Photoreal { .. } | Command::Render { .. } | Command::Environment { .. } |
+                Command::Sun { .. } | Command::AddLocation { .. } | Command::Thumbnail { .. } |
                 Command::SaveImage { .. }
-            ) => self.run_look(c),
+            ) => self.run_rendering(c),
+            c @ (
+                Command::Section { .. } | Command::SectionPlane { .. } | Command::SectionEdit { .. } |
+                Command::SectionOff { .. }
+            ) => self.run_sections(c),
             c @ (
                 Command::Guide { .. } | Command::Dimension { .. } | Command::Text { .. } | Command::Units { .. } |
                 Command::ClearGuides { .. } | Command::ShowView { .. } | Command::SaveView { .. } |
@@ -1801,19 +1819,23 @@ impl Engine {
                 Command::Finish { .. } | Command::Options { .. } | Command::Report { .. }
             ) => self.run_annotate(c),
             c @ (
+                Command::Save { .. } | Command::Open { .. } | Command::ExportGlb { .. } | Command::ExportStl { .. } |
+                Command::ImportDxf { .. } | Command::ImportDwg { .. } | Command::ExportDwg { .. } |
+                Command::ExportIfc { .. } | Command::ExportDae { .. } | Command::ExportDxf { .. } |
+                Command::ExportPdf { .. } | Command::ImportObj { .. } | Command::ImportSkp { .. } |
+                Command::ImportCloud { .. } | Command::CloudData { .. } | Command::Cloud { .. } |
+                Command::ImportIfc { .. } | Command::ImportFbx { .. } | Command::ExportObj { .. }
+            ) => self.run_files(c),
+            c @ (
                 Command::Plugins { .. } | Command::PluginEnable { .. } | Command::InstallPlugin { .. } |
-                Command::RemovePlugin { .. } | Command::SaveText { .. } | Command::Save { .. } |
-                Command::Open { .. } | Command::ExportGlb { .. } | Command::ExportStl { .. } |
+                Command::RemovePlugin { .. } | Command::SaveText { .. } | Command::Library { .. } |
+                Command::InsertFile { .. } | Command::SaveToLibrary { .. } | Command::LibraryAdd { .. }
+            ) => self.run_library(c),
+            c @ (
                 Command::Animate { .. } | Command::Blueprint { .. } | Command::Levels { .. } |
                 Command::Timeline { .. } | Command::TimelineFrames { .. } | Command::VideoFrame { .. } |
-                Command::VideoFinish { .. } | Command::ImportDxf { .. } | Command::ImportDwg { .. } |
-                Command::ExportDwg { .. } | Command::Sheets { .. } | Command::ExportIfc { .. } |
-                Command::ExportDae { .. } | Command::ExportDxf { .. } | Command::ExportPdf { .. } |
-                Command::ImportObj { .. } | Command::ImportSkp { .. } | Command::ImportCloud { .. } |
-                Command::CloudData { .. } | Command::Cloud { .. } | Command::ImportIfc { .. } |
-                Command::Library { .. } | Command::InsertFile { .. } | Command::SaveToLibrary { .. } |
-                Command::LibraryAdd { .. } | Command::ImportFbx { .. } | Command::ExportObj { .. }
-            ) => self.run_files(c),
+                Command::VideoFinish { .. } | Command::Sheets { .. }
+            ) => self.run_media(c),
             c @ (
                 Command::BeginBatch { .. } | Command::EndBatch { .. } | Command::Undo { .. } | Command::Redo { .. }
             ) => self.run_session(c),

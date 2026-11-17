@@ -1,5 +1,5 @@
 //! Batches and undo/redo.
-//! (Arms of `Engine::run`; each runs on the model being edited: the open component's definition inside `edit`.)
+//! Arms of `Engine::run`; each works on the model being edited (inside `edit`, the open component's definition).
 
 use super::*;
 
