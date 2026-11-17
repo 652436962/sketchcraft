@@ -102,15 +102,28 @@ fn weight(m: &crate::model::Model) -> usize {
     m.faces.len() + m.instances.len() + m.groups.len() + m.definitions.values().map(|d| weight(&d.model)).sum::<usize>()
 }
 
-/// True when this process is a Rust test program: a unit test (`cfg!(test)`), a program cargo put in
-/// a `deps/` folder (every test program is built there, whatever the target folder is called: a
-/// custom `CARGO_TARGET_DIR` works), or one that sets `SKETCHCRAFT_TESTING`. The shipped programs
-/// run from a `release/` folder or an install folder, never from `deps/`.
+/// True when this process is a Rust test program. Positive signals first: a unit test
+/// (`cfg!(test)`) or `SKETCHCRAFT_TESTING`. Cargo gives an integration-test program no run-time
+/// environment variable that `cargo run` lacks (`CARGO_TARGET_TMPDIR` is compile-time only), so the
+/// rest is the program's folder layout, in both layouts cargo has used: test programs sit in a
+/// `deps/` folder, or (Rust 1.100 and later) in `build/<package>/<hash>/out/`. The shipped programs
+/// run from a `release/` folder or an install folder, never from either layout.
 pub fn running_as_cargo_test() -> bool {
-    if cfg!(test) || std::env::var_os("SKETCHCRAFT_TESTING").is_some_and(|v| !v.is_empty() && v != "0") {
+    let on = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty() && v != "0");
+    if cfg!(test) || on("SKETCHCRAFT_TESTING") {
         return true;
     }
-    std::env::current_exe().ok().is_some_and(|p| p.parent().and_then(|d| d.file_name()).is_some_and(|n| n == "deps"))
+    std::env::current_exe().ok().is_some_and(|p| exe_in_test_layout(&p))
+}
+
+pub fn exe_in_test_layout(p: &Path) -> bool {
+    let dirs: Vec<&std::ffi::OsStr> = p.parent().map(|d| d.components().map(|c| c.as_os_str()).collect()).unwrap_or_default();
+    let n = dirs.len();
+    if n >= 1 && dirs[n - 1] == "deps" {
+        return true;
+    }
+    // .../build/<package>/<hash>/out
+    n >= 4 && dirs[n - 1] == "out" && dirs[n - 4] == "build"
 }
 
 /// Where the person's model folder is. `SKETCHCRAFT_DOC` always wins (and scopes every folder
