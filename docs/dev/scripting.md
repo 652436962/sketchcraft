@@ -65,5 +65,5 @@ under a narrower allowlist (see [Security](../SECURITY.md)); every caller's numb
 | Backups (the app only: not plugins or agents) | `list_backups`, `restore_backup` (`kind`: `backup`/`unsaved`/`damaged`, `name`, `mode`: `replace` or `copy`) |
 
 The engine's own list (and each command's fields) lives in
-[core/src/commands.rs](../../core/src/commands.rs): every command is one
+[core/src/commands/command.rs](../../core/src/commands/command.rs): every command is one
 variant of the `Command` enum, with a doc comment.
