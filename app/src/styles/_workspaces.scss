@@ -86,6 +86,8 @@
 .app.dock-left .coach {
   left: auto;
   right: 14px;
+  /* the gizmo (104px) sits in the corner under the view bar; the hint card goes under it */
+  top: calc(var(--below-views, 66px) + 112px);
 }
 
 .ws-switch {
@@ -124,7 +126,9 @@
   transform: translateX(-50%);
   z-index: 5;
   @include row(4px);
-  /* clear of the measurement box on the right; wraps rather than hides */
+  /* clear of the measurement box on the right; wraps rather than hides. Its own width up to that
+     (an absolutely placed box at left: 50% would otherwise get at most half the view to lay out in) */
+  width: max-content;
   max-width: calc(100% - 470px);
   flex-wrap: wrap;
   justify-content: center;
@@ -138,6 +142,18 @@
 
 .app.dock-left .ws-strip {
   bottom: 18px;
+  /* between the tool bar (left) and the Value box (right), centered there, never over either */
+  left: 170px;
+  right: 230px;
+  width: fit-content;
+  margin: 0 auto;
+  max-width: calc(100% - 400px);
+  transform: none;
+}
+
+/* the view bar stays clear of the tool bar down the left */
+.app.dock-left .views {
+  max-width: calc(100% - 170px);
 }
 
 .ws-strip .lbl {

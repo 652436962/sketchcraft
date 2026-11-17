@@ -5,8 +5,8 @@
 
 .coach {
   position: absolute;
-  top: 64px;
-  /* under the view bar */
+  /* under the view bar (gizmo.tsx measures where that ends: it wraps at narrow widths) */
+  top: calc(var(--below-views, 66px) - 2px);
   left: 14px;
   z-index: 6;
   max-width: 280px;

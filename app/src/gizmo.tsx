@@ -1,7 +1,7 @@
 // The axis gizmo in the model's top-right corner: red X, green Y and blue Z,
 // turning with the camera. Drag it to orbit; click an axis to look down it
 // (click the one facing you again to look from the other side).
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as THREE from "three";
 
 const SIZE = 104;
@@ -36,6 +36,27 @@ export function AxisGizmo({
   const drag = useRef<{ x: number; y: number; moved: boolean; id: number } | null>(null);
   // where each axis end is on screen, refreshed every frame
   const ends = useRef<Record<string, { x: number; y: number; z: number }>>({});
+
+  // Sit just under the view bar wherever it floats (its height changes as it wraps at narrow
+  // widths, and each layout puts it somewhere else): publish that line as --below-views on the
+  // model view, for the gizmo and for whatever stacks beneath it. A docked (Classic) view bar
+  // is outside the model view, so it's just the margin.
+  useLayoutEffect(() => {
+    const host = svg.current?.parentElement;
+    const views = host?.parentElement?.querySelector<HTMLElement>(":scope > .views");
+    if (!host) return;
+    const place = () => {
+      const h = host.getBoundingClientRect();
+      const v = views?.getBoundingClientRect();
+      const floats = !!v && v.bottom > h.top && v.top < h.bottom;
+      host.style.setProperty("--below-views", `${Math.round(floats ? Math.max(10, v!.bottom - h.top + 8) : 10)}px`);
+    };
+    place();
+    const ro = new ResizeObserver(place);
+    ro.observe(host);
+    if (views) ro.observe(views);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     let raf = 0;

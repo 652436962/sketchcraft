@@ -5,7 +5,8 @@
 
 .axis-gizmo {
   position: absolute;
-  top: 66px;
+  /* just under the view bar: gizmo.tsx measures it (66px before it has) */
+  top: var(--below-views, 66px);
   right: 14px;
   z-index: 6;
   cursor: grab;
@@ -39,8 +40,4 @@
     pointer-events: none;
     font-family: inherit;
   }
-}
-
-.app.dock-left .axis-gizmo {
-  top: 14px;
 }
