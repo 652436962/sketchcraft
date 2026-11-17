@@ -2,7 +2,7 @@
 // floating layout, and the workspace with its customizations.
 import { useEffect, useState } from "react";
 import { applySkin, readSkin, SKINS, store, type Skin } from "./skins";
-import { WORKSPACES, withEdits, type WorkspaceEdits, type WorkspaceId } from "./workspace";
+import { cleanEdits, WORKSPACES, withEdits, type WorkspaceEdits, type WorkspaceId } from "./workspace";
 import type { Styles, Tool } from "./Viewport";
 
 /** the skin you wore last time (a built-in by id, or a saved one by its data) */
@@ -21,7 +21,7 @@ function rememberedSkin(): Skin {
 }
 function rememberedEdits(): Partial<Record<WorkspaceId, WorkspaceEdits>> {
   try {
-    return JSON.parse(store.get("sketchcraft.workspaceEdits") ?? "{}");
+    return cleanEdits(JSON.parse(store.get("sketchcraft.workspaceEdits") ?? "{}"));
   } catch {
     return {};
   }

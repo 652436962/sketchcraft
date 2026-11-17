@@ -119,6 +119,25 @@ export const WORKSPACES: Workspace[] = [
 /** your changes to a workspace (only what differs) */
 export type WorkspaceEdits = Partial<Pick<Workspace, "tools" | "showLeft" | "showRight" | "dock" | "leftTab">>;
 
+/** Edits read back from storage: only well-formed parts are kept (a bad value must never stop the app starting). */
+export function cleanEdits(raw: unknown): Partial<Record<WorkspaceId, WorkspaceEdits>> {
+  const out: Partial<Record<WorkspaceId, WorkspaceEdits>> = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const w of WORKSPACES) {
+    const e = (raw as Record<string, unknown>)[w.id];
+    if (!e || typeof e !== "object" || Array.isArray(e)) continue;
+    const r = e as Record<string, unknown>;
+    const c: WorkspaceEdits = {};
+    if (Array.isArray(r.tools) && r.tools.length <= 40 && r.tools.every((g) => Array.isArray(g) && g.length <= 80 && g.every((t) => typeof t === "string" && Object.hasOwn(TOOL_INFO, t)))) c.tools = r.tools as Tool[][];
+    if (typeof r.showLeft === "boolean") c.showLeft = r.showLeft;
+    if (typeof r.showRight === "boolean") c.showRight = r.showRight;
+    if (r.dock === "bottom" || r.dock === "left" || r.dock === "classic") c.dock = r.dock;
+    if (r.leftTab === "outliner" || r.leftTab === "library" || r.leftTab === "views") c.leftTab = r.leftTab;
+    if (Object.keys(c).length) out[w.id] = c;
+  }
+  return out;
+}
+
 /** A workspace with your changes. `layout` "classic" docks every workspace's
  * tool bar above the model unless you chose otherwise for that workspace. */
 export function withEdits(w: Workspace, e: WorkspaceEdits | undefined, layout: "classic" | "floating" = "floating"): Workspace {

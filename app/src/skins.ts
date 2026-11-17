@@ -211,3 +211,25 @@ export const store = {
     }
   },
 };
+
+/**
+ * Saved settings read back over their defaults: a stored value counts only if it has the same
+ * kind as the default (a finite number, a string, a boolean) and, where `allowed` lists the
+ * choices, is one of them. Anything else (a hand edit, another version) falls back to the default.
+ */
+export function savedSettings<T extends object>(key: string, defaults: T, allowed: Partial<Record<keyof T, readonly unknown[]>> = {}): T {
+  const out = { ...defaults };
+  let raw: unknown;
+  try {
+    raw = JSON.parse(store.get(key) ?? "null");
+  } catch {
+    return out;
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const k of Object.keys(defaults) as (keyof T)[]) {
+    const v = (raw as Record<string, unknown>)[k as string];
+    const ok = typeof v === typeof defaults[k] && (typeof v !== "number" || Number.isFinite(v)) && (allowed[k] ?? [v]).includes(v);
+    if (ok) out[k] = v as T[keyof T];
+  }
+  return out;
+}

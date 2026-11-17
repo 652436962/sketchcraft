@@ -20,6 +20,7 @@ import { pickSave, rememberedFile, rememberFile } from "./files";
 import Viewport, { type Backdrop, type BuildSettings, type FaceStyle, type Styles, type Tool, type ViewportApi } from "./Viewport";
 import { MatchPhoto, type PhotoMatch } from "./matchphoto";
 import { prepareImage } from "./textures";
+import { savedSettings } from "./skins";
 import { useLook, type Tab } from "./uselook";
 import { CommandPalette, type Command } from "./palette";
 import { TOOL_INFO, WORKSPACES } from "./workspace";
@@ -58,11 +59,7 @@ const DEFAULT_BUILD: BuildSettings = {
 };
 
 function loadBuild(): BuildSettings {
-  try {
-    return { ...DEFAULT_BUILD, ...JSON.parse(localStorage.getItem("sketchcraft.build") ?? "{}") };
-  } catch {
-    return DEFAULT_BUILD;
-  }
+  return savedSettings("sketchcraft.build", DEFAULT_BUILD, { roofKind: ["gable", "hip", "shed"] });
 }
 
 /** One-click looks, like SketchUp's style collections. */
@@ -645,6 +642,8 @@ export default function App() {
                 run={run}
                 onToast={say}
                 place={(k) => {
+                  // components and assets would land inside the open component's own table
+                  if (k && scene.editing != null) return say("Close the component you're editing first: you can't place into a component while editing one.", true);
                   setPlacing(k);
                   setTool(k ? "place" : "select");
                 }}

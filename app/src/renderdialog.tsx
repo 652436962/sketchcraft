@@ -1,9 +1,10 @@
 // The Render dialog: quality, size, sun and light settings, and the progressive render.
 import { useEffect, useRef, useState } from "react";
 import { exec } from "./engine";
+import { savedSettings } from "./skins";
 import { pickSave } from "./files";
 import type { Cam } from "./Viewport";
-import { SheetHead } from "./sheet";
+import { SheetHead, useEscapeToClose } from "./sheet";
 
 /** Render settings past quality and sun (the dialog's "More settings"). */
 interface RenderSettings {
@@ -36,11 +37,7 @@ const clampSize = (n: number) => Math.max(16, Math.min(4096, Math.round(Number.i
 /** More settings: remembered between renders on this computer. */
 function useRenderSettings() {
   const [adv, setAdvRaw] = useState<RenderSettings>(() => {
-    try {
-      return { ...RENDER_DEFAULTS, ...JSON.parse(localStorage.getItem("sketchcraft.render") ?? "{}") };
-    } catch {
-      return RENDER_DEFAULTS;
-    }
+    return savedSettings("sketchcraft.render", RENDER_DEFAULTS, { size: RENDER_SIZES.map((s) => s.id), backdrop: ["sky", "color"] });
   });
   const setAdv = (patch: Partial<RenderSettings>) =>
     setAdvRaw((a) => {
@@ -289,14 +286,13 @@ export function RenderDialog({ camera, aspect, name, onClose, onToast }: { camer
     const r = await exec({ cmd: "save_image", path, data: img });
     if (r.ok) onToast(`Saved ${path.split("/").pop()}`);
   };
+  const dismiss = () => {
+    stopRef.current = true;
+    onClose();
+  };
+  useEscapeToClose(dismiss);
   return (
-    <div
-      className="sheet-backdrop"
-      onClick={() => {
-        stopRef.current = true;
-        onClose();
-      }}
-    >
+    <div className="sheet-backdrop" onClick={dismiss}>
       <div className={`sheet render-dlg${more ? " more" : ""}`} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Render">
         <SheetHead title="Render" note="Photoreal: sunlight, sky, soft shadows, reflections." />
         <div className="render-view">
