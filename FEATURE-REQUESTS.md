@@ -37,6 +37,37 @@ buttons, forms and tools.
 | 7 | **SketchUp Ruby, a subset**: run .rb scripts and install .rbz files using the core of SketchUp's Ruby API (model, entities, add_face, add_line, pushpull, groups, materials, menus, input boxes) | rats4final (Reddit) | 2026-11-16 | done | 2026-11-16 |
 | 8 | **Test with real free SketchUp scripts**, and document what works and what doesn't | Jason | 2026-11-16 | done | 2026-11-16 |
 
+## Sprint 3: 0.3.7, drafting (from 2026-11-17)
+
+LayOut-class documentation. People who draft for a living say the money is here, and SketchUp's LayOut does it badly.
+Tracked on GitHub as the **0.3.7 — Drafting** milestone.
+
+| # | Feature | Asked by | Added | Status | Completed |
+| - | ------- | -------- | ----- | ------ | --------- |
+| 1 | **Line weight and line style per tag and per edge**, printed at true weight, no stacked viewports | hardluxe (Reddit) | 2026-11-17 | planned | |
+| 2 | **.pat hatches per tag**, with hatch colour, thickness, scale and angle | hardluxe (Reddit) | 2026-11-17 | planned | |
+| 3 | **Cut fill per tag** in sections (poché) | hardluxe (Reddit) | 2026-11-17 | planned | |
+| 4 | **Opacity per viewport** on sheets, for hybrid drawings without fog | hardluxe (Reddit) | 2026-11-17 | planned | |
+| 5 | **Tables and text blocks** on sheets (schedules, drawing index) | Relative-Fondant6544 (Reddit) | 2026-11-17 | planned | |
+| 6 | **Large documents stay fast**: A1, 50+ pages, lots of text, with a performance test | Relative-Fondant6544 (Reddit) | 2026-11-17 | planned | |
+| 7 | **Interactive sheet editor**: place and size viewports, text, dimensions, tables, title blocks by mouse | Jason | 2026-11-17 | planned | |
+| 8 | **AI drafting**: "dimension this plan", "hatch by tag", "lay out a permit set" through the agents | hardluxe (Reddit) | 2026-11-17 | planned | |
+
+## Sprint 4: 0.3.8, texturing (from 2026-11-17)
+
+Built-in UV and material tools for rendering and game assets, so the half-dozen texture add-ons aren't needed.
+Tracked on GitHub as the **0.3.8 — Texturing** milestone.
+
+| # | Feature | Asked by | Added | Status | Completed |
+| - | ------- | -------- | ----- | ------ | --------- |
+| 1 | **Position Texture**: move, rotate, scale and skew a texture on a face with pins | Relative-Fondant6544 (Reddit) | 2026-11-17 | planned | |
+| 2 | **Projection mapping**: planar, box, cylinder, sphere | Relative-Fondant6544 (Reddit) | 2026-11-17 | planned | |
+| 3 | **Paint-through**: continuous textures across connected faces | Relative-Fondant6544 (Reddit) | 2026-11-17 | planned | |
+| 4 | **UV unwrap** with a UV view | Relative-Fondant6544 (Reddit) | 2026-11-17 | planned | |
+| 5 | **Vertex painting** | Relative-Fondant6544 (Reddit) | 2026-11-17 | planned | |
+| 6 | **glTF / GLB export** with UVs and vertex colours, for game engines | Relative-Fondant6544 (Reddit) | 2026-11-17 | planned | |
+| 7 | **Textures in SketchUp 2017–2020 imports** | timrowledge (GitHub #1) | 2026-11-17 | planned | |
+
 ## Later
 
 | Feature | Asked by | Added | Status | Notes |
@@ -44,7 +75,7 @@ buttons, forms and tools.
 | SketchCraft Lite (Android) | RuliAvo25, Lasm998 (Reddit) | 2026-11-16 | later | Its own app; touch-first push/pull |
 | More of SketchUp's Ruby API: mouse tools (Sketchup::Tool), HtmlDialog, observers, followme, textures | rats4final (Reddit) | 2026-11-16 | later | The geometry-building core runs (sprint 2, #7) |
 | Library of scale figures (people, cyclists, cars) for pathways | EuphoricPenguin22 (Reddit) | 2026-11-16 | later | Original art, traced from CC0 photos |
-| 2D drafting done right: a dimension style editor (arrows, text, units, precision) and fonts for text and tables, what people miss in CADCraft | Waste-Affect5021 (r/ArtCraftAI, about CADCraft) | 2026-11-16 | later | Start once plugins are stable (end of sprint 2) |
+| 2D drafting done right: a dimension style editor (arrows, text, units, precision) and fonts for text and tables, what people miss in CADCraft | Waste-Affect5021 (r/ArtCraftAI, about CADCraft) | 2026-11-16 | in 0.3.7 | Part of sprint 3 (drafting) |
 
 ## Done before this list
 
