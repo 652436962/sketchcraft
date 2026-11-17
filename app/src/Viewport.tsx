@@ -529,6 +529,109 @@ export default function Viewport(props: Props) {
   }
 
   // ---------------------------------------------------------------- model
+  /** Guides: long dashed lines and little crosses. */
+  function addGuides(T: NonNullable<typeof t.current>, s: Scene) {
+    for (const g of s.guides) {
+      const p = V(g.p);
+      const pts = g.dir
+        ? [p.clone().addScaledVector(V(g.dir), -500), p.clone().addScaledVector(V(g.dir), 500)]
+        : [p.clone().add(new THREE.Vector3(-0.15, 0, 0)), p.clone().add(new THREE.Vector3(0.15, 0, 0)), p.clone().add(new THREE.Vector3(0, -0.15, 0)), p.clone().add(new THREE.Vector3(0, 0.15, 0))];
+      const line = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineDashedMaterial({ color: 0x3e63dd, dashSize: 0.3, gapSize: 0.2 }));
+      line.computeLineDistances();
+      T.model.add(line);
+    }
+  }
+
+  /** Dimensions and text leaders, always on top. */
+  function addAnnotationLines(T: NonNullable<typeof t.current>, s: Scene) {
+    const ann: number[] = [];
+    for (const an of s.annotations.filter(noteShown)) {
+      if (an.kind === "dimension") ann.push(...dimSegments(V(an.a), V(an.b), V(an.offset)));
+      else if (an.kind === "swing") {
+        // the open leaf and the arc its edge sweeps
+        const h = V(an.hinge), a = V(an.from).sub(h), b = V(an.to).sub(h);
+        ann.push(...an.hinge, ...an.to);
+        const ang = a.angleTo(b);
+        const axis = a.clone().cross(b).normalize();
+        let prev = V(an.from);
+        for (let k = 1; k <= 16; k++) {
+          const p = a.clone().applyAxisAngle(axis.lengthSq() ? axis : new THREE.Vector3(0, 0, 1), (ang * k) / 16).add(h);
+          ann.push(prev.x, prev.y, prev.z, p.x, p.y, p.z);
+          prev = p;
+        }
+      } else if (an.leader) ann.push(...an.leader, ...an.at);
+    }
+    if (ann.length) {
+      const ag = new THREE.BufferGeometry();
+      ag.setAttribute("position", new THREE.Float32BufferAttribute(ann, 3));
+      const al = new THREE.LineSegments(ag, new THREE.LineBasicMaterial({ color: (live.current.styles.background ?? "default") === "default" ? 0x33384d : BACKGROUNDS[live.current.styles.background!].line, depthTest: false }));
+      al.renderOrder = 10;
+      T.model.add(al);
+    }
+  }
+
+  /** Face-me figures (scale people): each its own object at its point. */
+  function addFigures(T: NonNullable<typeof t.current>, s: Scene, clip: THREE.Plane[]) {
+    T.figures = [];
+    for (const f of s.figures ?? []) {
+      const obj = new THREE.Group();
+      obj.position.set(f.pivot[0], f.pivot[1], f.pivot[2]);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(f.positions, 3));
+      const col: number[] = [];
+      // the colors are sRGB; the renderer works in linear light
+      const lin = (c: number) => Math.pow(c, 2.2);
+      for (let i = 0; i < f.colors.length; i += 3) for (let k = 0; k < 3; k++) col.push(lin(f.colors[i]), lin(f.colors[i + 1]), lin(f.colors[i + 2]));
+      g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+      g.computeVertexNormals();
+      const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, clippingPlanes: clip, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
+      mesh.userData.owner = f.id;
+      const lg = new THREE.BufferGeometry();
+      lg.setAttribute("position", new THREE.Float32BufferAttribute(f.edges, 3));
+      const lines = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x1d1e24, clippingPlanes: clip }));
+      obj.add(mesh, lines);
+      T.model.add(obj);
+      T.figures.push({ id: f.id, obj, mesh, lines, facing: f.facing });
+    }
+  }
+
+  /** The invisible copy of what is being edited, for picking. */
+  function addEditMesh(T: NonNullable<typeof t.current>, s: Scene) {
+    T.editMesh = null;
+    if (s.editing != null && s.editPositions.length) {
+      const eg = new THREE.BufferGeometry();
+      eg.setAttribute("position", new THREE.Float32BufferAttribute(s.editPositions, 3));
+      T.editMesh = new THREE.Mesh(eg, new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide }));
+      T.model.add(T.editMesh);
+    }
+  }
+
+  /** Put the ground under the model and aim the camera rig and the sun at it. */
+  function settleGround(T: NonNullable<typeof t.current>, s: Scene) {
+    let minZ = Infinity;
+    const bb = new THREE.Box3();
+    for (let i = 0; i < s.positions.length; i += 3) {
+      minZ = Math.min(minZ, s.positions[i + 2]);
+      bb.expandByPoint(new THREE.Vector3(s.positions[i], s.positions[i + 1], s.positions[i + 2]));
+    }
+    T.groundZ = Number.isFinite(minZ) ? Math.min(minZ, 0) : 0;
+    T.ground.position.z = T.groundZ - 0.01;
+    if (!bb.isEmpty()) {
+      const c = bb.getCenter(new THREE.Vector3());
+      const r = bb.getSize(new THREE.Vector3()).length() / 2 + 5;
+      rig.current.c.copy(c);
+      rig.current.r = r;
+      placeSun();
+      T.sun.target.position.copy(c);
+      const sc = T.sun.shadow.camera;
+      sc.left = sc.bottom = -r;
+      sc.right = sc.top = r;
+      sc.near = 0.1;
+      sc.far = r * 5;
+      sc.updateProjectionMatrix();
+    }
+  }
+
   function buildModel() {
     const T = t.current;
     const s = live.current.scene;
@@ -742,98 +845,17 @@ export default function Viewport(props: Props) {
       soft.computeLineDistances();
       T.model.add(soft);
     }
-    // guides: long dashed lines and little crosses
-    for (const g of s.guides) {
-      const p = V(g.p);
-      const pts = g.dir
-        ? [p.clone().addScaledVector(V(g.dir), -500), p.clone().addScaledVector(V(g.dir), 500)]
-        : [p.clone().add(new THREE.Vector3(-0.15, 0, 0)), p.clone().add(new THREE.Vector3(0.15, 0, 0)), p.clone().add(new THREE.Vector3(0, -0.15, 0)), p.clone().add(new THREE.Vector3(0, 0.15, 0))];
-      const line = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineDashedMaterial({ color: 0x3e63dd, dashSize: 0.3, gapSize: 0.2 }));
-      line.computeLineDistances();
-      T.model.add(line);
-    }
-    // dimensions and text leaders, always on top
-    const ann: number[] = [];
-    for (const an of s.annotations.filter(noteShown)) {
-      if (an.kind === "dimension") ann.push(...dimSegments(V(an.a), V(an.b), V(an.offset)));
-      else if (an.kind === "swing") {
-        // the open leaf and the arc its edge sweeps
-        const h = V(an.hinge), a = V(an.from).sub(h), b = V(an.to).sub(h);
-        ann.push(...an.hinge, ...an.to);
-        const ang = a.angleTo(b);
-        const axis = a.clone().cross(b).normalize();
-        let prev = V(an.from);
-        for (let k = 1; k <= 16; k++) {
-          const p = a.clone().applyAxisAngle(axis.lengthSq() ? axis : new THREE.Vector3(0, 0, 1), (ang * k) / 16).add(h);
-          ann.push(prev.x, prev.y, prev.z, p.x, p.y, p.z);
-          prev = p;
-        }
-      } else if (an.leader) ann.push(...an.leader, ...an.at);
-    }
-    if (ann.length) {
-      const ag = new THREE.BufferGeometry();
-      ag.setAttribute("position", new THREE.Float32BufferAttribute(ann, 3));
-      const al = new THREE.LineSegments(ag, new THREE.LineBasicMaterial({ color: (live.current.styles.background ?? "default") === "default" ? 0x33384d : BACKGROUNDS[live.current.styles.background!].line, depthTest: false }));
-      al.renderOrder = 10;
-      T.model.add(al);
-    }
+    addGuides(T, s);
+    addAnnotationLines(T, s);
     st.current.labels = annotationSpecs();
     syncLabels();
     T.pickMesh = front;
 
-    // face-me figures (scale people): each its own object at its point
-    T.figures = [];
-    for (const f of s.figures ?? []) {
-      const obj = new THREE.Group();
-      obj.position.set(f.pivot[0], f.pivot[1], f.pivot[2]);
-      const g = new THREE.BufferGeometry();
-      g.setAttribute("position", new THREE.Float32BufferAttribute(f.positions, 3));
-      const col: number[] = [];
-      // the colors are sRGB; the renderer works in linear light
-      const lin = (c: number) => Math.pow(c, 2.2);
-      for (let i = 0; i < f.colors.length; i += 3) for (let k = 0; k < 3; k++) col.push(lin(f.colors[i]), lin(f.colors[i + 1]), lin(f.colors[i + 2]));
-      g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
-      g.computeVertexNormals();
-      const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, clippingPlanes: clip, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
-      mesh.userData.owner = f.id;
-      const lg = new THREE.BufferGeometry();
-      lg.setAttribute("position", new THREE.Float32BufferAttribute(f.edges, 3));
-      const lines = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: 0x1d1e24, clippingPlanes: clip }));
-      obj.add(mesh, lines);
-      T.model.add(obj);
-      T.figures.push({ id: f.id, obj, mesh, lines, facing: f.facing });
-    }
+    addFigures(T, s, clip);
 
-    T.editMesh = null;
-    if (s.editing != null && s.editPositions.length) {
-      const eg = new THREE.BufferGeometry();
-      eg.setAttribute("position", new THREE.Float32BufferAttribute(s.editPositions, 3));
-      T.editMesh = new THREE.Mesh(eg, new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide }));
-      T.model.add(T.editMesh);
-    }
+    addEditMesh(T, s);
 
-    let minZ = Infinity;
-    const bb = new THREE.Box3();
-    for (let i = 0; i < s.positions.length; i += 3) {
-      minZ = Math.min(minZ, s.positions[i + 2]);
-      bb.expandByPoint(new THREE.Vector3(s.positions[i], s.positions[i + 1], s.positions[i + 2]));
-    }
-    T.groundZ = Number.isFinite(minZ) ? Math.min(minZ, 0) : 0;
-    T.ground.position.z = T.groundZ - 0.01;
-    if (!bb.isEmpty()) {
-      const c = bb.getCenter(new THREE.Vector3());
-      const r = bb.getSize(new THREE.Vector3()).length() / 2 + 5;
-      rig.current.c.copy(c);
-      rig.current.r = r;
-      placeSun();
-      T.sun.target.position.copy(c);
-      const sc = T.sun.shadow.camera;
-      sc.left = sc.bottom = -r;
-      sc.right = sc.top = r;
-      sc.near = 0.1;
-      sc.far = r * 5;
-      sc.updateProjectionMatrix();
-    }
+    settleGround(T, s);
   }
 
   useEffect(() => {
