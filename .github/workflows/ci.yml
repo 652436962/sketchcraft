@@ -60,3 +60,38 @@ jobs:
       - name: App checks (skin values, plugin sandbox lockdown, plugin data)
         working-directory: app
         run: npm run check
+
+  # Checked-in generated files match their generator (no dependencies: Python's standard library only).
+  scale-figures:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Scale-figure library is what its generator makes
+        run: python3 tools/scale_figures/scale_figures.py --check
+
+  # Light dependency check, no secrets and nothing installed beyond what the app already has: the
+  # shipped npm packages have no known high advisory, and no lockfile takes code from anywhere but
+  # the crates.io / npm registries. (`cargo audit` isn't run here: it would mean installing an
+  # unpinned tool in CI; run it by hand before a release.)
+  audit:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Lockfiles only name the public registries
+        run: |
+          if grep -h '"resolved"' app/package-lock.json tools/release/package-lock.json | grep -v 'https://registry.npmjs.org/'; then
+            echo "::error::a package comes from somewhere other than registry.npmjs.org"; exit 1
+          fi
+          if grep -n '^source = ' Cargo.lock | grep -v 'registry+https://github.com/rust-lang/crates.io-index'; then
+            echo "::error::a crate comes from somewhere other than crates.io"; exit 1
+          fi
+      - name: No high advisory in the packages the app ships
+        working-directory: app
+        run: npm audit --omit=dev --audit-level=high
