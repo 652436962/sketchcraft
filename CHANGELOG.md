@@ -25,8 +25,8 @@ What changed in each SketchCraft release, newest first. The format follows
     platform's installers are checked for their own names and file types before
     signing, only the Tauri CLI is installed next to the signing key, release
     files get build-provenance attestations, and a vendored Opal's unused network
-    loader is removed. CI also checks the scale figures, dependencies from public
-    registries only, and npm advisories in what ships.
+    loader is removed. CI also checks that dependencies come from public registries only and
+    that what ships has no high npm advisory.
   - Smaller: the plugin warning banner stays readable under any theme, a
     remembered Save path must end in `.sketchcraft`, the dev bridge deletes its token
     file when it stops, and the committed MCP setup holds no personal folder.
