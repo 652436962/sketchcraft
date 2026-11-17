@@ -47,11 +47,20 @@ about 512 MB in all (everything counts: images, photos, scans, names, notes and
 component attributes; a scan is roughly 16 bytes a point, so about 30 million). An AI
 agent or a plugin can take a model up to 160 MB and add 32 MB in one command; only you
 can go past that. A bigger model (an enormous import, or one made before these limits)
-still opens, for looking at and for deleting parts of it (delete scans, images or
-geometry); it can't be saved over your file until it is under the limits, and the file
-on disk isn't touched meanwhile. A model that SketchCraft saved always opens again.
+still opens, for looking at and for cutting down; it can't be saved over your file
+until it is under the limits, and the file on disk isn't touched meanwhile. To cut it
+down, delete geometry or placements, and in the **Materials** panel (Textures) delete or
+replace the pictures that take the most room (each shows its size) or choose **Remove
+unused materials**. Names and notes may add up to 64 MB (an AI agent or a plugin may
+take that no further than 2 MB, so your own naming always has room). A model that
+SketchCraft saved always opens again.
 Over about a million points, edges and faces everything still works, but each change
 takes a second or more to save and the view takes a few seconds to redraw.
+
+Pictures (textures, photos on a view) go up to 16,384 pixels on a side and 100 million
+pixels (a 48 megapixel phone photo and an 8K texture are fine). A bigger picture is not
+taken, and when one is left out of a render, an import or a file you open, the message
+says which one and why.
 
 ## Opening other formats
 

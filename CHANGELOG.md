@@ -84,7 +84,33 @@ What changed in each SketchCraft release, newest first. The format follows
   map and terrain download (Add location…); it stays yours. Very large models (over a
   million points, edges and faces) say so: each change takes a second or more.
 
+- **A seventh review.** Models with parts inside parts (most SketchUp imports and
+  library parts) open, restore and reload again: the sixth review's consistency check
+  wrongly refused them. A model with a very long text pool (hundreds of thousands of
+  named placements) opens for cutting down instead of being refused, and an AI agent
+  can no longer use up the room your own names, notes and colours need. The file-size
+  estimate counts escaped text, so a model SketchCraft saved always reopens. Formulas
+  in Dynamic Components are worked out once each (a long chain no longer hangs the
+  app), and an id counter at the top of its range is refused instead of overwriting
+  your drawing. If SketchCraft can't read your file at start, saving comes back by
+  itself when the file can be read again or is moved, or when you choose New or Open.
+  An agent's `open` and library reads have their own smaller size limits, and a
+  large import now shows the big-model notice straight away.
+
+### Changed
+- **Bigger pictures.** Textures and photos may be up to 16,384 px on a side and 100
+  million pixels (48 MP phone photos and 8K textures are fine; it was 8,192 px and 40
+  million). A picture that is too large is refused when you add it, with its size in the
+  message, and a picture left out of a render, a SketchUp import or an opened file is
+  named in a message instead of being dropped silently.
+
 ### Added
+- **Delete or replace a material.** In Materials (Textures): each picture shows its
+  size, **Replace picture…** puts another image on every face that uses it, **Delete**
+  takes a material and its picture out of the model (its faces go back to the plain
+  look, or to a material you choose), and **Remove unused materials** clears out what
+  nothing uses. They are yours only: AI agents and plugins can't delete materials. This
+  is also how you cut down a model that is over the size limits.
 - **Restore from backup…** (File menu, or Shift+S): the model's earlier copies,
   newest first, with their time, size and what they were taken before ("before New",
   "before a plugin run"). Restore one as a single Undo step (the model it replaces is
