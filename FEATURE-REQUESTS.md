@@ -46,7 +46,7 @@ The suite grows with the app: from here on every feature lands with its tests. I
 | 1 | **Playwright UI tests in CI on every PR** (#49) | Jason | 2026-11-17 | done | 2026-11-17 |
 | 2 | **A Playwright suite for every tool** (#50) | Jason | 2026-11-17 | done | 2026-11-17 |
 | 3 | **Frontend unit tests with Vitest** (#51) | Jason | 2026-11-17 | done | 2026-11-17 |
-| 4 | **Visual regression screenshots** (#52) | Jason | 2026-11-17 | planned | |
+| 4 | **Visual regression screenshots** (#52) | Jason | 2026-11-17 | done | 2026-11-17 |
 | 5 | **SketchUp file corpus in CI** (#53) | Jason | 2026-11-17 | done | 2026-11-17 |
 | 6 | **How to run the tests, in CONTRIBUTING** (#54) | Jason | 2026-11-17 | done | 2026-11-17 |
 
