@@ -352,7 +352,7 @@ Size: **S** ≤ 2 days, **M** ≤ 1 week, **L** ≤ 2 weeks. Sprint 0 testing (#
 
 ## 8. Decisions for the owner
 
-1. **A Layout workspace?** Recommend yes, as a fifth workspace. (Decided, see below.)
+1. **A Layout workspace?** Recommend yes, as a fifth workspace.
 2. **Sheets in the model file?** Recommend the same `.sketchcraft` file.
 3. **Live or frozen viewports?** Recommend live, plus an "Issued" revision per sheet and a "changed since issue" badge.
 4. **Ship 0.3.6.1 (the format guard) now?** Recommend yes, within the week.
@@ -365,4 +365,10 @@ Size: **S** ≤ 2 days, **M** ≤ 1 week, **L** ≤ 2 weeks. Sprint 0 testing (#
 11. **Agents and issuing?** Recommend person-only `sheet_issue` and `font_add`.
 12. **Hybrid raster resolution?** Recommend 200 dpi on screen and 300 dpi on export.
 
-Decisions taken are recorded below as the owner makes them.
+### Decided (2026-11-17)
+
+- **Format guard first** (step 0): older versions open newer files read-only instead of dropping their sheets.
+- **Layout** is a new fifth workspace.
+- **Sheets live in the model file, and viewports are live**, with an Issued snapshot per sheet and a "changed since issue" badge.
+- **Adopt `pdf-writer` + `subsetter` + `ttf-parser`** (MIT/Apache) for embedded fonts and Unicode text.
+- The other decisions take the recommendation above unless the owner says otherwise.
