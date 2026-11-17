@@ -41,6 +41,9 @@ impl Engine {
                 opened.check_sane_with(false)?;
                 self.oversize = opened.over_limits();
                 self.model = opened;
+                // which group was open for editing is a matter of the program that saved it, not of the model: a program
+                // that opens the file must not draw into someone else's open group (and tie its work to that group's undo)
+                self.model.active_group = None;
                 self.batch = None;
                 self.ctx = None;
                 self.names.clear();

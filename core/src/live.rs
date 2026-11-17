@@ -164,6 +164,8 @@ impl Live {
         }
         // a reload keeps the component being edited, if it is still there
         let ctx = self.engine.ctx;
+        // and the group being edited (it is this program's own state: the file's one belongs to whoever saved it)
+        let active = self.engine.model.active_group;
         // the person's own steps are kept as changes (what each step did), so that Undo after another
         // program's save takes back the person's step and never the other program's work
         let history = if at_start { None } else { self.engine.history_for_reload() };
@@ -178,6 +180,9 @@ impl Live {
         {
             if let Some(d) = ctx.filter(|d| self.engine.model.definitions.contains_key(d)) {
                 self.engine.ctx = Some(d);
+            }
+            if let Some(g) = active.filter(|g| !at_start && self.engine.model.groups.contains_key(g)) {
+                self.engine.model.active_group = Some(g);
             }
             // the file reads fine now: whatever was wrong is over
             self.blocked = false;
