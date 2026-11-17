@@ -33,14 +33,8 @@ const RENDER_SIZES: { id: string; label: string; w?: number; h?: number }[] = [
 const clampSize = (n: number) => Math.max(16, Math.min(4096, Math.round(Number.isFinite(n) ? n : 1024)));
 
 /** Photoreal render of the current view: quality, sun, then save. */
-export function RenderDialog({ camera, aspect, name, onClose, onToast }: { camera: () => Cam; aspect: number; name: string; onClose: () => void; onToast: (t: string, bad?: boolean) => void }) {
-  const QUALITY = [
-    { id: "preview", label: "Preview", samples: 16, long: 960, about: "a few seconds" },
-    { id: "good", label: "Good", samples: 64, long: 1600, about: "under a minute" },
-    { id: "final", label: "Final", samples: 256, long: 2400, about: "a few minutes" },
-  ];
-  const [q, setQ] = useState("preview");
-  // more settings: remembered between renders on this computer
+/** More settings: remembered between renders on this computer. */
+function useRenderSettings() {
   const [adv, setAdvRaw] = useState<RenderSettings>(() => {
     try {
       return { ...RENDER_DEFAULTS, ...JSON.parse(localStorage.getItem("sketchcraft.render") ?? "{}") };
@@ -56,8 +50,11 @@ export function RenderDialog({ camera, aspect, name, onClose, onToast }: { camer
       } catch {}
       return n;
     });
-  const [more, setMore] = useState(false);
-  // the sun: placed for this view, set by hand, or the real sun at a date and time
+  return { adv, setAdv };
+}
+
+/** The sun for a render: placed for this view, set by hand, or the real sun at a date and time. */
+function useSun() {
   const [sunMode, setSunMode] = useState<"view" | "manual" | "real">("view");
   const [az, setAz] = useState(200);
   const [alt, setAlt] = useState(35);
@@ -85,6 +82,150 @@ export function RenderDialog({ camera, aspect, name, onClose, onToast }: { camer
     };
   }, [sunMode, date, clock]);
   const sunDown = sunMode === "real" && real != null && real.altitude < 1;
+  return { sunMode, setSunMode, az, setAz, alt, setAlt, date, setDate, minutes, setMinutes, real, clock, clock12, sunDown, offsetFor };
+}
+
+const compassOf = (a: number) => ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(((a % 360) + 360) % 360 / 45) % 8];
+
+/** The Sun choices: which sun, and its direction, height, date or time. */
+function SunControls({ sun, busy }: { sun: ReturnType<typeof useSun>; busy: boolean }) {
+  const { sunMode, setSunMode, az, setAz, alt, setAlt, date, setDate, minutes, setMinutes, real, clock12, sunDown } = sun;
+  const compass = compassOf(az);
+  return (
+    <>
+        <div className="seg" role="radiogroup" aria-label="Sun">
+          {([["view", "Sun for this view", "Lights the side you're looking at"], ["manual", "Set by hand", "Pick the direction and height"], ["real", "Real sun", "Where the sun really is at this place, date and time"]] as const).map(([id, label, tip]) => (
+            <button key={id} className={sunMode === id ? "on" : ""} onClick={() => setSunMode(id)} title={tip} disabled={busy}>
+              {label}
+            </button>
+          ))}
+        </div>
+        {sunMode === "manual" && (
+          <label className="field">
+            <span>Sun from {compass}</span>
+            <input type="range" min={0} max={359} value={az} onChange={(e) => setAz(Number(e.target.value))} />
+          </label>
+        )}
+        {sunMode !== "real" && (
+          <label className="field">
+            <span>Sun height {alt}°</span>
+            <input type="range" min={5} max={85} value={alt} onChange={(e) => setAlt(Number(e.target.value))} />
+          </label>
+        )}
+        {sunMode === "real" && (
+          <>
+            <label className="field">
+              <span>Date</span>
+              <input type="date" value={date} onChange={(e) => e.target.value && setDate(e.target.value)} />
+            </label>
+            <label className="field">
+              <span>Time {clock12}</span>
+              <input type="range" min={5 * 60} max={21 * 60} step={15} value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} />
+            </label>
+            <span className={`muted small${sunDown ? " warn" : ""}`}>
+              {real == null
+                ? "Finding the sun…"
+                : sunDown
+                  ? "The sun is down then. Slide the time later or earlier."
+                  : `Sun from the ${compassOf(real.azimuth)}, ${Math.round(real.altitude)}° up.`}
+              {real && !real.located && " No location set, so this uses the central US (File ▸ Add location… for yours)."}
+            </span>
+          </>
+        )}
+    </>
+  );
+}
+
+/** The "More settings" fieldset: size, light, background and ground. */
+function MoreSettings({ adv, setAdv, busy }: { adv: RenderSettings; setAdv: (patch: Partial<RenderSettings>) => void; busy: boolean }) {
+  return (
+      <fieldset className="render-more" disabled={busy}>
+        <label className="field">
+          <span>Size</span>
+          <select value={adv.size} onChange={(e) => setAdv({ size: e.target.value })}>
+            {RENDER_SIZES.map((x) => (
+              <option key={x.id} value={x.id}>
+                {x.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {adv.size === "custom" && (
+          <div className="row gap">
+            <label className="field">
+              <span>Width</span>
+              <input type="number" min={16} max={4096} value={adv.width} onChange={(e) => setAdv({ width: Number(e.target.value) })} />
+            </label>
+            <label className="field">
+              <span>Height</span>
+              <input type="number" min={16} max={4096} value={adv.height} onChange={(e) => setAdv({ height: Number(e.target.value) })} />
+            </label>
+          </div>
+        )}
+        <label className="field" title="Brighter or darker overall, in camera stops">
+          <span>Exposure {adv.ev > 0 ? "+" : ""}{adv.ev.toFixed(1)}</span>
+          <input type="range" min={-3} max={3} step={0.1} value={adv.ev} onChange={(e) => setAdv({ ev: Number(e.target.value) })} />
+        </label>
+        <label className="field" title="How strong direct sunlight is (and how dark the shadows look next to it)">
+          <span>Sunlight {adv.sun.toFixed(1)}</span>
+          <input type="range" min={0} max={8} step={0.1} value={adv.sun} onChange={(e) => setAdv({ sun: Number(e.target.value) })} />
+        </label>
+        <label className="field" title="The sky's soft light: it fills in the shadows">
+          <span>Sky light {adv.sky.toFixed(1)}</span>
+          <input type="range" min={0} max={4} step={0.1} value={adv.sky} onChange={(e) => setAdv({ sky: Number(e.target.value) })} />
+        </label>
+        <label className="field" title="The sun's color: cool overcast to warm golden hour">
+          <span>Sun color {adv.warmth < -0.15 ? "cool" : adv.warmth > 0.15 ? "warm" : "daylight"}</span>
+          <input type="range" min={-1} max={1} step={0.05} value={adv.warmth} onChange={(e) => setAdv({ warmth: Number(e.target.value) })} />
+        </label>
+        <label className="field" title="How many times light bounces between surfaces. More: brighter, truer interiors; slower">
+          <span>Light bounces {adv.bounces}</span>
+          <input type="range" min={1} max={12} step={1} value={adv.bounces} onChange={(e) => setAdv({ bounces: Number(e.target.value) })} />
+        </label>
+        <div className="field">
+          <span>Background</span>
+          <div className="row gap">
+            <div className="seg">
+              <button className={adv.backdrop === "sky" ? "on" : ""} onClick={() => setAdv({ backdrop: "sky" })}>
+                Sky
+              </button>
+              <button className={adv.backdrop === "color" ? "on" : ""} onClick={() => setAdv({ backdrop: "color" })} title="A plain color behind the model (the sky still lights it)">
+                Color
+              </button>
+            </div>
+            {adv.backdrop === "color" && <input type="color" aria-label="Background color" value={adv.backdropColor} onChange={(e) => setAdv({ backdropColor: e.target.value })} />}
+          </div>
+        </div>
+        <div className="field">
+          <span>Ground</span>
+          <div className="row gap">
+            <label className="field check">
+              <input type="checkbox" checked={adv.ground} onChange={(e) => setAdv({ ground: e.target.checked })} /> Show the ground
+            </label>
+            {adv.ground && <input type="color" aria-label="Ground color" value={adv.groundColor} onChange={(e) => setAdv({ groundColor: e.target.value })} />}
+          </div>
+        </div>
+        <label className="field check" title="Smooths the grain while the picture sharpens. Off: the raw samples">
+          <input type="checkbox" checked={adv.denoise} onChange={(e) => setAdv({ denoise: e.target.checked })} /> Remove grain (denoise)
+        </label>
+        <button className="btn small ghost" onClick={() => setAdv(RENDER_DEFAULTS)}>
+          Reset to defaults
+        </button>
+      </fieldset>
+  );
+}
+
+export function RenderDialog({ camera, aspect, name, onClose, onToast }: { camera: () => Cam; aspect: number; name: string; onClose: () => void; onToast: (t: string, bad?: boolean) => void }) {
+  const QUALITY = [
+    { id: "preview", label: "Preview", samples: 16, long: 960, about: "a few seconds" },
+    { id: "good", label: "Good", samples: 64, long: 1600, about: "under a minute" },
+    { id: "final", label: "Final", samples: 256, long: 2400, about: "a few minutes" },
+  ];
+  const [q, setQ] = useState("preview");
+  const { adv, setAdv } = useRenderSettings();
+  const [more, setMore] = useState(false);
+  const sun = useSun();
+  const { sunMode, offsetFor, real, date, clock, az, alt, sunDown } = sun;
   const [busy, setBusy] = useState(false);
   const [img, setImg] = useState<string | null>(null);
   const [secs, setSecs] = useState<number | null>(null);
@@ -148,8 +289,6 @@ export function RenderDialog({ camera, aspect, name, onClose, onToast }: { camer
     const r = await exec({ cmd: "save_image", path, data: img });
     if (r.ok) onToast(`Saved ${path.split("/").pop()}`);
   };
-  const compassOf = (a: number) => ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(((a % 360) + 360) % 360 / 45) % 8];
-  const compass = compassOf(az);
   return (
     <div
       className="sheet-backdrop"
@@ -179,123 +318,11 @@ export function RenderDialog({ camera, aspect, name, onClose, onToast }: { camer
               </button>
             ))}
           </div>
-          <div className="seg" role="radiogroup" aria-label="Sun">
-            {([["view", "Sun for this view", "Lights the side you're looking at"], ["manual", "Set by hand", "Pick the direction and height"], ["real", "Real sun", "Where the sun really is at this place, date and time"]] as const).map(([id, label, tip]) => (
-              <button key={id} className={sunMode === id ? "on" : ""} onClick={() => setSunMode(id)} title={tip} disabled={busy}>
-                {label}
-              </button>
-            ))}
-          </div>
-          {sunMode === "manual" && (
-            <label className="field">
-              <span>Sun from {compass}</span>
-              <input type="range" min={0} max={359} value={az} onChange={(e) => setAz(Number(e.target.value))} />
-            </label>
-          )}
-          {sunMode !== "real" && (
-            <label className="field">
-              <span>Sun height {alt}°</span>
-              <input type="range" min={5} max={85} value={alt} onChange={(e) => setAlt(Number(e.target.value))} />
-            </label>
-          )}
-          {sunMode === "real" && (
-            <>
-              <label className="field">
-                <span>Date</span>
-                <input type="date" value={date} onChange={(e) => e.target.value && setDate(e.target.value)} />
-              </label>
-              <label className="field">
-                <span>Time {clock12}</span>
-                <input type="range" min={5 * 60} max={21 * 60} step={15} value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} />
-              </label>
-              <span className={`muted small${sunDown ? " warn" : ""}`}>
-                {real == null
-                  ? "Finding the sun…"
-                  : sunDown
-                    ? "The sun is down then. Slide the time later or earlier."
-                    : `Sun from the ${compassOf(real.azimuth)}, ${Math.round(real.altitude)}° up.`}
-                {real && !real.located && " No location set, so this uses the central US (File ▸ Add location… for yours)."}
-              </span>
-            </>
-          )}
+          <SunControls sun={sun} busy={busy} />
           <button className="btn small ghost render-more-toggle" onClick={() => setMore((m) => !m)} aria-expanded={more}>
             {more ? "▾" : "▸"} More settings
           </button>
-          {more && (
-            <fieldset className="render-more" disabled={busy}>
-              <label className="field">
-                <span>Size</span>
-                <select value={adv.size} onChange={(e) => setAdv({ size: e.target.value })}>
-                  {RENDER_SIZES.map((x) => (
-                    <option key={x.id} value={x.id}>
-                      {x.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {adv.size === "custom" && (
-                <div className="row gap">
-                  <label className="field">
-                    <span>Width</span>
-                    <input type="number" min={16} max={4096} value={adv.width} onChange={(e) => setAdv({ width: Number(e.target.value) })} />
-                  </label>
-                  <label className="field">
-                    <span>Height</span>
-                    <input type="number" min={16} max={4096} value={adv.height} onChange={(e) => setAdv({ height: Number(e.target.value) })} />
-                  </label>
-                </div>
-              )}
-              <label className="field" title="Brighter or darker overall, in camera stops">
-                <span>Exposure {adv.ev > 0 ? "+" : ""}{adv.ev.toFixed(1)}</span>
-                <input type="range" min={-3} max={3} step={0.1} value={adv.ev} onChange={(e) => setAdv({ ev: Number(e.target.value) })} />
-              </label>
-              <label className="field" title="How strong direct sunlight is (and how dark the shadows look next to it)">
-                <span>Sunlight {adv.sun.toFixed(1)}</span>
-                <input type="range" min={0} max={8} step={0.1} value={adv.sun} onChange={(e) => setAdv({ sun: Number(e.target.value) })} />
-              </label>
-              <label className="field" title="The sky's soft light: it fills in the shadows">
-                <span>Sky light {adv.sky.toFixed(1)}</span>
-                <input type="range" min={0} max={4} step={0.1} value={adv.sky} onChange={(e) => setAdv({ sky: Number(e.target.value) })} />
-              </label>
-              <label className="field" title="The sun's color: cool overcast to warm golden hour">
-                <span>Sun color {adv.warmth < -0.15 ? "cool" : adv.warmth > 0.15 ? "warm" : "daylight"}</span>
-                <input type="range" min={-1} max={1} step={0.05} value={adv.warmth} onChange={(e) => setAdv({ warmth: Number(e.target.value) })} />
-              </label>
-              <label className="field" title="How many times light bounces between surfaces. More: brighter, truer interiors; slower">
-                <span>Light bounces {adv.bounces}</span>
-                <input type="range" min={1} max={12} step={1} value={adv.bounces} onChange={(e) => setAdv({ bounces: Number(e.target.value) })} />
-              </label>
-              <div className="field">
-                <span>Background</span>
-                <div className="row gap">
-                  <div className="seg">
-                    <button className={adv.backdrop === "sky" ? "on" : ""} onClick={() => setAdv({ backdrop: "sky" })}>
-                      Sky
-                    </button>
-                    <button className={adv.backdrop === "color" ? "on" : ""} onClick={() => setAdv({ backdrop: "color" })} title="A plain color behind the model (the sky still lights it)">
-                      Color
-                    </button>
-                  </div>
-                  {adv.backdrop === "color" && <input type="color" aria-label="Background color" value={adv.backdropColor} onChange={(e) => setAdv({ backdropColor: e.target.value })} />}
-                </div>
-              </div>
-              <div className="field">
-                <span>Ground</span>
-                <div className="row gap">
-                  <label className="field check">
-                    <input type="checkbox" checked={adv.ground} onChange={(e) => setAdv({ ground: e.target.checked })} /> Show the ground
-                  </label>
-                  {adv.ground && <input type="color" aria-label="Ground color" value={adv.groundColor} onChange={(e) => setAdv({ groundColor: e.target.value })} />}
-                </div>
-              </div>
-              <label className="field check" title="Smooths the grain while the picture sharpens. Off: the raw samples">
-                <input type="checkbox" checked={adv.denoise} onChange={(e) => setAdv({ denoise: e.target.checked })} /> Remove grain (denoise)
-              </label>
-              <button className="btn small ghost" onClick={() => setAdv(RENDER_DEFAULTS)}>
-                Reset to defaults
-              </button>
-            </fieldset>
-          )}
+          {more && <MoreSettings adv={adv} setAdv={setAdv} busy={busy} />}
           <div className="row gap">
             {busy ? (
               <button className="btn small" onClick={() => (stopRef.current = true)} title="Keep the picture as it is now">
