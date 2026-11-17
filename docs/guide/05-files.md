@@ -31,7 +31,7 @@ never deletes these without telling you.
 Backups made because an AI agent or a plugin did something big are kept in their
 own small share (at most ten each, for a week), so they can't push out your own. Your
 own keep one copy per hour for a day and one per day for a month, however many deletes
-you make. A restore reads files up to 400 MB.
+you make. A restore reads files up to 768 MB, and it works on a model over the size limits too (it opens for cutting down, see below). If the model file can't be read when SketchCraft starts, nothing is saved over it until you choose: File › Restore from backup… lists the copy that was set aside, and File › New or File › Open starts over. A set-aside file whose note was lost is still listed, marked "not verified".
 
 If two programs edit the same model (for example Claude over MCP), **Undo** takes
 back only *your* last step, never the other program's work. If the other program has
@@ -42,11 +42,16 @@ skip the step and go one further back. Nothing is guessed.
 
 ## Models that are too big
 
-A model can hold about two million points, edges and faces and 256 MB of images,
-photos and scans. A bigger one (an
-enormous import) still opens, for looking at and for deleting parts of it; it can't
-be saved over your file until it is under the limit, and the file on disk isn't touched
-meanwhile.
+A model can hold about two million points, edges and faces, and its file may be
+about 512 MB in all (everything counts: images, photos, scans, names, notes and
+component attributes; a scan is roughly 16 bytes a point, so about 30 million). An AI
+agent or a plugin can take a model up to 160 MB and add 32 MB in one command; only you
+can go past that. A bigger model (an enormous import, or one made before these limits)
+still opens, for looking at and for deleting parts of it (delete scans, images or
+geometry); it can't be saved over your file until it is under the limits, and the file
+on disk isn't touched meanwhile. A model that SketchCraft saved always opens again.
+Over about a million points, edges and faces everything still works, but each change
+takes a second or more to save and the view takes a few seconds to redraw.
 
 ## Opening other formats
 

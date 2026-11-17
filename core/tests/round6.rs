@@ -485,6 +485,7 @@ fn an_unreadable_file_at_start_is_never_overwritten_and_restore_brings_it_back()
         let r = live.exec(&json!({"cmd": "rect", "from": [0, 0, 0], "to": [4, 4, 0]}));
         assert!(r["save_error"].is_string(), "{r}");
         assert_eq!(std::fs::read(&doc).unwrap(), bytes, "the first commands left the file alone");
+        assert!(live.scene()["notice"].as_str().is_some_and(|n| n.contains("Restore")), "the notice keeps saying what to do: {:?}", live.notice);
     }
     // the aside copy is listed; restoring a good backup (here: a good model written as the aside copy) works and saving resumes
     let l = live.exec(&json!({"cmd": "list_backups"}));

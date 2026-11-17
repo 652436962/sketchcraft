@@ -481,7 +481,10 @@ impl Live {
                 }
                 Err(e) => {
                     self.dirty = true;
-                    self.set_notice(format!("Couldn't save your model: {e}"));
+                    // the notice that says what to do about an unreadable file stays (it is the better message)
+                    if !self.held {
+                        self.set_notice(format!("Couldn't save your model: {e}"));
+                    }
                     r["save_error"] = json!(e);
                 }
             }

@@ -65,6 +65,25 @@ What changed in each SketchCraft release, newest first. The format follows
   Plugins can no longer use Undo and Redo; the release workflow asks the `release`
   reviewer before the Apple signing secrets can be read.
 
+- **A sixth review.** One size limit now counts everything in a model (images, scans,
+  names, notes, component attributes): about 512 MB of file, of which an AI agent or a
+  plugin can take a model up to 160 MB, and no more than 32 MB at a time, so a runaway
+  tool can no longer make your model unopenable. Models over the limits (made before
+  this, or restored from a backup) now open for cutting down instead of being refused
+  with a message you can't act on, and Restore is never blocked by the limit. A model
+  SketchCraft saved always opens again (the open limit is 768 MB). If your model file
+  can't be read when SketchCraft starts, nothing is saved over it until you restore a
+  copy or start a new model. Opening a file (or a library part) whose part numbers
+  were wrong no longer overwrites your drawing, and components are checked as
+  thoroughly as the model. Huge pictures hidden in a small file are measured before
+  they are opened, library thumbnails check the file size, and a face squashed to
+  nothing can no longer stop the model drawing. Undo no longer lets a few millimetres
+  of another program's edit be overwritten at survey-sized coordinates, and a Redo
+  step survives a second save by another program. A recovery file whose note was lost
+  is still listed in Restore ("not verified"). AI agents can no longer start the
+  map and terrain download (Add location…); it stays yours. Very large models (over a
+  million points, edges and faces) say so: each change takes a second or more.
+
 ### Added
 - **Restore from backup…** (File menu, or Shift+S): the model's earlier copies,
   newest first, with their time, size and what they were taken before ("before New",

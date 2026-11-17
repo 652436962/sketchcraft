@@ -97,7 +97,7 @@ export function RestoreDialog({ run, onClose, onToast }: { run: Run; onClose: ()
             <ul className="restore-list">{aside.map(row)}</ul>
           </>
         )}
-        <p className="muted small">Restore replaces the model with that version as one step (⌘Z takes it back), and the model it replaces is kept in the backups first. Files over 400 MB are too big to restore here.</p>
+        <p className="muted small">Restore replaces the model with that version as one step (⌘Z takes it back), and the model it replaces is kept in the backups first. Files over 768 MB are too big to restore here. A file marked “not verified” has the right kind of name but SketchCraft didn’t note making it (its note was lost); it is checked like any other file before it replaces anything.</p>
       </div>
     </div>
   );
