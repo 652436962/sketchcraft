@@ -10,3 +10,6 @@ app/src-tauri/gen/
 
 # pentest reports stay local until the findings are fixed
 security-reports/
+
+# private research notes
+.research/
