@@ -108,6 +108,19 @@ What changed in each SketchCraft release, newest first. The format follows
   seconds for any file), so a tiny booby-trapped file can't use up the computer's
   memory or freeze the app. A plugin tool that can't start now says so, and one that
   sends too many commands is stopped.
+- **A second look at the eighth review.** Double-click now works everywhere (it did
+  nothing in Windows and in browser builds): double-click finishes a wall, opens a
+  group or component, selects a face with its edges (triple-click: everything
+  connected), and repeats your last Push/Pull distance. Escape closes the Learn,
+  Themes, Plugins and every other dialog, and the File and right-click menus. A
+  damaged classic SketchUp file (2020 and earlier) is now refused in well under a
+  second instead of freezing the app for up to 30 seconds. A saved setting that has
+  gone bad can no longer stop the app starting. Placing a component while you are
+  editing one says "Close the component you're editing first" and leaves Place mode.
+  Another program that opens your model while you are editing a group no longer
+  draws into that group, which could make Undo refuse to take back your own step.
+  File > New while editing a component now really starts a new model. Pictures in a
+  SketchUp file that can't be read, or are over 64 MB, are named in the import notice.
 
 ### Changed
 - **Bigger pictures.** Textures and photos may be up to 16,384 px on a side and 100

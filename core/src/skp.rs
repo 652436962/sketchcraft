@@ -114,11 +114,38 @@ struct Reader<'a> {
     depth: usize,
     /// SketchUp 2017 and later: every entity carries an id after its attribute slot
     newf: bool,
+    /// While parse_items reads an item: what the item added to `classes` and
+    /// `objects` (the key and what it replaced), so a failed item is rewound
+    /// instead of every item paying for a copy of both maps
+    log: bool,
+    jc: Vec<(u32, Option<Kind>)>,
+    jo: Vec<(u32, Option<Obj>)>,
 }
 
 type R<T> = std::result::Result<T, Fail>;
 
 impl<'a> Reader<'a> {
+    fn put_class(&mut self, k: u32, kind: Kind) {
+        let old = self.classes.insert(k, kind);
+        if self.log {
+            self.jc.push((k, old));
+        }
+    }
+    /// Undoes everything logged since the last `mark`.
+    fn rewind(&mut self) {
+        for (k, old) in self.jc.drain(..).rev() {
+            match old {
+                Some(v) => self.classes.insert(k, v),
+                None => self.classes.remove(&k),
+            };
+        }
+        for (k, old) in self.jo.drain(..).rev() {
+            match old {
+                Some(v) => self.objects.insert(k, v),
+                None => self.objects.remove(&k),
+            };
+        }
+    }
     fn need(&self, n: usize) -> R<()> {
         if self.p + n > self.d.len() { Err(Fail) } else { Ok(()) }
     }
@@ -223,7 +250,7 @@ impl<'a> Reader<'a> {
         if !allowed.contains(&kind) {
             return Err(Fail);
         }
-        self.classes.insert(class, kind);
+        self.put_class(class, kind);
         self.counter += 1;
         Ok(Some(kind))
     }
@@ -303,7 +330,7 @@ impl<'a> Reader<'a> {
                 if !name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'#') {
                     return Err(Fail);
                 }
-                self.classes.insert(ci, k);
+                self.put_class(ci, k);
                 self.names.insert(ci, name);
                 ci
             }
@@ -316,7 +343,11 @@ impl<'a> Reader<'a> {
         self.depth += 1;
         let body = self.body(kind);
         self.depth -= 1;
-        self.objects.insert(oi, body?);
+        let body = body?;
+        if self.log {
+            self.jo.push((oi, self.objects.get(&oi).cloned()));
+        }
+        self.objects.insert(oi, body);
         Ok(Slot::New(oi))
     }
 
@@ -680,7 +711,7 @@ fn materials(d: &[u8]) -> HashMap<u32, (String, [f32; 3])> {
             }
             p += 2;
         }
-        let mut r = Reader { d, p, counter: 0, classes: HashMap::new(), names: HashMap::new(), objects: HashMap::new(), depth: 0, newf: false };
+        let mut r = Reader { d, p, counter: 0, classes: HashMap::new(), names: HashMap::new(), objects: HashMap::new(), depth: 0, newf: false, log: false, jc: Vec::new(), jo: Vec::new() };
         if r.skip(2).is_err() {
             break;
         }
@@ -713,6 +744,9 @@ fn materials(d: &[u8]) -> HashMap<u32, (String, [f32; 3])> {
 /// whether the references so far are consistent. Cheap: wrong guesses of the
 /// starting index fail within a few bytes.
 fn parse_prefix(mut r: Reader, n: usize) -> (usize, Option<usize>) {
+    if gave_up() {
+        return (0, None);
+    }
     let mut k = 0;
     while k < n {
         if r.obj().is_err() || (k % 256 == 255 && out_of_time()) {
@@ -720,13 +754,37 @@ fn parse_prefix(mut r: Reader, n: usize) -> (usize, Option<usize>) {
         }
         k += 1;
     }
+    PROBED.with(|w| w.set(w.get() + k + 1 + 3 * r.objects.len()));
     (k, r.validate().map(|(good, _)| good))
+}
+
+thread_local! {
+    /// items read by the trial parses that look for where a list starts (all lists together)
+    static PROBED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static PROBE_LIMIT: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+}
+
+/// Real files need up to about a tenth of an item per byte of trial parsing
+/// and under a hundred look-aheads; a damaged one sends the search through
+/// every byte and every counter, so it is cut off at a generous multiple of
+/// that (a few tens of milliseconds) instead of at the deadline.
+fn gave_up() -> bool {
+    PROBED.with(|w| w.get()) > PROBE_LIMIT.with(|l| l.get()) || WORK.with(|w| w.get()) > MAX_LOOK_AHEAD
 }
 
 // How long one file may take: a damaged file sends the look-ahead searching
 // everywhere, so the whole parse has a deadline (real files take well under a second).
 thread_local! {
     static DEADLINE: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The look-ahead attempts one file may make in all (real files use under a
+/// hundred; a damaged file would otherwise try millions and look hung).
+const MAX_LOOK_AHEAD: usize = 4_000;
+
+thread_local! {
+    /// look-ahead attempts made so far in this parse (all lists together)
+    static WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 pub(crate) fn out_of_time() -> bool {
@@ -739,16 +797,23 @@ pub(crate) fn out_of_time() -> bool {
 fn parse_items<'a>(mut r: Reader<'a>, n: usize, budget: usize, tries: &mut usize) -> Option<(Reader<'a>, Vec<Slot>)> {
     let mut items = Vec::with_capacity(n.min(1 << 20));
     for k in 0..n {
-        if out_of_time() {
+        if out_of_time() || (budget < 4 && gave_up()) {
             return None;
+        }
+        if budget < 4 {
+            // a trial parse of the rest of a list after a look-ahead
+            PROBED.with(|w| w.set(w.get() + 1));
         }
         let start = r.p;
         let counter = r.counter;
-        let classes = r.classes.clone();
-        let objects = r.objects.clone();
+        r.log = true;
+        r.jc.clear();
+        r.jo.clear();
         match r.obj() {
             Ok(s) => items.push(s),
             Err(_) => {
+                r.rewind();
+                let (classes, objects) = (&r.classes, &r.objects);
                 if std::env::var_os("SKP_DEBUG").is_some() && budget == 4 {
                     eprintln!("  item {k}/{n} at {start:#x} undecodable (counter {counter:#x}); looking ahead");
                 }
@@ -781,11 +846,15 @@ fn parse_items<'a>(mut r: Reader<'a>, n: usize, budget: usize, tries: &mut usize
                     for skipped in 0..=rest.min(5) {
                         for extra in 1..=16u32 {
                             *tries += 1;
-                            if *tries > 60_000 || (*tries % 64 == 0 && out_of_time()) {
+                            let work = WORK.with(|w| {
+                                w.set(w.get() + 1);
+                                w.get()
+                            });
+                            if *tries > 60_000 || work > MAX_LOOK_AHEAD || (*tries % 64 == 0 && out_of_time()) {
                                 return None;
                             }
                             let want = rest - skipped;
-                            let fresh = || Reader { d, p: q, counter: counter + extra, classes: classes.clone(), names: HashMap::new(), objects: objects.clone(), depth: 0, newf };
+                            let fresh = || Reader { d, p: q, counter: counter + extra, classes: classes.clone(), names: HashMap::new(), objects: objects.clone(), depth: 0, newf, log: false, jc: Vec::new(), jo: Vec::new() };
                             // cheap check first: the next few items must parse on their own
                             let (k2, ok) = parse_prefix(fresh(), want.min(4));
                             if ok.is_none() || k2 < want.min(4) {
@@ -817,7 +886,7 @@ pub fn parse(d: &[u8]) -> Result<SkpFile> {
         bail!("not a SketchUp file");
     }
     let mut file = SkpFile::default();
-    let mut r = Reader { d, p: 0x20, counter: 0, classes: HashMap::new(), names: HashMap::new(), objects: HashMap::new(), depth: 0, newf: false };
+    let mut r = Reader { d, p: 0x20, counter: 0, classes: HashMap::new(), names: HashMap::new(), objects: HashMap::new(), depth: 0, newf: false, log: false, jc: Vec::new(), jo: Vec::new() };
     file.version = r.cstring().unwrap_or_default();
     let major: u32 = file.version.trim_start_matches('{').split('.').next().and_then(|v| v.parse().ok()).unwrap_or(0);
     let newf = major >= 17;
@@ -825,6 +894,9 @@ pub fn parse(d: &[u8]) -> Result<SkpFile> {
     let allowed = std::time::Duration::from_millis((4000 + (d.len() as u64 * 4000 >> 20)).min(30_000));
     let deadline = std::time::Instant::now() + allowed;
     DEADLINE.with(|c| c.set(Some(deadline)));
+    WORK.with(|w| w.set(0));
+    PROBED.with(|w| w.set(0));
+    PROBE_LIMIT.with(|l| l.set(300_000 + 4 * d.len()));
     struct Clear;
     impl Drop for Clear {
         fn drop(&mut self) {
@@ -848,12 +920,15 @@ pub fn parse(d: &[u8]) -> Result<SkpFile> {
         t & 0x8000 != 0 && matches!(known.get(&((t & 0x7FFF) as u32)), Some(Kind::Edge | Kind::Face | Kind::Instance))
     };
 
-    let new_reader = |known: &HashMap<u32, Kind>, at: usize, base: u32| Reader { d, p: at, counter: base, classes: known.clone(), names: HashMap::new(), objects: HashMap::new(), depth: 0, newf };
+    let new_reader = |known: &HashMap<u32, Kind>, at: usize, base: u32| Reader { d, p: at, counter: base, classes: known.clone(), names: HashMap::new(), objects: HashMap::new(), depth: 0, newf, log: false, jc: Vec::new(), jo: Vec::new() };
     // Pick the starting index from the cleanly-parsing prefix, then parse fully
     // (skipping undecodable items) with that one.
     let try_bases = |known: &HashMap<u32, Kind>, at: usize, n: u32, bases: &mut dyn Iterator<Item = u32>| -> Option<(Reader, Vec<Slot>, usize)> {
         let mut best: Option<(usize, usize, u32)> = None; // (items parsed, good refs, base)
         for base in bases {
+            if gave_up() {
+                return None;
+            }
             let (k, good) = parse_prefix(new_reader(known, at, base), n as usize);
             let Some(good) = good else { continue };
             if k == 0 {
@@ -885,6 +960,9 @@ pub fn parse(d: &[u8]) -> Result<SkpFile> {
     // per definition: the object count when the previous list ended (its own object comes after)
     let mut floors: HashMap<u32, u32> = HashMap::new();
     while i + 12 < d.len() {
+        if gave_up() {
+            break;
+        }
         if out_of_time() {
             bail!("this SketchUp file looks damaged: SketchCraft stopped reading it after {} s", allowed.as_secs());
         }
@@ -907,7 +985,7 @@ pub fn parse(d: &[u8]) -> Result<SkpFile> {
                 let name = (r.p..(r.p + 48).min(d.len().saturating_sub(4)))
                     .find(|&k| &d[k..k + 3] == b"\xff\xfe\xff")
                     .and_then(|k| {
-                        let mut nr = Reader { d, p: k, counter: 0, classes: HashMap::new(), names: HashMap::new(), objects: HashMap::new(), depth: 0, newf };
+                        let mut nr = Reader { d, p: k, counter: 0, classes: HashMap::new(), names: HashMap::new(), objects: HashMap::new(), depth: 0, newf, log: false, jc: Vec::new(), jo: Vec::new() };
                         nr.cstring().ok()
                     })
                     .unwrap_or_default();
@@ -957,6 +1035,9 @@ pub fn parse(d: &[u8]) -> Result<SkpFile> {
             }
         }
         i += 1;
+    }
+    if gave_up() {
+        bail!("this SketchUp file looks damaged: SketchCraft couldn't make sense of its contents");
     }
     if file.definitions.is_empty() && file.roots.is_empty() {
         bail!("no geometry found in this SketchUp file");

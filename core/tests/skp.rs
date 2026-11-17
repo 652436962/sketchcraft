@@ -196,3 +196,48 @@ fn definitions_show_when_the_model_draws_nothing() {
     assert_eq!(r["placed"], 1, "{r}");
     assert_eq!(e.model.world_faces().len(), 1, "{r}");
 }
+
+/// A damaged classic file is refused quickly (R8-BRN-001): the look-ahead that skips an item it can't read is bounded by
+/// the work done, not by a 4 to 30 second deadline, so one damaged file never makes the app look hung.
+#[test]
+fn a_damaged_classic_skp_is_refused_or_read_within_a_second() {
+    use base64::Engine as _;
+    let seeds = [triangle_skp(), classic_2017_skp()];
+    let mut x = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    let mut slowest = std::time::Duration::ZERO;
+    for good in &seeds {
+        // a bigger file made of the same stuff over and over, each copy damaged a little differently: the kind of
+        // thing that sends the reader looking ahead at every list
+        let head = 0x20 + 64;
+        let mut big = good[..good.len().min(head)].to_vec();
+        for _ in 0..60 {
+            let mut part = good[good.len().min(head)..].to_vec();
+            for _ in 0..3 {
+                let i = (next() as usize) % part.len().max(1);
+                part[i] = next() as u8;
+            }
+            big.extend(part);
+        }
+        for bytes in [big, good.clone()] {
+            for round in 0..40 {
+                let mut bad = bytes.clone();
+                for _ in 0..1 + round % 4 {
+                    let i = 40 + (next() as usize) % (bad.len() - 40);
+                    bad[i] = next() as u8;
+                }
+                let mut e = Engine::new();
+                let data = base64::engine::general_purpose::STANDARD.encode(&bad);
+                let t = std::time::Instant::now();
+                let _ = e.exec_json(&json!({"cmd":"import_skp","data":data}).to_string());
+                slowest = slowest.max(t.elapsed());
+            }
+        }
+    }
+    assert!(slowest < std::time::Duration::from_secs(1), "the slowest damaged file took {slowest:?}");
+}
