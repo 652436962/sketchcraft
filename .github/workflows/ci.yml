@@ -59,6 +59,9 @@ jobs:
       - name: App checks (skin values, plugin sandbox lockdown, plugin data)
         working-directory: app
         run: npm run check
+      - name: App unit tests (Vitest)
+        working-directory: app
+        run: npm test
 
   # The browser suites (tools/ui-tests, tools/security-tests, tools/ruby-tests) against the real engine: a release
   # bridge plus the Vite dev page on a throwaway model, driven by Playwright's Chromium. No secrets, read-only token.
