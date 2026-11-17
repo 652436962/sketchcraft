@@ -39,6 +39,83 @@ impl W {
     pub fn vertex(&mut self, x: f64, y: f64, z: f64) -> &mut Self {
         self.u16(0).f64(x).f64(y).f64(z)
     }
+    /// SketchUp 2017+: an entity's id as a mask of its non-zero bytes, then those bytes.
+    pub fn id(&mut self, id: u32) -> &mut Self {
+        let b = id.to_le_bytes();
+        let mask = (0..4).fold(0u8, |m, i| if b[i] != 0 { m | 1 << i } else { m });
+        self.u8(mask);
+        for (i, v) in b.iter().enumerate() {
+            if mask & 1 << i != 0 {
+                self.u8(*v);
+            }
+        }
+        self
+    }
+    /// The 10 bytes after an entity's id: material, flags, the 01 01 marker.
+    pub fn rest(&mut self, material: u16) -> &mut Self {
+        self.u16(material).u8(0).u8(1).u8(1).0.extend([0u8; 5]);
+        self
+    }
+}
+
+/// A SketchUp 2017-2020 file in the classic layout: every entity carries an
+/// id after its (null) attribute slot, and the face has a dictionary hanging
+/// off it, which takes object indices. One component definition holds a
+/// right triangle (100 in legs); the model places it 50 inches along x. The
+/// placement names the definition by its object index, which is two below
+/// the list header's number because of the dictionary.
+pub fn classic_2017_skp() -> Vec<u8> {
+    let mut w = W(Vec::new());
+    w.0.extend([0xFF, 0xFE, 0xFF, 0x0E]);
+    for u in "SketchUp Model".encode_utf16() {
+        w.u16(u);
+    }
+    w.ustr("{17.0.1}");
+    w.0.extend([0u8; 64]);
+    // the definition's list header: [x][0][count]; its first class takes x + 1
+    w.u32(10).u16(0).u32(1);
+    // face: class 11, object 12
+    w.class("CFace");
+    // its dictionary: container class 13, object 14; a named set, class 15, object 16
+    w.class("CAttributeContainer").u16(0).u8(0);
+    w.class("CAttributeNamed").u16(0).u8(0).u32(0);
+    w.ustr("SU_Test").ustr("k").u8(10).ustr("v").ustr("").u32(0);
+    w.u16(0); // no more attribute sets
+    w.id(0x0135).rest(0);
+    w.f64(0.0).f64(0.0).f64(1.0).f64(0.0).u32(1);
+    // loop: class 17, object 18
+    w.class("CLoop").u16(0).u8(0).u8(1).u8(1);
+    // edge use (19, 20) with an edge (21, 22) from a vertex (23, 24) to a new one (25)
+    w.class("CEdgeUse").u16(0).u8(0);
+    w.class("CEdge").u16(0).id(7).rest(0);
+    w.class("CVertex").u16(0).id(1).f64(0.0).f64(0.0).f64(0.0);
+    w.u16(0x8000 | 23).u16(0).id(2).f64(100.0).f64(0.0).f64(0.0);
+    w.u16(0).u8(0).u16(18);
+    // edge use 2 (26) with an edge (27) from the vertex 25 to a new one (28)
+    w.u16(0x8000 | 19).u16(0).u8(0);
+    w.u16(0x8000 | 21).u16(0).id(8).rest(0);
+    w.u16(25);
+    w.u16(0x8000 | 23).u16(0).id(3).f64(0.0).f64(100.0).f64(0.0);
+    w.u16(0).u8(0).u16(18);
+    // edge use 3 (29) with an edge (30) closing the triangle
+    w.u16(0x8000 | 19).u16(0).u8(0);
+    w.u16(0x8000 | 21).u16(0).id(9).rest(0);
+    w.u16(28).u16(24).u16(0);
+    w.u8(0).u16(18);
+    w.u16(0); // end of loop
+    w.u16(0); // back material
+    w.0.extend([0u8; 32]);
+    // the model's own list: one instance (class 31)
+    w.u32(1);
+    w.class("CComponentInstance").u16(0).id(0x10).rest(0);
+    w.u16(8);
+    for v in [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 50.0, 0.0, 0.0, 1.0] {
+        w.f64(v);
+    }
+    w.ustr("");
+    w.0.extend([0x5au8; 16]); // its GUID
+    w.0.extend([0u8; 32]);
+    w.0
 }
 
 fn rec(tag: u16, body: &[u8]) -> Vec<u8> {
@@ -62,17 +139,36 @@ pub fn modern_skp() -> Vec<u8> {
 
 /// The same file, with a picture (`bytes`) as the Red material's image.
 pub fn modern_skp_with(texture: Option<&[u8]>) -> Vec<u8> {
-    build(texture, false)
+    build(texture, false, Mode::Plain)
 }
 
 /// The same model laid out as SketchUp 27 saves it: placements listed in
 /// 0x138c with an empty 0x1965, naming their definition by the id of its
 /// entities record (0x1967), and 0x157e holding the definition's name.
 pub fn su27_skp() -> Vec<u8> {
-    build(None, true)
+    build(None, true, Mode::Plain)
 }
 
-fn build(texture: Option<&[u8]>, su27: bool) -> Vec<u8> {
+/// SketchUp 27 again, but the model's only placement is a picture (an image),
+/// which lives in 0x1390/0x1f40 instead of 0x138c.
+pub fn su27_picture_skp() -> Vec<u8> {
+    build(None, true, Mode::Picture)
+}
+
+/// The model's own entities hold nothing but a loose edge, so nothing in it
+/// draws; the definitions are all there is to show.
+pub fn only_definitions_skp() -> Vec<u8> {
+    build(None, true, Mode::OnlyDefinitions)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Plain,
+    Picture,
+    OnlyDefinitions,
+}
+
+fn build(texture: Option<&[u8]>, su27: bool, mode: Mode) -> Vec<u8> {
     let place = |guid: &[u8], def_id: u8, xf: &[u8]| {
         if su27 {
             recs(0x138c, &[recs(0x1964, &[rec(0x1965, &[]), rec(0x1966, xf), rec(0x1967, &[def_id]), rec(0x1968, &[0xab; 16])])])
@@ -115,7 +211,15 @@ fn build(texture: Option<&[u8]>, su27: bool) -> Vec<u8> {
         0x157c,
         &[rec(0x157e, if su27 { b"Outer..." } else { outer_guid }), recs(0x1388, &[header(41).concat(), place(guid, 40, &ident)])],
     );
-    let inst = place(outer_guid, 41, &xf);
+    let inst = match mode {
+        Mode::Plain => place(outer_guid, 41, &xf),
+        Mode::Picture => recs(0x1390, &[recs(0x1f40, &[recs(0x1964, &[rec(0x1965, &[]), rec(0x1966, &xf), rec(0x1967, &[41]), rec(0x1968, &[0xab; 16])])])]),
+        Mode::OnlyDefinitions => {
+            let a = vert(1, [0.0, 0.0, 0.0]);
+            let b = vert(2, [100.0, 0.0, 0.0]);
+            [recs(0x1389, &[a, b]), recs(0x138a, &[edge(10, 1, 2)])].concat()
+        }
+    };
     let material = recs(0x30d4, &[recs(0x32c8, &[with_id(9), rec(0x32cc, b"Red")])]);
     let model = recs(
         0x1f4,

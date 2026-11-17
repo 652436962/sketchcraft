@@ -26,10 +26,12 @@
 //!                          0xfa2 reversed
 //!         0x138d/0x1d4c/0x1964  instance: 0x1965 definition GUID,
 //!                          0x1966 13 f64 (x axis, y axis, z axis, origin, scale)
+//!         0x1390/0x1f40/0x1964  a picture, placed like an instance
 //!         0x138c/0x1964    instance (SketchUp 27): 0x1965 is empty and
 //!                          0x1967 names the definition by the id of its
 //!                          0x1388 entities record; 0x1968 is its own GUID
-//! 0x1f6/0x1388             the model's own entities (same layout)
+//! 0x1f6/0x1388             the model's own entities (same layout; 0x1391/0x4269
+//!                          and 0x1397 hold guide points and curves, not drawn)
 //! ```
 //!
 //! Face records of textured faces carry 0x5dd/../0x2715 texture matrices;
@@ -310,6 +312,12 @@ fn entities(e: &Node, keys: &Keys, tiles: &mut HashMap<u64, Vec<f64>>) -> Entiti
     }
     for list in e.all(0x138c) {
         placements.extend(list.all(0x1964));
+    }
+    // pictures (images) are placed the same way, one level further down
+    for list in e.all(0x1390) {
+        for img in list.all(0x1f40) {
+            placements.extend(img.all(0x1964));
+        }
     }
     {
         {

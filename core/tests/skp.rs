@@ -133,3 +133,66 @@ fn a_2015_file_goes_to_the_classic_reader() {
     assert_eq!(r["version"], "{15.0.0}");
     assert_eq!(e.model.world_faces().len(), 1);
 }
+
+/// SketchUp 2017-2020 files add an id to every entity and hang dictionaries
+/// (attributes, texture mappings) off the entity itself; the classic reader
+/// used to find no geometry in them (issue #1).
+#[test]
+fn imports_a_2017_skp() {
+    use base64::Engine as _;
+    let mut e = Engine::new();
+    let data = base64::engine::general_purpose::STANDARD.encode(classic_2017_skp());
+    let r = run(&mut e, json!({"cmd":"import_skp","data":data}));
+    assert_eq!(r["version"], "{17.0.1}");
+    assert_eq!(r["faces"], 1, "{r}");
+    assert_eq!(r["placed"], 1, "{r}");
+    let faces = e.model.world_faces();
+    assert_eq!(faces.len(), 1);
+    let inch = 0.0254;
+    let area = sketchcraft::geom::area(&faces[0].outer);
+    assert!((area - 0.5 * (100.0 * inch) * (100.0 * inch)).abs() < 1e-9, "{area}");
+    let min_x = faces[0].outer.iter().map(|p| p.x).fold(f64::MAX, f64::min);
+    assert!((min_x - 50.0 * inch).abs() < 1e-9, "placed by the instance transform: {min_x}");
+}
+
+/// A truncated or scrambled 2017 file is an error or a smaller model, never a panic or hang.
+#[test]
+fn a_damaged_2017_skp_does_not_panic() {
+    use base64::Engine as _;
+    let good = classic_2017_skp();
+    for cut in (40..good.len()).step_by(7) {
+        let mut e = Engine::new();
+        let data = base64::engine::general_purpose::STANDARD.encode(&good[..cut]);
+        let _ = e.exec_json(&json!({"cmd":"import_skp","data":data}).to_string());
+    }
+    for i in (60..good.len()).step_by(5) {
+        let mut bad = good.clone();
+        bad[i] ^= 0xA5;
+        let mut e = Engine::new();
+        let data = base64::engine::general_purpose::STANDARD.encode(&bad);
+        let _ = e.exec_json(&json!({"cmd":"import_skp","data":data}).to_string());
+    }
+}
+
+/// Pictures (images) are placements too, under 0x1390/0x1f40.
+#[test]
+fn a_picture_in_a_modern_skp_is_placed() {
+    use base64::Engine as _;
+    let mut e = Engine::new();
+    let data = base64::engine::general_purpose::STANDARD.encode(su27_picture_skp());
+    let r = run(&mut e, json!({"cmd":"import_skp","data":data}));
+    assert_eq!(r["placed"], 1, "{r}");
+    assert_eq!(e.model.world_faces().len(), 1);
+}
+
+/// When the model's own list draws nothing, the definitions nothing else
+/// places are shown rather than leaving an empty model.
+#[test]
+fn definitions_show_when_the_model_draws_nothing() {
+    use base64::Engine as _;
+    let mut e = Engine::new();
+    let data = base64::engine::general_purpose::STANDARD.encode(only_definitions_skp());
+    let r = run(&mut e, json!({"cmd":"import_skp","data":data}));
+    assert_eq!(r["placed"], 1, "{r}");
+    assert_eq!(e.model.world_faces().len(), 1, "{r}");
+}

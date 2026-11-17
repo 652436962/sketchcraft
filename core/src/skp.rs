@@ -47,6 +47,11 @@ enum Kind {
     ArcCurve,
     Instance,
     ConstructionPoint,
+    /// the dictionaries an entity may carry (named attribute sets)
+    AttrContainer,
+    AttrNamed,
+    /// a textured face's mapping, also kept in the container
+    AttrTexCoords,
     /// a class we don't decode (dimension, text...): the list parser skips it
     Unknown,
 }
@@ -62,6 +67,9 @@ fn kind_of(name: &str) -> Option<Kind> {
         "CArcCurve" => Kind::ArcCurve,
         "CComponentInstance" | "CGroup" => Kind::Instance,
         "CConstructionPoint" => Kind::ConstructionPoint,
+        "CAttributeContainer" => Kind::AttrContainer,
+        "CAttributeNamed" => Kind::AttrNamed,
+        "CFaceTextureCoords" => Kind::AttrTexCoords,
         _ => Kind::Unknown,
     })
 }
@@ -104,6 +112,8 @@ struct Reader<'a> {
     names: HashMap<u32, String>,
     objects: HashMap<u32, Obj>,
     depth: usize,
+    /// SketchUp 2017 and later: every entity carries an id after its attribute slot
+    newf: bool,
 }
 
 type R<T> = std::result::Result<T, Fail>;
@@ -156,6 +166,114 @@ impl<'a> Reader<'a> {
         Ok(String::from_utf16_lossy(&units))
     }
 
+    /// An entity's start: its attribute container slot (usually null; when a
+    /// dictionary hangs off the entity it is stored here, in line), then, from
+    /// SketchUp 2017 on, an id: a mask byte saying which of the id's four
+    /// bytes are not zero (0 = id 0, 3 = the low two), then just those bytes.
+    fn head(&mut self) -> R<()> {
+        self.attrs()?;
+        self.id_field()
+    }
+
+    fn id_field(&mut self) -> R<()> {
+        if self.newf {
+            let t = self.u8()?;
+            if t > 0x0f {
+                return Err(Fail);
+            }
+            self.skip(t.count_ones() as usize)?;
+        }
+        Ok(())
+    }
+
+    /// Reads a tag in a slot that holds attribute objects. Some(kind) for a new
+    /// object (declaring its class first when the tag says so; the class and the
+    /// object each take a map index), None for null and back references.
+    fn new_attr_object(&mut self, allowed: &[Kind]) -> R<Option<Kind>> {
+        let tag = self.u16()?;
+        let (class, declared) = match tag {
+            0 => return Ok(None),
+            0x7FFF => {
+                let big = self.u32()?;
+                if big & 0x8000_0000 == 0 {
+                    return Ok(None);
+                }
+                (big & 0x7FFF_FFFF, None)
+            }
+            0xFFFF => {
+                let _schema = self.u16()?;
+                let n = self.u16()? as usize;
+                if n == 0 || n > 64 {
+                    return Err(Fail);
+                }
+                self.need(n)?;
+                let name = String::from_utf8_lossy(&self.d[self.p..self.p + n]).to_string();
+                self.p += n;
+                let Some(k) = kind_of(&name).filter(|k| allowed.contains(k)) else { return Err(Fail) };
+                let ci = self.counter;
+                self.counter += 1;
+                (ci, Some(k))
+            }
+            t if t & 0x8000 != 0 => ((t & 0x7FFF) as u32, None),
+            _ => return Ok(None),
+        };
+        // a class declared outside the list: the slot can only hold these kinds,
+        // and the usual one is the first
+        let kind = declared.or_else(|| self.classes.get(&class).copied()).unwrap_or(allowed[allowed.len() - 1]);
+        if !allowed.contains(&kind) {
+            return Err(Fail);
+        }
+        self.classes.insert(class, kind);
+        self.counter += 1;
+        Ok(Some(kind))
+    }
+
+    fn attrs(&mut self) -> R<()> {
+        if self.new_attr_object(&[Kind::AttrContainer])?.is_none() {
+            return Ok(());
+        }
+        // the container is an entity itself: a null slot and an id
+        self.skip(2)?;
+        self.id_field()?;
+        for _ in 0..100_000 {
+            let Some(kind) = self.new_attr_object(&[Kind::AttrTexCoords, Kind::AttrNamed])? else { return Ok(()) };
+            self.skip(2)?;
+            self.id_field()?;
+            self.skip(4)?;
+            if kind == Kind::AttrTexCoords {
+                // 24 doubles of mapping, two lists of 4-double points (a count each), 8 bytes
+                self.skip(24 * 8)?;
+                for _ in 0..2 {
+                    let n = self.u32()? as usize;
+                    if n > 4096 {
+                        return Err(Fail);
+                    }
+                    self.skip(n * 32)?;
+                }
+                self.skip(8)?;
+                continue;
+            }
+            // a named set: its name, [key, type, value]... up to an empty key, a u32
+            self.cstring()?;
+            for _ in 0..1_000_000 {
+                if self.cstring()?.is_empty() {
+                    break;
+                }
+                match self.u8()? {
+                    4 => self.skip(4)?,
+                    6 => self.skip(8)?,
+                    7 => self.skip(1)?,
+                    10 => {
+                        self.cstring()?;
+                    }
+                    _ => return Err(Fail),
+                }
+            }
+            self.skip(4)?;
+        }
+        Err(Fail)
+    }
+
     fn obj(&mut self) -> R<Slot> {
         if self.depth > 400 || (self.counter & 1023 == 1023 && out_of_time()) {
             return Err(Fail);
@@ -205,7 +323,7 @@ impl<'a> Reader<'a> {
     fn body(&mut self, kind: Kind) -> R<Obj> {
         Ok(match kind {
             Kind::Vertex => {
-                self.skip(2)?;
+                self.head()?;
                 let p = DVec3::new(self.f64()?, self.f64()?, self.f64()?);
                 let ok = |v: f64| v.is_finite() && v.abs() < 1e7 && (v == 0.0 || v.abs() > 1e-300);
                 if !(ok(p.x) && ok(p.y) && ok(p.z)) {
@@ -214,27 +332,31 @@ impl<'a> Reader<'a> {
                 Obj::Vertex(p)
             }
             Kind::Edge => {
-                self.need(12)?;
-                let soft = self.d[self.p + 8] != 0;
-                self.skip(12)?;
+                self.head()?;
+                self.need(10)?;
+                let soft = self.d[self.p + 6] != 0;
+                self.skip(10)?;
                 let a = self.obj()?;
                 let b = self.obj()?;
                 let _curve = self.obj()?;
                 Obj::Edge { a, b, soft }
             }
             Kind::Curve => {
-                self.skip(3)?;
+                self.head()?;
+                self.skip(1)?;
                 self.u32()?;
                 Obj::Curve
             }
             Kind::ArcCurve => {
-                self.skip(7 + 14 * 8)?;
+                self.head()?;
+                self.skip(5 + 14 * 8)?;
                 Obj::Curve
             }
             Kind::Face => {
-                self.need(12)?;
-                let material = u16::from_le_bytes([self.d[self.p + 2], self.d[self.p + 3]]) as u32;
-                self.skip(12)?;
+                self.head()?;
+                self.need(10)?;
+                let material = u16::from_le_bytes([self.d[self.p], self.d[self.p + 1]]) as u32;
+                self.skip(10)?;
                 let normal = DVec3::new(self.f64()?, self.f64()?, self.f64()?);
                 let _d = self.f64()?;
                 if !(normal.is_finite() && (normal.length() - 1.0).abs() < 1e-3) {
@@ -252,7 +374,8 @@ impl<'a> Reader<'a> {
                 Obj::Face { loops, material, normal }
             }
             Kind::Loop => {
-                self.skip(4)?;
+                self.head()?;
+                self.skip(2)?;
                 let mut uses = Vec::new();
                 loop {
                     match self.obj()? {
@@ -266,19 +389,25 @@ impl<'a> Reader<'a> {
                 Obj::Loop { uses }
             }
             Kind::EdgeUse => {
-                self.u16()?;
+                self.head()?;
                 let edge = self.obj()?;
                 let reversed = self.u8()? != 0;
-                let loop_ref = self.u16()? as u32;
+                // a plain reference: a u16, or 0x7FFF and a u32 once there are 32767+ objects
+                let loop_ref = match self.u16()? {
+                    0x7FFF => self.u32()? & 0x7FFF_FFFF,
+                    r => r as u32,
+                };
                 Obj::EdgeUse { edge, reversed, loop_ref }
             }
             Kind::ConstructionPoint => {
-                self.skip(12 + 48 + 1)?;
+                self.head()?;
+                self.skip(10 + 48 + 1)?;
                 Obj::Curve
             }
-            Kind::Unknown => return Err(Fail),
+            Kind::Unknown | Kind::AttrContainer | Kind::AttrNamed | Kind::AttrTexCoords => return Err(Fail),
             Kind::Instance => {
-                self.skip(12)?;
+                self.head()?;
+                self.skip(10)?;
                 let def = self.obj()?;
                 let mut m = [0.0; 13];
                 for v in &mut m {
@@ -288,6 +417,7 @@ impl<'a> Reader<'a> {
                     }
                 }
                 self.cstring()?;
+                self.skip(16)?; // its GUID
                 Obj::Instance { def, m }
             }
         })
@@ -442,11 +572,21 @@ fn resolve(r: &Reader, items: &[Slot]) -> Entities {
 /// Learn class indices that were declared outside any entity list, from how
 /// the stream uses them (the first edge's second vertex; the first edge use's
 /// loop reference).
-fn learn(d: &[u8]) -> HashMap<u32, Kind> {
+fn learn(d: &[u8], newf: bool) -> HashMap<u32, Kind> {
+    // bytes the 2017+ id field adds after an entity's attribute slot
+    let idlen = |at: usize| -> usize {
+        if !newf {
+            return 0;
+        }
+        match d.get(at) {
+            Some(0) | None => 1,
+            Some(t) => 1 + t.count_ones() as usize,
+        }
+    };
     let mut known = HashMap::new();
     let headers = class_headers(d);
     if let Some(&(off, _)) = headers.iter().find(|(_, n)| n == "CVertex") {
-        let after = off + 6 + 7 + 2 + 24;
+        let after = off + 6 + 7 + 2 + idlen(off + 6 + 7 + 2) + 24;
         if after + 2 <= d.len() {
             let tag = u16::from_le_bytes([d[after], d[after + 1]]);
             if tag & 0x8000 != 0 && tag != 0xFFFF {
@@ -457,7 +597,7 @@ fn learn(d: &[u8]) -> HashMap<u32, Kind> {
         }
     }
     if let Some(&(off, _)) = headers.iter().find(|(_, n)| n == "CEdgeUse") {
-        let body = off + 6 + 8;
+        let body = off + 6 + 8 + idlen(off + 6 + 8 + 2);
         if body + 7 <= d.len() {
             let e = u16::from_le_bytes([d[body + 2], d[body + 3]]);
             if e & 0x8000 == 0 && e != 0 {
@@ -472,6 +612,24 @@ fn learn(d: &[u8]) -> HashMap<u32, Kind> {
         }
     }
     known
+}
+
+/// Where a 2017+ definition header's id sits when something other than the
+/// plain 2 bytes separates it from the entity count at `i`: the count is
+/// preceded by zero padding, an empty text (ff fe ff 00) and a flag byte,
+/// and before that comes the u32 id.
+fn def_header_id(d: &[u8], i: usize) -> Option<u32> {
+    let mut s = i;
+    while s > 0 && i - s < 64 && d[s - 1] == 0 {
+        s -= 1;
+    }
+    // the zeros include the text's length byte; the text starts 3 bytes before
+    if s < 9 || &d[s - 3..s] != b"\xff\xfe\xff" {
+        return None;
+    }
+    let at = s - 3 - 1 - 4;
+    let x = u32::from_le_bytes(d[at..at + 4].try_into().ok()?);
+    (x > 0 && x < 0x7FFF_FFFF).then_some(x)
 }
 
 fn class_headers(d: &[u8]) -> Vec<(usize, String)> {
@@ -520,7 +678,7 @@ fn materials(d: &[u8]) -> HashMap<u32, (String, [f32; 3])> {
             }
             p += 2;
         }
-        let mut r = Reader { d, p, counter: 0, classes: HashMap::new(), names: HashMap::new(), objects: HashMap::new(), depth: 0 };
+        let mut r = Reader { d, p, counter: 0, classes: HashMap::new(), names: HashMap::new(), objects: HashMap::new(), depth: 0, newf: false };
         if r.skip(2).is_err() {
             break;
         }
@@ -597,6 +755,7 @@ fn parse_items<'a>(mut r: Reader<'a>, n: usize, budget: usize, tries: &mut usize
                 }
                 let rest = n - k - 1;
                 let d = r.d;
+                let newf = r.newf;
                 let limit = (start + 32 * 1024).min(d.len().saturating_sub(2));
                 // a plausible item start: a new object of a class we decode, or a
                 // reference to an edge, face or instance we already have
@@ -624,7 +783,7 @@ fn parse_items<'a>(mut r: Reader<'a>, n: usize, budget: usize, tries: &mut usize
                                 return None;
                             }
                             let want = rest - skipped;
-                            let fresh = || Reader { d, p: q, counter: counter + extra, classes: classes.clone(), names: HashMap::new(), objects: objects.clone(), depth: 0 };
+                            let fresh = || Reader { d, p: q, counter: counter + extra, classes: classes.clone(), names: HashMap::new(), objects: objects.clone(), depth: 0, newf };
                             // cheap check first: the next few items must parse on their own
                             let (k2, ok) = parse_prefix(fresh(), want.min(4));
                             if ok.is_none() || k2 < want.min(4) {
@@ -656,9 +815,10 @@ pub fn parse(d: &[u8]) -> Result<SkpFile> {
         bail!("not a SketchUp file");
     }
     let mut file = SkpFile::default();
-    let mut r = Reader { d, p: 0x20, counter: 0, classes: HashMap::new(), names: HashMap::new(), objects: HashMap::new(), depth: 0 };
+    let mut r = Reader { d, p: 0x20, counter: 0, classes: HashMap::new(), names: HashMap::new(), objects: HashMap::new(), depth: 0, newf: false };
     file.version = r.cstring().unwrap_or_default();
     let major: u32 = file.version.trim_start_matches('{').split('.').next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let newf = major >= 17;
     // 2021 and later wrap the model in a ZIP; up to 2020 it is the classic
     // binary layout this reader handles (checked on 2013-2016 files)
     if crate::skp_vff::zip_start(d).is_some() {
@@ -677,7 +837,7 @@ pub fn parse(d: &[u8]) -> Result<SkpFile> {
     }
     let _clear = Clear;
 
-    let mut known = learn(d);
+    let mut known = learn(d, newf);
     file.materials = materials(d);
     let geometry_tag = |known: &HashMap<u32, Kind>, t: u16, i: usize| -> bool {
         if t == 0xFFFF {
@@ -687,7 +847,7 @@ pub fn parse(d: &[u8]) -> Result<SkpFile> {
         t & 0x8000 != 0 && matches!(known.get(&((t & 0x7FFF) as u32)), Some(Kind::Edge | Kind::Face | Kind::Instance))
     };
 
-    let new_reader = |known: &HashMap<u32, Kind>, at: usize, base: u32| Reader { d, p: at, counter: base, classes: known.clone(), names: HashMap::new(), objects: HashMap::new(), depth: 0 };
+    let new_reader = |known: &HashMap<u32, Kind>, at: usize, base: u32| Reader { d, p: at, counter: base, classes: known.clone(), names: HashMap::new(), objects: HashMap::new(), depth: 0, newf };
     // Pick the starting index from the cleanly-parsing prefix, then parse fully
     // (skipping undecodable items) with that one.
     let try_bases = |known: &HashMap<u32, Kind>, at: usize, n: u32, bases: &mut dyn Iterator<Item = u32>| -> Option<(Reader, Vec<Slot>, usize)> {
@@ -721,6 +881,8 @@ pub fn parse(d: &[u8]) -> Result<SkpFile> {
 
     let mut i = 0usize;
     let mut last_counter = 1u32;
+    // per definition: the object count when the previous list ended (its own object comes after)
+    let mut floors: HashMap<u32, u32> = HashMap::new();
     while i + 12 < d.len() {
         if out_of_time() {
             bail!("this SketchUp file looks damaged: SketchCraft stopped reading it after {} s", allowed.as_secs());
@@ -735,6 +897,7 @@ pub fn parse(d: &[u8]) -> Result<SkpFile> {
                 for (k, v) in &r.classes {
                     known.insert(*k, *v);
                 }
+                let floor = last_counter;
                 last_counter = last_counter.max(r.counter);
                 if std::env::var_os("SKP_DEBUG").is_some() {
                     eprintln!("def list @{i:#x} def={x:#x} n={n} end={:#x} counter={:#x}", r.p, r.counter);
@@ -743,14 +906,36 @@ pub fn parse(d: &[u8]) -> Result<SkpFile> {
                 let name = (r.p..(r.p + 48).min(d.len().saturating_sub(4)))
                     .find(|&k| &d[k..k + 3] == b"\xff\xfe\xff")
                     .and_then(|k| {
-                        let mut nr = Reader { d, p: k, counter: 0, classes: HashMap::new(), names: HashMap::new(), objects: HashMap::new(), depth: 0 };
+                        let mut nr = Reader { d, p: k, counter: 0, classes: HashMap::new(), names: HashMap::new(), objects: HashMap::new(), depth: 0, newf };
                         nr.cstring().ok()
                     })
                     .unwrap_or_default();
                 // X is one past the definition's own object index
                 file.definitions.insert(x - 1, (name, ents));
+                floors.insert(x - 1, floor);
                 i = r.p;
                 continue;
+            }
+        }
+        // 2017+: a definition's header may carry more between its id and its
+        // count (a flag, a text, padding): [u32 x][u8][text][zeros][u32 n][object]
+        if newf && (1..=2_000_000).contains(&x) {
+            if let Some(xd) = def_header_id(d, i) {
+                let t = u16::from_le_bytes([d[i + 4], d[i + 5]]);
+                if geometry_tag(&known, t, i + 4) {
+                    if let Some((r, items, _)) = try_bases(&known, i + 4, x, &mut [xd + 1, xd + 2, xd + 3].into_iter()) {
+                        for (k, v) in &r.classes {
+                            known.insert(*k, *v);
+                        }
+                        let floor = last_counter;
+                        last_counter = last_counter.max(r.counter);
+                        let ents = resolve(&r, &items);
+                        file.definitions.insert(xd - 1, (String::new(), ents));
+                        floors.insert(xd - 1, floor);
+                        i = r.p;
+                        continue;
+                    }
+                }
             }
         }
         // the model's own list: [u32 n][object], counter unknown: search upward
@@ -773,10 +958,39 @@ pub fn parse(d: &[u8]) -> Result<SkpFile> {
         i += 1;
     }
     if file.definitions.is_empty() && file.roots.is_empty() {
-        if (17..21).contains(&major) {
-            bail!("SketchUp 2017-2020 files can't be read yet; in SketchUp, File > Save As a 2021 or later version (or 2016 or earlier), then import that");
-        }
         bail!("no geometry found in this SketchUp file");
+    }
+    // A placement names its definition's object index. The list header only says
+    // where the definition's entities start, which is further on when the
+    // definition carries attribute dictionaries (their objects take indices
+    // too). The definition's own object comes after the previous list ended, so
+    // a reference means the first definition whose list starts at or after it,
+    // as long as the reference isn't before that point.
+    let keys: Vec<u32> = file.definitions.keys().copied().collect();
+    if std::env::var_os("SKP_DEBUG").is_some() {
+        eprintln!("definition keys {keys:x?}");
+        for (k, (_, e)) in &file.definitions {
+            eprintln!("  def {k:#x} (floor {:#x}): {} faces, places {:x?}", floors.get(k).copied().unwrap_or(0), e.faces.len(), e.instances.iter().map(|i| i.0).collect::<Vec<_>>());
+        }
+        for e in &file.roots {
+            eprintln!("  root: {} faces, places {:x?}", e.faces.len(), e.instances.iter().map(|i| i.0).collect::<Vec<_>>());
+        }
+    }
+    let fix = |d: u32| -> u32 {
+        match keys.iter().copied().find(|k| *k >= d) {
+            Some(k) if floors.get(&k).map_or(true, |f| d >= *f) => k,
+            _ => d,
+        }
+    };
+    for (_, ents) in file.definitions.values_mut() {
+        for (d, _) in &mut ents.instances {
+            *d = fix(*d);
+        }
+    }
+    for ents in &mut file.roots {
+        for (d, _) in &mut ents.instances {
+            *d = fix(*d);
+        }
     }
     Ok(file)
 }
@@ -820,9 +1034,12 @@ pub fn import(m: &mut Model, d: &[u8], at: DVec3, name: &str) -> Result<ImportSu
     let gid = m.begin_group(name.to_string());
     let base = DMat4::from_translation(at);
     let mut placed = 0;
+    let mut root_faces = 0;
     for root in &file.roots {
         let mut tmp = Model::default();
-        summary.faces += fill(&mut tmp, root, &file);
+        let n = fill(&mut tmp, root, &file);
+        root_faces += n;
+        summary.faces += n;
         merge_into(m, &tmp, gid, base);
         for (child, t) in &root.instances {
             if let Some(&cid) = def_ids.get(child) {
@@ -833,8 +1050,9 @@ pub fn import(m: &mut Model, d: &[u8], at: DVec3, name: &str) -> Result<ImportSu
         }
     }
     m.active_group = None;
-    if file.roots.is_empty() {
-        // no model list found: show every definition that nothing else places
+    if placed == 0 && root_faces == 0 {
+        // nothing in the model's own list draws (no list found, or only loose
+        // lines): show every definition that nothing else places
         let used: HashSet<u32> = file.definitions.values().flat_map(|(_, e)| e.instances.iter().map(|(d, _)| *d)).collect();
         for key in file.definitions.keys().filter(|k| !used.contains(k)) {
             let iid = m.new_id();
