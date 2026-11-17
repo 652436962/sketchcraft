@@ -3,12 +3,9 @@
 // SketchCraft commands they recorded. Both steps run in sandboxed workers (no
 // network, no files); the app replays the commands, so they undo as usual.
 import SKETCHUP_RB from "./ruby/sketchup.rb?raw";
-import { LOCKDOWN_SOURCE } from "./lockdown";
+import { SANDBOX_PREFACE, startWorker } from "./sandbox";
 import { pluginSandboxHolds } from "./cspcheck";
 import type { Plugin } from "./plugins";
-
-// the same lockdown as JavaScript plugins (see plugins.tsx)
-const LOCKDOWN = `"use strict";\n${LOCKDOWN_SOURCE}`;
 
 let runtime: Promise<string> | null = null;
 let compiler: Promise<string> | null = null;
@@ -20,12 +17,10 @@ async function worker(code: string, limitMs: number, msg: unknown): Promise<Reco
   const safe = await pluginSandboxHolds();
   if (!safe.ok) return { error: `plugins are off: ${safe.why}` };
   return new Promise((resolve) => {
-    const url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
-    const w = new Worker(url);
+    const { worker: w, stop } = startWorker([code]);
     const done = (r: Record<string, unknown>) => {
       clearTimeout(timer);
-      w.terminate();
-      URL.revokeObjectURL(url);
+      stop();
       resolve(r);
     };
     const timer = setTimeout(() => done({ error: "it took too long, so it was stopped" }), limitMs);
@@ -58,7 +53,7 @@ self.onmessage = (e) => {
     postMessage({ error: "the Ruby compiler didn't start: " + String((err && err.message) || err) });
   }
 };`;
-  const r = await worker(`${LOCKDOWN}\n${rt}\n;\n${comp}\n;\n${driver}`, 60_000, { files });
+  const r = await worker(`${SANDBOX_PREFACE}\n${rt}\n;\n${comp}\n;\n${driver}`, 60_000, { files });
   return r as { js?: string; error?: string };
 }
 
@@ -226,7 +221,7 @@ for (const n of ["sketchup", "sketchup.rb", "extensions", "extensions.rb", "lang
 })();`;
   // loading it (no menu item chosen) gets a short leash: it runs on every launch
   const limit = opts.item == null ? 10_000 : 30_000;
-  const r = await worker(`${LOCKDOWN}\n${rt}\n;\n${api.js}\n;\n${mine.js}\n;\n${shims}\n;\n${driver}`, limit, {
+  const r = await worker(`${SANDBOX_PREFACE}\n${rt}\n;\n${api.js}\n;\n${mine.js}\n;\n${shims}\n;\n${driver}`, limit, {
     runId: Date.now().toString(36),
     entries,
     item: opts.item ?? null,

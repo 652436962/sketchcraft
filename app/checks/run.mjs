@@ -71,13 +71,13 @@ try {
   check(allowed({ cmd: "rect" }) === null && allowed({}) !== null && allowed(null) !== null && allowed([]) !== null, "allowed() checks the shape of a command");
 
   // ---- the worker lockdown does what it says ----------------------------------------
-  const { LOCKDOWN_SOURCE } = await load("/src/lockdown.ts");
+  const { SANDBOX_PREFACE } = await load("/src/sandbox.ts");
   const names = ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "indexedDB", "caches", "Worker", "SharedWorker", "BroadcastChannel", "WebTransport", "FontFace", "FontFaceSet", "Notification", "Request"];
   const self = { navigator: { sendBeacon: () => true, storage: {}, serviceWorker: {} }, WebAssembly: { instantiateStreaming: () => 1, compileStreaming: () => 1 } };
   for (const n of names) self[n] = function () {};
   self.self = self;
   const ctx = vm.createContext(self);
-  vm.runInContext(`"use strict";\n${LOCKDOWN_SOURCE}`, ctx);
+  vm.runInContext(SANDBOX_PREFACE, ctx);
   check(names.every((n) => ctx[n] === undefined), "fetch, XHR, WebSocket, importScripts and every kind of Worker are gone");
   let reached = [];
   for (const n of names) {
