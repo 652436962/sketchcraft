@@ -8,7 +8,10 @@ impl Engine {
         let m: &mut Model = active_model!(self);
         Ok(match cmd {
             Command::New { figure } => {
-                *m = Model::default();
+                // a new model is the whole file's, even when a component is open for editing (that one goes with the old model)
+                self.ctx = None;
+                self.model = Model::default();
+                let m = &mut self.model;
                 match figure.as_deref() {
                     None | Some("" | "none") => json!({}),
                     Some(key @ ("person" | "beaver")) => {

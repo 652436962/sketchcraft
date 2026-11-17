@@ -70,6 +70,9 @@ impl Engine {
                 json!({"instance": inst, "component": m.instances[&inst].def})
             }
             Command::Place { component, at, rotate, name, host } => {
+                if self.ctx.is_some() {
+                    bail!("Close the component you're editing first: a component can't be placed while another one is open for editing");
+                }
                 let key = match &component {
                     Value::String(s) => s.clone(),
                     other => other.to_string(),
