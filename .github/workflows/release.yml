@@ -495,6 +495,9 @@ jobs:
   # for every file on it (so a download can be checked against the release page).
   assets:
     needs: [publish, cli]
+    # sign-macos is skipped while Apple signing is off; without this, the skip cascades and the
+    # zips and SHA256SUMS never reach the release (it happened on v0.3.6)
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.cli.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
