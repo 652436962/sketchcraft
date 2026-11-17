@@ -252,6 +252,11 @@ fn reader_for(bytes: &[u8], format: Option<image::ImageFormat>) -> anyhow::Resul
     Ok(r)
 }
 
+/// The size of a picture, read from its header (nothing decoded).
+pub fn image_dimensions(bytes: &[u8]) -> anyhow::Result<(u32, u32)> {
+    Ok(reader_for(bytes, None)?.into_dimensions()?)
+}
+
 /// Decode a picture (PNG, JPEG, ...) after reading its size from the header: more than `MAX_IMAGE_SIDE` on a side or
 /// `MAX_IMAGE_PIXELS` in all is refused before anything is allocated, and the decoder is held to `MAX_IMAGE_ALLOC`.
 pub fn decode_image(bytes: &[u8], format: Option<image::ImageFormat>) -> anyhow::Result<image::DynamicImage> {

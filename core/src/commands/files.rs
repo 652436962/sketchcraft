@@ -27,6 +27,10 @@ impl Engine {
                 if let Some(what) = opened.broken_refs(false).first() {
                     bail!("{path} isn't a consistent model ({what} refers to something that isn't there)");
                 }
+                // components that contain themselves, nest absurdly deep or multiply into millions of faces would take the program down when drawn
+                if let Err(why) = opened.check_nesting(if self.untrusted { crate::nesting::MAX_EXPANDED_UNTRUSTED } else { crate::nesting::MAX_EXPANDED }) {
+                    bail!("{path} can't be opened: {why}. Nothing was changed.");
+                }
                 // ids from outside: the counter must be above every id in the file, or the next drawing overwrites something
                 opened.repair_ids();
                 opened.vet_pictures();
@@ -98,10 +102,24 @@ impl Engine {
                 json!({"instance": r.instance, "component": r.component, "groups": r.groups, "faces": r.faces, "skipped": r.skipped})
             }
             Command::ImportSkp { path, data, at, name } => {
+                // its components would land in the open component's own table, under ids that can match the model's: close it first
+                if self.ctx.is_some() {
+                    bail!("close the component you're editing first: a SketchUp file's components can't be imported inside one");
+                }
                 use base64::Engine as _;
                 let bytes = match (data, &path) {
                     (Some(b64), _) => base64::engine::general_purpose::STANDARD.decode(b64.trim())?,
-                    (None, Some(p)) => std::fs::read(p)?,
+                    (None, Some(p)) => {
+                        // the file is read whole and a model takes several times its size once imported
+                        let len = std::fs::metadata(p)?.len();
+                        if len > MAX_OPEN_BYTES {
+                            bail!("{p} is {} MB; SketchCraft imports SketchUp files up to {} MB", len >> 20, MAX_OPEN_BYTES >> 20);
+                        }
+                        if self.untrusted && len > MAX_OPEN_BYTES_UNTRUSTED {
+                            bail!("{p} is {} MB; an agent or a plugin can import SketchUp files up to {} MB (the person can import larger ones)", len >> 20, MAX_OPEN_BYTES_UNTRUSTED >> 20);
+                        }
+                        std::fs::read(p)?
+                    }
                     _ => bail!("import_skp needs a path or data"),
                 };
                 let label = name.unwrap_or_else(|| {

@@ -76,7 +76,7 @@ impl Model {
 
     pub fn world_faces(&self) -> Vec<WFace> {
         let mut out = Vec::new();
-        self.collect_faces(self, DMat4::IDENTITY, None, None, &Default::default(), &mut out);
+        self.collect_faces(self, DMat4::IDENTITY, None, None, &Default::default(), &mut out, 0);
         out
     }
 
@@ -84,7 +84,7 @@ impl Model {
     /// Component lengths.
     fn def_size(root: &Model, def: &crate::model::Definition) -> DVec3 {
         let mut fs = Vec::new();
-        def.model.collect_faces(root, DMat4::IDENTITY, Some(0), None, &Default::default(), &mut fs);
+        def.model.collect_faces(root, DMat4::IDENTITY, Some(0), None, &Default::default(), &mut fs, 1);
         let mut it = fs.iter().flat_map(|f| f.outer.iter());
         let Some(first) = it.next() else { return DVec3::ZERO };
         let (lo, hi) = it.fold((*first, *first), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
@@ -101,8 +101,16 @@ impl Model {
 
     /// `root` holds the definitions: components inside components are looked
     /// up there, not in the definition's own (empty) table.
-    fn collect_faces(&self, root: &Model, t: DMat4, owner: Option<Id>, fill: Option<[f32; 3]>, scope: &BTreeMap<String, f64>, out: &mut Vec<WFace>) {
+    fn collect_faces(&self, root: &Model, t: DMat4, owner: Option<Id>, fill: Option<[f32; 3]>, scope: &BTreeMap<String, f64>, out: &mut Vec<WFace>, depth: usize) {
+        // a second line behind the checks at import, open and every command: a model that nests too deep, loops or
+        // expands to more than the limit still draws (what fits), it never overflows the stack or the memory
+        if depth > crate::nesting::MAX_NEST {
+            return;
+        }
         for (&id, f) in &self.faces {
+            if out.len() >= crate::nesting::MAX_EXPANDED {
+                return;
+            }
             if f.hidden || !self.group_visible(f.group) {
                 continue;
             }
@@ -130,7 +138,10 @@ impl Model {
                     continue;
                 }
                 for p in &d.placements {
-                    def.model.collect_faces(root, t * *p, Some(owner.unwrap_or(iid)), d.color.or(fill), &d.scope, out);
+                    def.model.collect_faces(root, t * *p, Some(owner.unwrap_or(iid)), d.color.or(fill), &d.scope, out, depth + 1);
+                    if out.len() >= crate::nesting::MAX_EXPANDED {
+                        return;
+                    }
                 }
             }
         }
@@ -138,11 +149,14 @@ impl Model {
 
     pub fn world_edges(&self) -> Vec<WEdge> {
         let mut out = Vec::new();
-        self.collect_edges(self, DMat4::IDENTITY, None, &Default::default(), &mut out);
+        self.collect_edges(self, DMat4::IDENTITY, None, &Default::default(), &mut out, 0);
         out
     }
 
-    fn collect_edges(&self, root: &Model, t: DMat4, owner: Option<Id>, scope: &BTreeMap<String, f64>, out: &mut Vec<WEdge>) {
+    fn collect_edges(&self, root: &Model, t: DMat4, owner: Option<Id>, scope: &BTreeMap<String, f64>, out: &mut Vec<WEdge>, depth: usize) {
+        if depth > crate::nesting::MAX_NEST {
+            return;
+        }
         // an edge shows if it isn't hidden and something visible uses it (or it's a free line)
         let mut used: HashMap<(Id, Id), bool> = HashMap::new();
         for f in self.faces.values() {
@@ -156,6 +170,9 @@ impl Model {
             }
         }
         for (&id, e) in &self.edges {
+            if out.len() >= crate::nesting::MAX_EXPANDED {
+                return;
+            }
             let k = (e.a.min(e.b), e.a.max(e.b));
             let visible = used.get(&k).copied().unwrap_or(self.group_visible(e.group));
             if e.hidden || !visible {
@@ -178,7 +195,10 @@ impl Model {
                     continue;
                 }
                 for p in &d.placements {
-                    def.model.collect_edges(root, t * *p, Some(owner.unwrap_or(iid)), &d.scope, out);
+                    def.model.collect_edges(root, t * *p, Some(owner.unwrap_or(iid)), &d.scope, out, depth + 1);
+                    if out.len() >= crate::nesting::MAX_EXPANDED {
+                        return;
+                    }
                 }
             }
         }

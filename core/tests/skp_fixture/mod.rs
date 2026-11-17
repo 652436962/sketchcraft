@@ -253,3 +253,101 @@ fn build(texture: Option<&[u8]>, su27: bool, mode: Mode) -> Vec<u8> {
     w.0
 }
 
+
+/// A modern file made of definitions that place each other: `defs[i]` lists (definition index, copies) pairs
+/// that definition i places; every definition also holds one triangle. The model's own list places `roots`.
+/// Definitions are named by GUID "d<i>". Round 8 (cycles, depth, expansion).
+pub fn graph_skp(defs: &[Vec<(usize, usize)>], roots: &[usize]) -> Vec<u8> {
+    graph_skp_with(defs, roots, &[])
+}
+
+/// `graph_skp` plus extra archive entries (name, bytes), for the zip-limit tests.
+pub fn graph_skp_with(defs: &[Vec<(usize, usize)>], roots: &[usize], extra: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    graph_full(defs, roots, &[], extra)
+}
+
+/// A file with one triangle definition and materials (id, name) that the archive's own entries describe.
+pub fn materials_skp(mats: &[(u32, String)], extra: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    graph_full(&[vec![]], &[0], mats, extra)
+}
+
+/// One material "name" with the given material.xml and picture (`tex.png`).
+pub fn with_material(name: &str, xml: Vec<u8>, picture: Vec<u8>) -> Vec<u8> {
+    let (a, b) = (format!("materials/{name}/material.xml"), format!("materials/{name}/tex.png"));
+    graph_full(&[vec![]], &[0], &[(1, name.to_string())], &[(a.as_str(), xml), (b.as_str(), picture)])
+}
+
+pub fn tiny_png() -> Vec<u8> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::RgbImage::new(2, 2).write_to(&mut out, image::ImageFormat::Png).unwrap();
+    out.into_inner()
+}
+
+fn graph_full(defs: &[Vec<(usize, usize)>], roots: &[usize], mats: &[(u32, String)], extra: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    let f = |v: [f64; 3]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    let vert = |id: u8, p: [f64; 3]| recs(0x9c4, &[with_id(id), rec(0x9c5, &f(p))]);
+    let edge = |id: u8, a: u8, b: u8| recs(0xbb8, &[recs(0x7d0, &[with_id(id), rec(0x7d3, &[6])]), rec(0xbb9, &[a]), rec(0xbba, &[b])]);
+    let using = |e: u8| recs(0xfa0, &[rec(0xfa1, &[e]), rec(0xfa2, &[0])]);
+    let ident: Vec<u8> = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0f64].iter().flat_map(|x| x.to_le_bytes()).collect();
+    let place = |j: usize| recs(0x1964, &[rec(0x1965, format!("d{j}").as_bytes()), rec(0x1966, &ident)]);
+    let places = |js: Vec<usize>| recs(0x138d, &[recs(0x1d4c, &js.into_iter().map(place).collect::<Vec<_>>())]);
+    let tri = |extra: Vec<u8>| {
+        let face = recs(0xdac, &[recs(0x7d0, &[with_id(20)]), rec(0xdad, &[0u8; 32]), recs(0xdae, &[recs(0x1194, &[recs(0x1195, &[using(10), using(11), using(12)])])])]);
+        recs(
+            0x1388,
+            &[
+                recs(0x1389, &[vert(1, [0.0, 0.0, 0.0]), vert(2, [100.0, 0.0, 0.0]), vert(3, [0.0, 100.0, 0.0])]),
+                recs(0x138a, &[edge(10, 1, 2), edge(11, 2, 3), edge(12, 3, 1)]),
+                recs(0x138b, &[face]),
+                extra,
+            ],
+        )
+    };
+    let def_records: Vec<Vec<u8>> = defs
+        .iter()
+        .enumerate()
+        .map(|(i, kids)| {
+            let js: Vec<usize> = kids.iter().flat_map(|(j, n)| std::iter::repeat(*j).take(*n)).collect();
+            recs(0x157c, &[rec(0x157e, format!("d{i}").as_bytes()), tri(if js.is_empty() { vec![] } else { places(js) })])
+        })
+        .collect();
+    let root = recs(0x1388, &[if roots.is_empty() { vec![] } else { places(roots.to_vec()) }, recs(0x1389, &[vert(1, [0.0, 0.0, 0.0]), vert(2, [1.0, 0.0, 0.0])]), recs(0x138a, &[edge(10, 1, 2)])]);
+    let material_list: Vec<Vec<u8>> = mats.iter().map(|(id, name)| recs(0x32c8, &[recs(0x5dc, &[rec(0x5de, &id.to_le_bytes())]), rec(0x32cc, name.as_bytes())])).collect();
+    let model = recs(0x1f4, &[recs(0x1f7, &[recs(0x30d4, &material_list)]), recs(0x1f6, &[root]), recs(0x1f9, &[recs(0x1770, &[recs(0x1771, &def_records)])])]);
+    vff(&model, extra)
+}
+
+/// A modern file around a given `model.dat` body, plus extra archive entries.
+pub fn vff(model: &[u8], extra: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    use std::io::Write;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    zip.start_file("model.dat", opts).unwrap();
+    zip.write_all(model).unwrap();
+    for (n, b) in extra {
+        zip.start_file(*n, opts).unwrap();
+        zip.write_all(b).unwrap();
+    }
+    let archive = zip.finish().unwrap().into_inner();
+    let mut w = W(Vec::new());
+    w.0.extend([0xFF, 0xFE, 0xFF, 0x0E]);
+    for u in "SketchUp Model".encode_utf16() {
+        w.u16(u);
+    }
+    w.ustr("{26.2.0}");
+    w.0.extend(b"VFF\x08\x00\x01\x00");
+    w.0.extend(archive);
+    w.0
+}
+
+/// A record nested `depth` deep (6-byte records, each holding the next).
+pub fn nested_records(depth: usize) -> Vec<u8> {
+    let mut body: Vec<u8> = vec![0u8; 0];
+    for _ in 0..depth {
+        body = rec(0x32c9, &body);
+        if body.len() < 6 {
+            body.resize(6, 0);
+        }
+    }
+    body
+}

@@ -592,7 +592,9 @@ fn learn(d: &[u8], newf: bool) -> HashMap<u32, Kind> {
             if tag & 0x8000 != 0 && tag != 0xFFFF {
                 let v = (tag & 0x7FFF) as u32;
                 known.insert(v, Kind::Vertex);
-                known.insert(v - 2, Kind::Edge);
+                if v >= 2 {
+                    known.insert(v - 2, Kind::Edge);
+                }
             }
         }
     }
@@ -727,7 +729,7 @@ thread_local! {
     static DEADLINE: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
 }
 
-fn out_of_time() -> bool {
+pub(crate) fn out_of_time() -> bool {
     DEADLINE.with(|d| d.get().is_some_and(|t| std::time::Instant::now() > t))
 }
 
@@ -819,14 +821,8 @@ pub fn parse(d: &[u8]) -> Result<SkpFile> {
     file.version = r.cstring().unwrap_or_default();
     let major: u32 = file.version.trim_start_matches('{').split('.').next().and_then(|v| v.parse().ok()).unwrap_or(0);
     let newf = major >= 17;
-    // 2021 and later wrap the model in a ZIP; up to 2020 it is the classic
-    // binary layout this reader handles (checked on 2013-2016 files)
-    if crate::skp_vff::zip_start(d).is_some() {
-        return crate::skp_vff::parse(d, file.version);
-    }
-
-    // 4 s, plus 4 s per megabyte
-    let allowed = std::time::Duration::from_millis(4000 + (d.len() as u64 * 4000 >> 20));
+    // How long the whole read may take, either kind of file: 4 s, plus 4 s per megabyte, never more than 30 s.
+    let allowed = std::time::Duration::from_millis((4000 + (d.len() as u64 * 4000 >> 20)).min(30_000));
     let deadline = std::time::Instant::now() + allowed;
     DEADLINE.with(|c| c.set(Some(deadline)));
     struct Clear;
@@ -836,6 +832,11 @@ pub fn parse(d: &[u8]) -> Result<SkpFile> {
         }
     }
     let _clear = Clear;
+    // 2021 and later wrap the model in a ZIP; up to 2020 it is the classic
+    // binary layout this reader handles (checked on 2013-2016 files)
+    if crate::skp_vff::zip_start(d).is_some() {
+        return crate::skp_vff::parse(d, file.version);
+    }
 
     let mut known = learn(d, newf);
     file.materials = materials(d);

@@ -241,6 +241,10 @@ impl Patch {
             return Err(conflicts_text(&conflicts));
         }
         model.check_sane().map_err(|e| e.to_string())?;
+        // a step must not make components contain themselves or multiply (it was fine before, or the step wouldn't exist)
+        if let Err(p) = model.expanded_count() {
+            return Err(format!("{p}, so that step can't be applied"));
+        }
         // nothing may be left pointing at something the step took away (another program built on it): a point, an
         // edge, a group, a material... Problems the model already had before are not this step's doing.
         let now = model.broken_refs(true);

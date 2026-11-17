@@ -102,6 +102,8 @@ pub fn load_file(path: &str) -> Result<Model> {
         }
         _ => bail!("can't place .{ext} files (use {})", EXTS.join(", ")),
     }
+    // a part that contains itself, or multiplies into millions of faces, never gets into a model
+    m.check_nesting(crate::nesting::MAX_EXPANDED).map_err(|why| anyhow::anyhow!("{name} can't be used: {why}"))?;
     m.views.clear();
     m.guides.clear();
     m.active_group = None;
@@ -151,15 +153,9 @@ pub fn definition_for(root: &mut Model, path: &str) -> Result<Id> {
     Ok(adopt(root, src, &name, Some(canon)))
 }
 
-/// Components a component uses inside it (all the way down).
+/// Components a component uses inside it (all the way down). Iterative: a chain of any length (or a loop) is safe.
 fn used_by(root: &Model, def: Id, out: &mut BTreeSet<Id>) {
-    if let Some(d) = root.definitions.get(&def) {
-        for i in d.model.instances.values() {
-            if out.insert(i.def) {
-                used_by(root, i.def, out);
-            }
-        }
-    }
+    out.extend(root.uses_of(def));
 }
 
 /// A component as a standalone .sketchcraft model (its parts included).

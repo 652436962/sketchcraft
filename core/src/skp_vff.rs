@@ -85,17 +85,37 @@ impl<'a> Node<'a> {
     fn text(&self) -> String {
         String::from_utf8_lossy(self.d).trim_end_matches('\0').to_string()
     }
-    /// Every record with `tag` anywhere below this one.
+    /// Every record with `tag` anywhere below this one, in document order. Iterative and held to `MAX_DEPTH` levels (the
+    /// real tree is about 10 deep), so a file of records nested a million deep can't overflow the stack.
     fn find_all(&self, tag: u16, out: &mut Vec<Node<'a>>) {
-        for k in self.kids() {
-            if k.tag == tag {
-                out.push(k);
-            } else if k.d.len() >= 6 {
-                k.find_all(tag, out);
+        let mut stack: Vec<(Node<'a>, usize)> = vec![(*self, 0)];
+        while let Some((n, depth)) = stack.pop() {
+            let mut below = Vec::new();
+            for k in n.kids() {
+                if k.tag == tag {
+                    out.push(k);
+                } else if k.d.len() >= 6 && depth < MAX_DEPTH {
+                    below.push((k, depth + 1));
+                }
             }
+            // the first child is looked into first
+            stack.extend(below.into_iter().rev());
         }
     }
 }
+
+/// The deepest records `find_all` looks into.
+const MAX_DEPTH: usize = 64;
+/// The most entries a SketchUp archive may hold (a real one holds a few per material).
+const MAX_ENTRIES: usize = 20_000;
+/// The most one entry may inflate to, and the most all the ones that are read may inflate to together.
+const MAX_MODEL_DAT: u64 = 256 << 20;
+const MAX_PICTURE: u64 = 64 << 20;
+const MAX_XML: u64 = 64 << 10;
+const MAX_INFLATED: u64 = 384 << 20;
+/// The most pictures decoded for one file, and the most pixels they may add up to.
+const MAX_PICTURES: usize = 256;
+const MAX_PIXELS: u64 = 160_000_000;
 
 fn id_of(n: &Node) -> Option<u64> {
     n.at(&[0x5dc, 0x5de]).map(|x| x.num())
@@ -120,13 +140,44 @@ pub struct Texture {
 pub fn parse(d: &[u8], version: String) -> Result<SkpFile> {
     let start = zip_start(d).context("not a SketchUp 2013+ archive")?;
     let mut zip = zip::ZipArchive::new(Cursor::new(&d[start..])).context("reading the SketchUp archive")?;
-    let mut read = |name: &str| -> Option<Vec<u8>> {
-        let mut f = zip.by_name(name).ok()?;
+    // the archive's directory is checked before anything is inflated: not too many entries, no two with the same name,
+    // none sharing bytes with another (one picture counted as many, a zip bomb's favorite trick)
+    if zip.len() > MAX_ENTRIES {
+        bail!("the SketchUp archive holds {} entries (the limit is {MAX_ENTRIES})", zip.len());
+    }
+    let mut spans: Vec<(u64, u64)> = Vec::new();
+    let mut names = std::collections::HashSet::new();
+    for i in 0..zip.len() {
+        let f = zip.by_index_raw(i).context("reading the SketchUp archive")?;
+        let name = String::from_utf8_lossy(f.name_raw()).to_string();
+        if !names.insert(name.clone()) {
+            bail!("the SketchUp archive lists \"{name}\" twice");
+        }
+        if f.size() > 0 {
+            let Some(at) = f.data_start() else { bail!("the SketchUp archive's directory can't be read") };
+            spans.push((at, at.saturating_add(f.compressed_size())));
+        }
+    }
+    spans.sort_unstable();
+    if spans.windows(2).any(|w| w[1].0 < w[0].1) {
+        bail!("the SketchUp archive has entries that share the same bytes, so it was not read");
+    }
+    let inflated = std::cell::Cell::new(0u64);
+    let mut read = |name: &str, limit: u64| -> Option<Vec<u8>> {
+        let f = zip.by_name(name).ok()?;
+        if f.size() > limit || inflated.get().saturating_add(f.size()) > MAX_INFLATED {
+            return None;
+        }
+        // stop at the limit whatever the directory claims
         let mut v = Vec::new();
-        f.read_to_end(&mut v).ok()?;
+        f.take(limit + 1).read_to_end(&mut v).ok()?;
+        if v.len() as u64 > limit {
+            return None;
+        }
+        inflated.set(inflated.get() + v.len() as u64);
         Some(v)
     };
-    let model = read("model.dat").context("the archive has no model.dat")?;
+    let model = read("model.dat", MAX_MODEL_DAT).context("the archive has no model.dat, or it is more than 256 MB")?;
     if model.len() < 6 {
         bail!("empty model.dat");
     }
@@ -167,8 +218,12 @@ pub fn parse(d: &[u8], version: String) -> Result<SkpFile> {
         file.roots.push(entities(&e, &keys, &mut tiles));
     }
 
+    let (mut pictures, mut pixels) = (0usize, 0u64);
     for (&id, name) in &mat_names {
-        let Some(xml) = read(&format!("materials/{name}/material.xml")) else { continue };
+        if crate::skp::out_of_time() {
+            bail!("this SketchUp file took too long to read, so it was not imported");
+        }
+        let Some(xml) = read(&format!("materials/{name}/material.xml"), MAX_XML) else { continue };
         let xml = String::from_utf8_lossy(&xml).to_string();
         let attr = |k: &str| -> Option<String> {
             let i = xml.find(&format!(" {k}=\""))? + k.len() + 3;
@@ -183,8 +238,24 @@ pub fn parse(d: &[u8], version: String) -> Result<SkpFile> {
                 let j = xml[i..].find("path=\"./")? + i + 8;
                 Some(xml[j..j + xml[j..].find('"')?].to_string())
             });
-            let bytes = img.and_then(|p| read(&format!("materials/{name}/{p}")));
-            if let Some((data, aspect)) = bytes.and_then(|b| shrink(&b, name.trim_start_matches("_LC_"))) {
+            let bytes = img.and_then(|p| read(&format!("materials/{name}/{p}"), MAX_PICTURE));
+            // bounded work: a count, a pixel budget and (with the deadline above) a time limit
+            let shown = name.trim_start_matches("_LC_");
+            let decoded = bytes.and_then(|b| {
+                if pictures >= MAX_PICTURES {
+                    crate::safety::note_skipped(shown, "this file has more pictures than are read; the material keeps its color");
+                    return None;
+                }
+                pictures += 1;
+                let (w, h) = crate::safety::image_dimensions(&b).ok()?;
+                pixels = pixels.saturating_add(w as u64 * h as u64);
+                if pixels > MAX_PIXELS {
+                    crate::safety::note_skipped(shown, "the pictures in this file add up to more than are read; the material keeps its color");
+                    return None;
+                }
+                shrink(&b, shown)
+            });
+            if let Some((data, aspect)) = decoded {
                 let mut t = tiles.remove(&id).unwrap_or_default();
                 t.sort_by(|a, b| a.total_cmp(b));
                 let inches = t.get(t.len() / 2).copied().filter(|v| *v > 0.5 && *v < 2000.0).unwrap_or(39.37);

@@ -371,6 +371,9 @@ impl Engine {
         if let Some(what) = model.broken_refs(false).first() {
             bail!("that file isn't a consistent model ({what} refers to something that isn't there), so it was not restored");
         }
+        if let Err(why) = model.check_nesting(crate::nesting::MAX_EXPANDED) {
+            bail!("that file can't be restored: {why}");
+        }
         let mut model = model;
         model.repair_ids();
         model.vet_pictures();
@@ -549,7 +552,12 @@ impl Engine {
                     let bytes = self.model.size_estimate();
                     let text = self.model.text_bytes();
                     let within = count <= crate::model::MAX_ENTITIES && bytes <= crate::model::MAX_MODEL_BYTES && text <= crate::model::MAX_TEXT_BYTES && !self.model.attrs_over();
-                    let checked = if is_open && self.oversize {
+                    // components must not contain themselves, nest too deep or multiply past the limit (a model that did
+                    // would take the program down when drawn); a model already over the limit may only get smaller
+                    let nest_err = self.nesting_error(is_open, saved.as_ref().map(|(m, ..)| m));
+                    let checked = if let Some(e) = nest_err {
+                        Err(e)
+                    } else if is_open && self.oversize {
                         self.model.check_sane_with(false)
                     } else if self.oversize && within {
                         self.oversize = false;
@@ -597,6 +605,32 @@ impl Engine {
                 }
                 json!({"ok": false, "error": "SketchCraft hit a bug running that. Nothing was changed."})
             }
+        }
+    }
+
+    /// Why the model as it now stands has components that can't be allowed (see `nesting`), if it does.
+    fn nesting_error(&self, is_open: bool, before: Option<&Model>) -> Option<anyhow::Error> {
+        if let Some(d) = self.ctx.and_then(|d| self.model.definitions.get(&d)) {
+            let had = before.and_then(|b| b.definitions.get(&self.ctx?)).is_some_and(|d| !d.model.definitions.is_empty());
+            if !d.model.definitions.is_empty() && !had {
+                return Some(anyhow::anyhow!("components can't be made, imported or opened while one is being edited (their ids would collide with the model's own): close the component first. Nothing was changed."));
+            }
+        }
+        if self.model.definitions.is_empty() && self.model.instances.is_empty() {
+            return None;
+        }
+        let limit = if self.untrusted { crate::nesting::MAX_EXPANDED_UNTRUSTED } else { crate::nesting::MAX_EXPANDED };
+        match self.model.expanded_count() {
+            Err(p) => Some(anyhow::anyhow!("{p}, so it was not done")),
+            Ok(n) if n > limit => {
+                // not a new problem when the model was already this big (an agent may still delete or edit what is there)
+                let was = if is_open { None } else { before.and_then(|b| b.expanded_count().ok()) };
+                match was {
+                    Some(w) if n <= w => None,
+                    _ => Some(anyhow::anyhow!("the components in it would add up to about {n} edges and faces once every placement is counted (the limit is {limit}): a component placed many times inside a component placed many times multiplies. It was not done.")),
+                }
+            }
+            Ok(_) => None,
         }
     }
 
