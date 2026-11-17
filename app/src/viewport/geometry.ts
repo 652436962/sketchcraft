@@ -6,7 +6,6 @@ export const UP = new THREE.Vector3(0, 0, 1);
 export const r4 = (x: number) => Math.round(x * 1e4) / 1e4;
 export const arr = (v: THREE.Vector3): Vec3 => [r4(v.x), r4(v.y), r4(v.z)];
 
-/** In-plane axes for a normal: u horizontal when possible, v = n x u. */
 /** The circle through three points: center, radius and plane normal (null when they're in a line). */
 export function circleThrough(a: THREE.Vector3, m: THREE.Vector3, b: THREE.Vector3): { c: THREE.Vector3; r: number; n: THREE.Vector3 } | null {
   const u = m.clone().sub(a);
