@@ -281,8 +281,10 @@ export interface ToolSession {
 const EVENT_LIMIT_MS = 10_000;
 
 /** Start a plugin's tool: a worker that stays while the tool is in use and
- * gets every move and click. Moves are dropped while the last one is busy. */
-export function startPluginTool(
+ * gets every move and click. Moves are dropped while the last one is busy.
+ * Checks the window's policy itself (like `runPlugin`, not left to the caller) and answers null, with the
+ * reason shown, when the tool can't start. */
+export async function startPluginTool(
   plugin: Plugin,
   toolId: string,
   env: {
@@ -298,8 +300,19 @@ export function startPluginTool(
     /** the tool ended (finished, failed or stopped) */
     ended: () => void;
   },
-): ToolSession {
-  const sandbox = startWorker([PRELUDE, "\n;\n", plugin.code]);
+): Promise<ToolSession | null> {
+  const safe = await pluginSandboxHolds();
+  if (!safe.ok) {
+    env.toast(`Plugins are off: ${safe.why}.`, true);
+    return null;
+  }
+  let sandbox: SandboxWorker;
+  try {
+    sandbox = startWorker([PRELUDE, "\n;\n", plugin.code]);
+  } catch (e) {
+    env.toast(`${plugin.name} couldn't start: ${String(e)}`, true);
+    return null;
+  }
   const { worker } = sandbox;
   let seq = 0;
   let busy = false;
@@ -338,8 +351,14 @@ export function startPluginTool(
   };
   worker.onmessage = async (e) => {
     const m = e.data ?? {};
-    if (m.type === "exec") await answerExec(m, worker, gate, batch, env);
-    else if (m.type === "ask") await answerAsk(m, worker, plugin, env, { pause: () => clearTimeout(timer), resume: arm });
+    if (m.type === "exec") {
+      await answerExec(m, worker, gate, batch, env);
+      // the gate refuses every command past the limit; stop the tool now instead of leaving it to its step timer
+      if (gate.overLimit) {
+        env.toast(`${plugin.name} sent more than ${MAX_COMMANDS} commands, so its tool was stopped.`, true);
+        end();
+      }
+    } else if (m.type === "ask") await answerAsk(m, worker, plugin, env, { pause: () => clearTimeout(timer), resume: arm });
     else if (relayDisplay(m, plugin, env)) return;
     else if (m.type === "preview") env.preview(cleanPreview(m.lines));
     else if (m.type === "hint") env.hint(String(m.text).slice(0, 300));

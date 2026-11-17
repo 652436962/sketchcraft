@@ -5,7 +5,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { execPlugin, type Reply, type Scene } from "./engine";
 import { runRuby } from "./ruby";
-import { pluginSandboxHolds } from "./cspcheck";
 import { RUBY_REPLAY_MS, batcher, cleanForm, cleanResult, loadPlugins, MAX_COMMANDS, runPlugin, startPluginTool, type Plugin, type PluginCommand, type PluginForm, type PluginList, type PluginResult, type ToolSession } from "./plugins";
 import type { Sel } from "./selection";
 import type { Tool } from "./Viewport";
@@ -60,12 +59,10 @@ export function usePlugins({ sel, scene, tool, setTool, say, sayAs, runForPlugin
   const runPluginCommandRef = useRef<(p: Plugin, c: string) => Promise<void>>(async () => {});
   // a command marked "tool" starts the plugin's tool instead of running once
   const startTool = async (plugin: Plugin, toolId: string, label: string) => {
-    const safe = await pluginSandboxHolds();
-    if (!safe.ok) return say(`Plugins are off: ${safe.why}.`, true);
     toolSession.current?.stop();
     const name = (plugin.builtin ? label : `${label} · plugin “${plugin.name.slice(0, 40)}”`).replace(/…$/, "");
     setPluginTool({ name, hint: "", preview: [], anchor: null });
-    const session = startPluginTool(plugin, toolId, {
+    const session = await startPluginTool(plugin, toolId, {
       selection: { faces: sel.faces, edges: sel.edges, groups: sel.groups, instances: sel.instances },
       units: scene?.units || "m",
       run: (cmd) => runForPlugin(cmd, plugin),
@@ -84,6 +81,11 @@ export function usePlugins({ sel, scene, tool, setTool, say, sayAs, runForPlugin
         }
       },
     });
+    if (!session) {
+      // it couldn't start (the reason was shown): no banner, no tool
+      setPluginTool(null);
+      return;
+    }
     toolSession.current = session;
     setTool("plugin");
   };
