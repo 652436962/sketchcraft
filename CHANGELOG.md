@@ -6,6 +6,16 @@ What changed in each SketchCraft release, newest first. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Files from a newer SketchCraft open read-only, so an older copy can never damage
+  them.** Model files now carry a format number. If a file has a higher one, asks for
+  features this version doesn't have, or holds data this version doesn't know, it opens
+  for looking only: a bar says "Saved by a newer SketchCraft — update to edit",
+  Save, Save As, the live copy and the backups never write over it, and an AI agent
+  or plugin that tries to change it gets an error saying why. Restoring from a backup
+  and placing library parts follow the same rule. Files from before this check open
+  as always. (#57)
+
 ## [0.3.6] - 2026-11-17
 
 ### Fixed

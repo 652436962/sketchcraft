@@ -5,6 +5,33 @@
 **File › Save** writes a `.sketchcraft` file. SketchCraft also keeps a live
 copy as you work, so a crash doesn't lose your model.
 
+## Files from a newer SketchCraft
+
+Every `.sketchcraft` file says which version of the file format it uses. If you open a
+file saved by a **newer** SketchCraft (for example on a computer that updated before
+this one), this version can't know everything in it, and saving would quietly throw
+away what it doesn't know. So the file opens **read-only**, and a bar across the top
+says: "Saved by a newer SketchCraft — update to edit. You can look, but changes won't
+be saved here." Files from a newer SketchCraft open read-only, so an older copy can
+never damage them.
+
+While it is read-only:
+
+- You can orbit, measure, render and export as usual.
+- Drawing, editing, Undo, **Save** and **Save As** are refused, the file on disk is
+  never written to, and the live copy and the timed backups leave it alone.
+- AI agents and plugins get an error that says why, instead of a silent no.
+- **Restore from backup…** won't put anything over it, and a backup that is itself from
+  a newer SketchCraft can't be restored by this version. **Save a copy** in that list
+  still works: it copies the file byte for byte, so nothing is lost.
+- A part from a newer SketchCraft can't be placed in a model from the library.
+- **File › New** or **File › Open…** of another model ends it. To edit the file, update
+  SketchCraft. There is no "Save a copy" of the open model itself: the copy would have
+  to be made from what this version understood, which is the thing that loses data. Copy
+  the file in Finder if you want a spare.
+
+Files from before this check (with no version in them) open and save as always.
+
 ## Restoring an earlier version
 
 SketchCraft keeps earlier copies of your model in a `Backups` folder beside it:
