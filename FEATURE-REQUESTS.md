@@ -37,6 +37,19 @@ buttons, forms and tools.
 | 7 | **SketchUp Ruby, a subset**: run .rb scripts and install .rbz files using the core of SketchUp's Ruby API (model, entities, add_face, add_line, pushpull, groups, materials, menus, input boxes) | rats4final (Reddit) | 2026-11-16 | done | 2026-11-16 |
 | 8 | **Test with real free SketchUp scripts**, and document what works and what doesn't | Jason | 2026-11-16 | done | 2026-11-16 |
 
+## Sprint 0 of 0.3.7: testing (from 2026-11-17)
+
+The suite grows with the app: from here on every feature lands with its tests. Issues #49–#54 in the **0.3.7 — Drafting** milestone.
+
+| # | Feature | Asked by | Added | Status | Completed |
+| - | ------- | -------- | ----- | ------ | --------- |
+| 1 | **Playwright UI tests in CI on every PR** (#49) | Jason | 2026-11-17 | planned | |
+| 2 | **A Playwright suite for every tool** (#50) | Jason | 2026-11-17 | planned | |
+| 3 | **Frontend unit tests with Vitest** (#51) | Jason | 2026-11-17 | planned | |
+| 4 | **Visual regression screenshots** (#52) | Jason | 2026-11-17 | planned | |
+| 5 | **SketchUp file corpus in CI** (#53) | Jason | 2026-11-17 | planned | |
+| 6 | **How to run the tests, in CONTRIBUTING** (#54) | Jason | 2026-11-17 | planned | |
+
 ## Sprint 3: 0.3.7, drafting (from 2026-11-17)
 
 LayOut-class documentation. People who draft for a living say the money is here, and SketchUp's LayOut does it badly.

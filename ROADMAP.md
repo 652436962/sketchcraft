@@ -23,6 +23,8 @@ guess today.
 
 ## 0.3.7: Drafting
 
+**First, Sprint 0: testing.** The test suite grows with the app from here on: the UI tests run in CI on every PR, every tool gets a test, plus frontend unit tests, screenshot comparisons and SketchUp's own test files. Every feature after this lands with its tests.
+
 The biggest reason professionals stay on SketchUp is LayOut, and the biggest
 complaint about LayOut is that it's slow and loses your dimensions. So:
 
