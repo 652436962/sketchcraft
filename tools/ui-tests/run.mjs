@@ -18,8 +18,9 @@ import { ROOT } from '../demos/lib.mjs';
 
 const SUITES = [
   ['undo-and-restore', 'tools/ui-tests/undo-and-restore.mjs', 240],
+  ['read-only', 'tools/ui-tests/read-only.mjs', 240],
   ['gestures-and-escape', 'tools/ui-tests/gestures-and-escape.mjs', 240],
-  ['tools', 'tools/ui-tests/tools.mjs', 600],
+  ['tools', 'tools/ui-tests/tools.mjs', 900],
   ['plugin-sandbox', 'tools/security-tests/plugin-sandbox.mjs', 240],
   ['ruby', 'tools/ruby-tests/run.mjs', 300],
   ['visual', 'tools/ui-tests/visual.mjs', 600],
@@ -48,7 +49,7 @@ if (!fs.existsSync(bin)) {
 }
 const env = {
   ...process.env,
-  SKETCHCRAFT_REAL_HOME: os.homedir(),
+  SKETCHCRAFT_REAL_HOME: process.env.SKETCHCRAFT_REAL_HOME ?? os.homedir(),
   HOME: path.join(scratch, 'home'),
   XDG_CACHE_HOME: path.join(scratch, 'cache'),
   SKETCHCRAFT_DOC: path.join(scratch, 'live.sketchcraft'),
