@@ -15,6 +15,12 @@ pub fn path_arg(p: impl AsRef<Path>) -> PathBuf {
     }
 }
 
+/// The size and times of a plain file (a link, a folder or a missing file gives None): what the
+/// backup and side-file listings ask of every name they find.
+pub fn plain_file(path: &Path) -> Option<std::fs::Metadata> {
+    std::fs::symlink_metadata(path).ok().filter(|m| m.is_file())
+}
+
 /// A per-user folder for caches and work in progress that must outlive one
 /// call. On Unix a shared /tmp lets other users pre-create a fixed name, so
 /// it lives under the user's own ~/.cache instead (private, 0700, never a
