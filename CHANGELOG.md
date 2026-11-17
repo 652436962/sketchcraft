@@ -6,6 +6,8 @@ What changed in each SketchCraft release, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-11-17
+
 ### Security
 - **Final pre-release pass.**
   - Plugins and agents: a plugin run that changes your model now says so
@@ -377,7 +379,8 @@ The first build with installers (never published as a release).
   import and export, and PNG renders with dimensions and labels.
 - Installers for macOS, Windows and Linux, and the CLI for each.
 
-[Unreleased]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.6...HEAD
+[0.3.6]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.2...v0.3.3
