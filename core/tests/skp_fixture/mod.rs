@@ -62,6 +62,25 @@ pub fn modern_skp() -> Vec<u8> {
 
 /// The same file, with a picture (`bytes`) as the Red material's image.
 pub fn modern_skp_with(texture: Option<&[u8]>) -> Vec<u8> {
+    build(texture, false)
+}
+
+/// The same model laid out as SketchUp 27 saves it: placements listed in
+/// 0x138c with an empty 0x1965, naming their definition by the id of its
+/// entities record (0x1967), and 0x157e holding the definition's name.
+pub fn su27_skp() -> Vec<u8> {
+    build(None, true)
+}
+
+fn build(texture: Option<&[u8]>, su27: bool) -> Vec<u8> {
+    let place = |guid: &[u8], def_id: u8, xf: &[u8]| {
+        if su27 {
+            recs(0x138c, &[recs(0x1964, &[rec(0x1965, &[]), rec(0x1966, xf), rec(0x1967, &[def_id]), rec(0x1968, &[0xab; 16])])])
+        } else {
+            recs(0x138d, &[recs(0x1d4c, &[recs(0x1964, &[rec(0x1965, guid), rec(0x1966, xf)])])])
+        }
+    };
+    let header = |id: u8| if su27 { vec![recs(0x7d0, &[with_id(id)])] } else { vec![] };
     let f = |v: [f64; 3]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
     let vert = |id: u8, p: [f64; 3]| recs(0x9c4, &[with_id(id), rec(0x9c5, &f(p))]);
     let edge = |id: u8, a: u8, b: u8| recs(0xbb8, &[recs(0x7d0, &[with_id(id), rec(0x7d3, &[6])]), rec(0xbb9, &[a]), rec(0xbba, &[b])]);
@@ -77,13 +96,14 @@ pub fn modern_skp_with(texture: Option<&[u8]>) -> Vec<u8> {
     let ents = recs(
         0x1388,
         &[
+            header(40).concat(),
             recs(0x1389, &[vert(1, [0.0, 0.0, 0.0]), vert(2, [100.0, 0.0, 0.0]), vert(3, [0.0, 100.0, 0.0])]),
             recs(0x138a, &[edge(10, 1, 2), edge(11, 2, 3), edge(12, 3, 1)]),
             recs(0x138b, &[face]),
         ],
     );
     let guid = b"0000-def";
-    let def = recs(0x157c, &[rec(0x157e, guid), ents]);
+    let def = recs(0x157c, &[rec(0x157e, if su27 { b"Triangle" } else { guid }), ents]);
     let mut m = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0f64];
     m[9] = 10.0; // placed 10 inches along x
     let xf: Vec<u8> = m.iter().flat_map(|x| x.to_le_bytes()).collect();
@@ -93,9 +113,9 @@ pub fn modern_skp_with(texture: Option<&[u8]>) -> Vec<u8> {
     let outer_guid = b"0000-out";
     let outer = recs(
         0x157c,
-        &[rec(0x157e, outer_guid), recs(0x1388, &[recs(0x138d, &[recs(0x1d4c, &[recs(0x1964, &[rec(0x1965, guid), rec(0x1966, &ident)])])])])],
+        &[rec(0x157e, if su27 { b"Outer..." } else { outer_guid }), recs(0x1388, &[header(41).concat(), place(guid, 40, &ident)])],
     );
-    let inst = recs(0x138d, &[recs(0x1d4c, &[recs(0x1964, &[rec(0x1965, outer_guid), rec(0x1966, &xf)])])]);
+    let inst = place(outer_guid, 41, &xf);
     let material = recs(0x30d4, &[recs(0x32c8, &[with_id(9), rec(0x32cc, b"Red")])]);
     let model = recs(
         0x1f4,
@@ -123,7 +143,7 @@ pub fn modern_skp_with(texture: Option<&[u8]>) -> Vec<u8> {
     for u in "SketchUp Model".encode_utf16() {
         w.u16(u);
     }
-    w.ustr("{26.2.0}");
+    w.ustr(if su27 { "{27.0.0}" } else { "{26.2.0}" });
     w.0.extend(b"VFF\x08\x00\x01\x00");
     w.0.extend(archive);
     w.0

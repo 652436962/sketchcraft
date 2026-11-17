@@ -100,3 +100,19 @@ fn imports_a_modern_skp() {
     assert!((min_x - 10.0 * inch).abs() < 1e-9, "placed by the instance transform: {min_x}");
     assert_eq!(faces[0].color, Some([1.0, 0.0, 0.0]), "color from material.xml");
 }
+
+/// SketchUp 27 names a placement's definition by id, not GUID (issue #1:
+/// files loaded their components but placed none, so nothing showed).
+#[test]
+fn imports_a_sketchup_27_skp() {
+    use base64::Engine as _;
+    let mut e = Engine::new();
+    let data = base64::engine::general_purpose::STANDARD.encode(skp_fixture::su27_skp());
+    let r = run(&mut e, json!({"cmd":"import_skp","data":data}));
+    assert_eq!(r["version"], "{27.0.0}");
+    assert_eq!(r["placed"], 1, "{r}");
+    let faces = e.model.world_faces();
+    assert_eq!(faces.len(), 1, "the face inside the nested component draws");
+    let min_x = faces[0].outer.iter().map(|p| p.x).fold(f64::MAX, f64::min);
+    assert!((min_x - 10.0 * 0.0254).abs() < 1e-9, "placed by the instance transform: {min_x}");
+}

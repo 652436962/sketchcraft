@@ -26,6 +26,9 @@
 //!                          0xfa2 reversed
 //!         0x138d/0x1d4c/0x1964  instance: 0x1965 definition GUID,
 //!                          0x1966 13 f64 (x axis, y axis, z axis, origin, scale)
+//!         0x138c/0x1964    instance (SketchUp 27): 0x1965 is empty and
+//!                          0x1967 names the definition by the id of its
+//!                          0x1388 entities record; 0x1968 is its own GUID
 //! 0x1f6/0x1388             the model's own entities (same layout)
 //! ```
 //!
@@ -141,10 +144,16 @@ pub fn parse(d: &[u8], version: String) -> Result<SkpFile> {
 
     // definitions and the model's entities
     let defs = top.at(&[0x1f9, 0x1770, 0x1771]).map(|n| n.all(0x157c)).unwrap_or_default();
-    let mut keys: HashMap<String, u32> = HashMap::new();
+    let mut keys = Keys::default();
     for (i, def) in defs.iter().enumerate() {
         if let Some(g) = def.get(0x157e) {
-            keys.insert(g.text(), i as u32 + 1);
+            let g = g.text();
+            if !g.is_empty() {
+                keys.guid.insert(g, i as u32 + 1);
+            }
+        }
+        if let Some(id) = def.at(&[0x1388, 0x7d0]).and_then(|h| id_of(&h)) {
+            keys.id.insert(id, i as u32 + 1);
         }
     }
     let mut tiles: HashMap<u64, Vec<f64>> = HashMap::new();
@@ -212,7 +221,22 @@ fn shrink(bytes: &[u8], name: &str) -> Option<(String, f64)> {
     Some((format!("data:image/{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(out.into_inner())), aspect))
 }
 
-fn entities(e: &Node, keys: &HashMap<String, u32>, tiles: &mut HashMap<u64, Vec<f64>>) -> Entities {
+/// How placements name their definition: by GUID text (up to SketchUp 26)
+/// or by the id of the definition's entities record (SketchUp 27).
+#[derive(Default)]
+struct Keys {
+    guid: HashMap<String, u32>,
+    id: HashMap<u64, u32>,
+}
+
+impl Keys {
+    fn of(&self, i: &Node) -> Option<u32> {
+        let by_guid = i.get(0x1965).map(|g| g.text()).filter(|g| !g.is_empty()).and_then(|g| self.guid.get(&g).copied());
+        by_guid.or_else(|| i.get(0x1967).filter(|n| !n.d.is_empty()).and_then(|n| self.id.get(&n.num()).copied()))
+    }
+}
+
+fn entities(e: &Node, keys: &Keys, tiles: &mut HashMap<u64, Vec<f64>>) -> Entities {
     let mut out = Entities::default();
     let mut verts: HashMap<u64, DVec3> = HashMap::new();
     for list in e.all(0x1389) {
@@ -277,10 +301,20 @@ fn entities(e: &Node, keys: &HashMap<String, u32>, tiles: &mut HashMap<u64, Vec<
             out.lines.push((*pa, *pb, soft));
         }
     }
+    // placements: grouped in 0x138d/0x1d4c, and (SketchUp 27) listed in 0x138c
+    let mut placements = Vec::new();
     for list in e.all(0x138d) {
         for g in list.all(0x1d4c) {
-            for i in g.all(0x1964) {
-                let Some(key) = i.get(0x1965).and_then(|g| keys.get(&g.text())) else { continue };
+            placements.extend(g.all(0x1964));
+        }
+    }
+    for list in e.all(0x138c) {
+        placements.extend(list.all(0x1964));
+    }
+    {
+        {
+            for i in placements {
+                let Some(key) = keys.of(&i) else { continue };
                 let m = i.get(0x1966).map(|m| m.f64s()).unwrap_or_default();
                 let t = if m.len() >= 13 {
                     let s = if m[12].abs() > 1e-12 { 1.0 / m[12] } else { 1.0 };
@@ -293,7 +327,7 @@ fn entities(e: &Node, keys: &HashMap<String, u32>, tiles: &mut HashMap<u64, Vec<
                 } else {
                     DMat4::IDENTITY
                 };
-                out.instances.push((*key, t));
+                out.instances.push((key, t));
             }
         }
     }
