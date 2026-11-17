@@ -327,7 +327,7 @@ fn textures_count_against_a_byte_budget_per_command_and_per_model() {
     }
     let refused = refused.expect("40 textures of 10+ MB must not all be accepted");
     assert!(refused["error"].as_str().unwrap().contains("MB"), "{refused}");
-    assert!(e.model.bulk_bytes() <= sketchcraft::model::MAX_BULK, "{}", e.model.bulk_bytes());
+    assert!(e.model.size_estimate() <= sketchcraft::model::MAX_MODEL_BYTES_UNTRUSTED, "{}", e.model.size_estimate());
     assert!(accepted >= 10, "{accepted}: a few real textures are fine");
     // the same model can't be saved over the limit either
     e.model.check_sane().unwrap();
@@ -336,7 +336,7 @@ fn textures_count_against_a_byte_budget_per_command_and_per_model() {
 #[test]
 fn a_model_over_the_byte_budget_fails_the_check() {
     let mut m = sketchcraft::model::Model::default();
-    m.materials.insert("big".into(), serde_json::from_value(json!({"color": [1, 1, 1], "texture": {"data": "x".repeat(sketchcraft::model::MAX_BULK + 1), "width": 1, "height": 1}})).unwrap());
+    m.materials.insert("big".into(), serde_json::from_value(json!({"color": [1, 1, 1], "texture": {"data": "x".repeat(sketchcraft::model::MAX_MODEL_BYTES + 1), "width": 1, "height": 1}})).unwrap());
     assert!(m.check_sane().is_err());
 }
 
@@ -467,14 +467,23 @@ fn only_side_files_in_the_hidden_index_are_offered_or_restored() {
     ok(&mut a, json!({"cmd": "rect", "from": [0, 0, 0], "to": [4, 4, 0]}));
     let forged = format!("live.unsaved-{}.sketchcraft", now() + 50);
     std::fs::copy(&doc, dir.join(&forged)).unwrap();
+    // a well-named file the program didn't note is still offered (a lost index never hides a recovery file), marked "not verified"
     let l = a.exec(&json!({"cmd": "list_backups"}));
-    assert!(!l["items"].as_array().unwrap().iter().any(|i| i["name"] == forged.as_str()), "{l}");
-    let r = a.exec(&json!({"cmd": "restore_backup", "kind": "unsaved", "name": forged, "mode": "copy"}));
+    let item = l["items"].as_array().unwrap().iter().find(|i| i["name"] == forged.as_str()).unwrap_or_else(|| panic!("{l}"));
+    assert_eq!(item["verified"], false, "{item}");
+    assert!(item["label"].as_str().unwrap().contains("not verified"), "{item}");
+    // a file that only carries a similar name is not offered at all
+    std::fs::copy(&doc, dir.join("live.unsaved-18000000000x.sketchcraft")).unwrap();
+    std::fs::copy(&doc, dir.join("live.unsaved-1800000000.sketchcraft.bak")).unwrap();
+    let l = a.exec(&json!({"cmd": "list_backups"}));
+    assert!(!l["items"].as_array().unwrap().iter().any(|i| i["name"].as_str().is_some_and(|n| n.contains("x.sketchcraft") || n.ends_with(".bak"))), "{l}");
+    let r = a.exec(&json!({"cmd": "restore_backup", "kind": "unsaved", "name": "live.unsaved-1800000000.sketchcraft.bak", "mode": "copy"}));
     assert_eq!(r["ok"], false, "{r}");
     // once it is in the index (this program wrote it) it is listed and restorable
     backups::write_index(&doc, &[forged.clone()]);
     let l = a.exec(&json!({"cmd": "list_backups"}));
-    assert!(l["items"].as_array().unwrap().iter().any(|i| i["name"] == forged.as_str()), "{l}");
+    let item = l["items"].as_array().unwrap().iter().find(|i| i["name"] == forged.as_str()).unwrap();
+    assert_eq!(item["verified"], true, "{item}");
     let r = a.exec(&json!({"cmd": "restore_backup", "kind": "unsaved", "name": forged, "mode": "copy"}));
     assert_eq!(r["ok"], true, "{r}");
     std::fs::remove_dir_all(&dir).ok();

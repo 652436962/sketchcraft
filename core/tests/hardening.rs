@@ -120,13 +120,22 @@ fn a_damaged_live_file_is_kept_and_reported_not_replaced_silently() {
     let original = std::fs::read(&doc).unwrap();
     let mut live = Live::open(doc.clone());
     assert!(live.notice.as_deref().is_some_and(|n| n.contains("couldn't be opened")), "{:?}", live.notice);
+    // the first command must not write over the file: it works in memory, says the save didn't happen, and the file is as it was
     let r = live.exec(&json!({"cmd": "rect", "from": [0, 0, 0], "to": [4, 4, 0]}));
     assert_eq!(r["ok"], true);
-    // the damaged bytes survive in a copy beside it
+    assert!(r["save_error"].is_string(), "{r}");
+    assert_eq!(std::fs::read(&doc).unwrap(), original, "the unreadable file is untouched");
+    // the damaged bytes survive in a copy beside it, and Restore lists it
     let kept: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x.to_string_lossy().starts_with("damaged"))).collect();
     assert_eq!(kept.len(), 1, "one damaged copy");
     assert_eq!(std::fs::read(&kept[0]).unwrap(), original);
-    // and the live file is now a good model
+    let list = live.exec(&json!({"cmd": "list_backups"}));
+    assert!(list["items"].as_array().unwrap().iter().any(|i| i["kind"] == "damaged"), "{list}");
+    // starting over (the person's New) lets saving resume, and the file is then a good model
+    let r = live.exec(&json!({"cmd": "new"}));
+    assert_eq!(r["ok"], true, "{r}");
+    let r = live.exec(&json!({"cmd": "rect", "from": [0, 0, 0], "to": [4, 4, 0]}));
+    assert!(r.get("save_error").is_none(), "{r}");
     let mut check = Engine::new();
     run(&mut check, json!({"cmd": "open", "path": doc}));
     assert_eq!(faces(&mut check), 1);
@@ -1369,7 +1378,7 @@ fn a_model_over_the_limit_opens_and_can_be_cut_down() {
     let on_disk = std::fs::read(&doc).unwrap();
     let mut live = Live::open(doc.clone());
     assert!(live.engine.oversize, "opened, flagged");
-    assert!(live.notice.as_deref().is_some_and(|n| n.contains("over the limit")), "{:?}", live.notice);
+    assert!(live.notice.as_deref().is_some_and(|n| n.contains("over the size limits")), "{:?}", live.notice);
     assert!(live.scene()["notice"].is_string());
     // growth is refused, the file on disk is untouched
     let r = live.exec(&json!({"cmd": "rect", "from": [0, 0, 0], "to": [4, 4, 0]}));

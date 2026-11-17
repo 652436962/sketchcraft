@@ -34,7 +34,9 @@ impl Step {
         match self {
             Step::Snap(m) => m.approx_bytes(),
             Step::Patch(p) => p.bytes,
-            Step::Stale { before, .. } => before.approx_bytes(),
+            // the "after" model is shared with the next step's "before" (counted there) unless nothing else holds it: the last
+            // step of a reload holds a fresh copy of the model that was on screen, which is as big as any other
+            Step::Stale { before, after } => before.approx_bytes() + if Arc::strong_count(after) == 1 { after.approx_bytes() } else { 0 },
         }
     }
 }
@@ -70,10 +72,39 @@ fn close(a: &Option<Value>, b: &Option<Value>) -> bool {
     }
 }
 
+/// Two floats are the same number if they are equal, or a few units in the last place apart, or closer than a
+/// nanometre (the model's unit is the metre). Why this and not a relative tolerance: the reload goes through a file
+/// that writes and reads every float exactly (`float_roundtrip`), so the values a step recorded come back bit for
+/// bit and no slack is needed for that; what remains is arithmetic done twice (a move and its inverse) that can end
+/// one or two units in the last place away. A units-in-the-last-place test follows the size of the number: at
+/// 5,000,000 m a unit is a nanometre, so a 4 mm change by another program is nowhere near it, where the old relative
+/// 1e-9 accepted anything under 5 mm there. The absolute nanometre keeps numbers near zero (0.0 against 1e-17) equal.
+pub fn floats_match_for_test(x: f64, y: f64) -> bool {
+    floats_match(x, y)
+}
+
+fn floats_match(x: f64, y: f64) -> bool {
+    if x == y {
+        return true;
+    }
+    if !x.is_finite() || !y.is_finite() {
+        return false;
+    }
+    if (x - y).abs() <= 1e-9 {
+        return true;
+    }
+    // distance in representable numbers (the bit patterns of finite floats, ordered)
+    let key = |v: f64| -> i64 {
+        let b = v.to_bits() as i64;
+        if b < 0 { i64::MIN - b } else { b }
+    };
+    key(x).abs_diff(key(y)) <= 4
+}
+
 fn values_close(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
-            (Some(x), Some(y)) => x == y || (x - y).abs() <= 1e-9 * (1.0 + x.abs().max(y.abs())),
+            (Some(x), Some(y)) => floats_match(x, y),
             _ => x == y,
         },
         (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| values_close(p, q)),
@@ -345,8 +376,9 @@ fn conflicts_text(c: &[String]) -> String {
 pub struct History {
     pub undo: Vec<Step>,
     pub redo: Vec<Step>,
-    /// steps that couldn't be carried over
+    /// steps that couldn't be carried over, from the undo list and from the redo list
     pub dropped: usize,
+    pub dropped_redo: usize,
 }
 
 /// Turn the undo and redo lists (as they are with `current` on screen) into ones that survive a reload.
@@ -354,6 +386,7 @@ pub struct History {
 /// the changes are found when that step is undone. Steps already patches stay as they are.
 pub fn carry(undo: Vec<Step>, redo: Vec<Step>, current: &Model) -> History {
     let mut dropped = 0;
+    let mut dropped_redo = 0;
     let mut cur: Option<Arc<Model>> = None;
     let mut now = || cur.get_or_insert_with(|| Arc::new(current.clone())).clone();
     // undo: [oldest .. newest]. A copy's "after" is the next copy's "before", or what is on screen.
@@ -401,7 +434,7 @@ pub fn carry(undo: Vec<Step>, redo: Vec<Step>, current: &Model) -> History {
                         out_redo.push(Step::Stale { before, after: next.clone() });
                         prev = Some(next);
                     }
-                    None => dropped += 1,
+                    None => dropped_redo += 1,
                 }
             }
             Step::Patch(p) => {
@@ -416,7 +449,7 @@ pub fn carry(undo: Vec<Step>, redo: Vec<Step>, current: &Model) -> History {
     }
     // out_redo was built next-first; the list keeps the next step last
     out_redo.reverse();
-    History { undo: out_undo, redo: out_redo, dropped }
+    History { undo: out_undo, redo: out_redo, dropped, dropped_redo }
 }
 
 impl Patch {

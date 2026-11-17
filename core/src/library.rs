@@ -69,11 +69,24 @@ pub fn list(dir: &Path) -> Vec<Entry> {
 /// A file's contents as a model (imports land in it as they would in a document).
 pub fn load_file(path: &str) -> Result<Model> {
     let p = Path::new(path);
+    // the same size limit as opening a model: a library file or a thumbnail never reads more than that into memory
+    let len = std::fs::metadata(p)?.len();
+    if len > crate::commands::MAX_OPEN_BYTES {
+        bail!("{} is {} MB; SketchCraft reads models up to {} MB", p.display(), len >> 20, crate::commands::MAX_OPEN_BYTES >> 20);
+    }
     let ext = p.extension().and_then(|x| x.to_str()).map(|x| x.to_ascii_lowercase()).unwrap_or_default();
     let name = nice_name(&p.file_stem().unwrap_or_default().to_string_lossy());
     let mut m = Model::default();
     match ext.as_str() {
-        "sketchcraft" => m = serde_json::from_str(&std::fs::read_to_string(p)?).with_context(|| format!("{name} isn't a SketchCraft file"))?,
+        "sketchcraft" => {
+            m = serde_json::from_str(&std::fs::read_to_string(p)?).with_context(|| format!("{name} isn't a SketchCraft file"))?;
+            // a file from outside: the same checks as opening it (consistent, ids above every id in it)
+            if let Some(what) = m.broken_refs(false).first() {
+                bail!("{name} isn't a consistent model ({what} refers to something that isn't there)");
+            }
+            m.repair_ids();
+            m.check_sane_with(false)?;
+        }
         "skp" => {
             crate::skp::import(&mut m, &std::fs::read(p)?, DVec3::ZERO, &name)?;
         }

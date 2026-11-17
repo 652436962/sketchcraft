@@ -385,6 +385,13 @@ pub fn write_index(doc: &Path, names: &[String]) {
     }
 }
 
+/// Was this side file made by this program, as far as the disk can tell? It is named exactly as one of ours, is a plain
+/// file, and was last written within two minutes of the time in its name (our copy is written when the name is made;
+/// a file put there by hand or by another tool, or copied with its date kept, is not). Used when the index is gone.
+pub fn provenance_ok(secs: u64, path: &Path) -> bool {
+    std::fs::symlink_metadata(path).ok().filter(|m| m.is_file()).and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).is_some_and(|d| d.as_secs().abs_diff(secs) <= 120)
+}
+
 /// A side file in the folder: (kind, secs, path, size).
 pub fn side_files(doc: &Path) -> Vec<(Side, u64, PathBuf, u64)> {
     let (Some(dir), Some(stem)) = (doc.parent().filter(|d| !d.as_os_str().is_empty()).or(Some(Path::new("."))), doc.file_stem().map(|s| s.to_string_lossy().into_owned())) else { return vec![] };

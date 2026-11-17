@@ -157,8 +157,12 @@ const MODEL: &[&str] = &[
 
 /// Commands that read or write files (or run converters on them): agents get
 /// these inside their workspace; plugins never do.
+///
+/// `add_location` is not here: it makes the person's machine fetch elevation and map tiles from the web, and the program's
+/// other network-reaching commands are the person's alone. An agent that wants a real site asks the person to add the
+/// location (Model > Add location), or imports terrain it already has as a file (`import_obj`, `terrain_from_contours`).
 const FILES: &[&str] = &[
-    "save", "open", "new", "export_obj", "export_glb", "export_stl", "export_dae", "export_dxf", "export_pdf", "export_ifc", "export_dwg", "import_obj", "import_skp", "import_cloud", "import_ifc", "import_dxf", "import_dwg", "import_fbx", "animate", "sheets", "blueprint", "photoreal", "thumbnail", "insert_file", "save_to_library", "library_add", "library", "save_image", "add_location",
+    "save", "open", "new", "export_obj", "export_glb", "export_stl", "export_dae", "export_dxf", "export_pdf", "export_ifc", "export_dwg", "import_obj", "import_skp", "import_cloud", "import_ifc", "import_dxf", "import_dwg", "import_fbx", "animate", "sheets", "blueprint", "photoreal", "thumbnail", "insert_file", "save_to_library", "library_add", "library", "save_image",
 ];
 
 /// Commands only an agent may add to `MODEL`. `undo`/`redo` are not a plugin's: a plugin run is already one undo step
@@ -268,6 +272,11 @@ struct Walk {
     values: usize,
 }
 
+/// The most entries one object in a command may have, and the longest key (attribute and tag names are short).
+const MAX_KEYS_UI: usize = 100_000;
+const MAX_KEYS_UNTRUSTED: usize = 1_000;
+const MAX_KEY_LEN: usize = 256;
+
 fn walk(v: &Value, cmd: &str, w: &mut Walk, depth: usize, key: &str) -> Result<(), String> {
     let data_max = w.data_max;
     if depth > 64 {
@@ -311,7 +320,21 @@ fn walk(v: &Value, cmd: &str, w: &mut Walk, depth: usize, key: &str) -> Result<(
             }
             a.iter().try_for_each(|x| walk(x, cmd, w, depth + 1, key))?
         }
-        Value::Object(o) => o.iter().try_for_each(|(k, x)| walk(x, cmd, w, depth + 1, k))?,
+        Value::Object(o) => {
+            // an object's keys are free text too (attribute names, tag names): how many, and how long
+            let (max_keys, max_key) = if w.trusted { (MAX_KEYS_UI, MAX_KEY_LEN) } else { (MAX_KEYS_UNTRUSTED, MAX_KEY_LEN) };
+            if o.len() > max_keys {
+                return Err(format!("{key:?} has too many entries ({}, limit {max_keys})", o.len()));
+            }
+            w.values += o.len();
+            if !w.trusted && w.values > MAX_VALUES_UNTRUSTED {
+                return Err("that command carries too many values".into());
+            }
+            if let Some(k) = o.keys().find(|k| k.len() > max_key) {
+                return Err(format!("{key:?} has a name that is too long ({} bytes, limit {max_key})", k.len()));
+            }
+            o.iter().try_for_each(|(k, x)| walk(x, cmd, w, depth + 1, k))?
+        }
         _ => {}
     }
     Ok(())
@@ -481,6 +504,8 @@ mod tests {
         // an agent keeps undo (its own steps), a plugin doesn't
         let agent = Caller::Mcp(Workspace::anywhere());
         assert!(permits(&agent, "undo") && permits(&agent, "redo"));
+        // neither may make the machine fetch from the web
+        assert!(!permits(&agent, "add_location") && permits(&Caller::Ui, "add_location"));
         assert!(vet(&c, &mut json!({"cmd": "rect", "from": [0, 0, 0], "to": [1, 1, 0]})).is_ok());
     }
 

@@ -1224,6 +1224,27 @@ impl Model {
 /// Free text (names, notes) a model may hold in total.
 pub const MAX_TEXT_BYTES: usize = 8 << 20;
 
+fn attr_bytes(m: &BTreeMap<String, String>) -> usize {
+    m.iter().map(|(k, v)| k.len() + v.len() + 8).sum()
+}
+
+/// Bytes `serde_json` would write for a value (counted, never stored).
+fn jsz<T: Serialize + ?Sized>(v: &T) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0 += b.len();
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut c = Count(0);
+    serde_json::to_writer(&mut c, v).ok();
+    c.0
+}
+
 /// Largest coordinate (meters) the model accepts anywhere.
 pub const MAX_COORD: f64 = 1e9;
 
@@ -1248,9 +1269,16 @@ pub const MAX_ENTITIES: usize = 2_000_000;
 /// The most bulk data (textures, photos on views, scan points) a model may hold, and the most one command may add:
 /// the person's (imports of photos or scans) and an agent's or a plugin's. The geometry limits above don't see these,
 /// and every one of them is rewritten on each save, read by each program and copied into each backup.
-pub const MAX_BULK: usize = 256 << 20;
-pub const MAX_BULK_GROWTH: usize = 128 << 20;
-pub const MAX_BULK_GROWTH_UNTRUSTED: usize = 32 << 20;
+///
+/// The one limit that counts everything is the model's estimated file size (`size_estimate`: every string, map and
+/// image is in it). The person's models may go up to `MAX_MODEL_BYTES`; the file of such a model is always under
+/// `commands::MAX_OPEN_BYTES`, so a model the program wrote can be opened again. An agent or a plugin may add at most
+/// `MAX_GROWTH_BYTES_UNTRUSTED` in one command and may not take a model past `MAX_MODEL_BYTES_UNTRUSTED` in all.
+pub const MAX_MODEL_BYTES: usize = 512 << 20;
+pub const MAX_MODEL_BYTES_UNTRUSTED: usize = 160 << 20;
+pub const MAX_GROWTH_BYTES_UNTRUSTED: usize = 32 << 20;
+/// The most keys one component or placement may carry in its Dynamic Component attributes.
+pub const MAX_ATTRS: usize = 256;
 
 thread_local! {
     /// what the command running on this thread may add (see `Engine::exec`)
@@ -1319,8 +1347,11 @@ impl Model {
         if count && self.entity_count() > MAX_ENTITIES {
             bail!("the model has more than {MAX_ENTITIES} points, edges and faces ({}), so it can't be saved: delete parts of it until it is under the limit", self.entity_count());
         }
-        if count && self.bulk_bytes() > MAX_BULK {
-            bail!("the model's images, photos and scan points add up to {} MB, over the limit of {} MB, so that was not done (remove some images or scans first)", self.bulk_bytes() >> 20, MAX_BULK >> 20);
+        if count && self.size_estimate() > MAX_MODEL_BYTES {
+            bail!("the model would be about {} MB (names, notes, attributes, images and scans included), over the limit of {} MB, so that was not done", self.size_estimate() >> 20, MAX_MODEL_BYTES >> 20);
+        }
+        if self.definitions.values().any(|d| d.attrs.len() > MAX_ATTRS) || self.instances.values().any(|i| i.attrs.len() > MAX_ATTRS) {
+            bail!("a component or placement has more than {MAX_ATTRS} attributes, so that was not done");
         }
         if self.text_bytes() > MAX_TEXT_BYTES {
             bail!("the model's names and notes add up to more than {} MB, so that was not done", MAX_TEXT_BYTES >> 20);
@@ -1348,9 +1379,42 @@ impl Model {
             + self.classes.values().map(String::len).sum::<usize>()
             + self.sections.iter().map(|s| s.name.len()).sum::<usize>()
             + self.clouds.values().map(|c| c.name.len()).sum::<usize>()
-            + self.definitions.values().map(|d| d.name.len() + d.model.text_bytes()).sum::<usize>()
+            + self.definitions.values().map(|d| d.name.len() + d.source.as_ref().map_or(0, String::len) + attr_bytes(&d.attrs) + d.model.text_bytes()).sum::<usize>()
+            + self.instances.values().map(|i| i.name.len() + i.tag.as_ref().map_or(0, String::len) + attr_bytes(&i.attrs)).sum::<usize>()
+            + self.timeline.clips.iter().map(|c| c.name.as_ref().map_or(0, String::len)).sum::<usize>()
+            + self.environment.as_ref().map_or(0, String::len)
+            + self.units.len()
+            + self.photo_points.iter().map(|p| p.name.len() + p.marks.keys().map(|k| k.len() + 8).sum::<usize>()).sum::<usize>()
             + notes
             + views
+    }
+
+    /// About how big this model's file would be (what `serde_json` writes, a little over): every free string,
+    /// map and image counted by its length, geometry by its count. It never serializes the model, so it costs a
+    /// walk over the small collections and a count of the big ones (a few milliseconds at a million entities),
+    /// which is why every command can afford it. The constants are on the high side of what the writer produces (a
+    /// test compares them with real files), so the open limit has room over this limit.
+    pub fn size_estimate(&self) -> usize {
+        let faces: usize = self.faces.values().map(|f| 80 + 10 * f.outer.len() + f.holes.iter().map(|h| 10 * h.len() + 4).sum::<usize>() + f.material.as_ref().map_or(0, |m| m.len() + 4)).sum();
+        let mats: usize = self.materials.iter().map(|(k, m)| k.len() + 200 + m.texture.as_ref().map_or(0, |t| t.data.len() + 200)).sum();
+        let clouds: usize = self.clouds.values().map(|c| c.name.len() + 128 + (4 * c.points.len() + c.colors.len()) * 4 / 3 + 8).sum();
+        let views: usize = self.views.iter().map(|v| 320 + v.name.len() + v.photo.as_ref().map_or(0, String::len) + v.style.as_ref().map_or(0, jsz) + v.tags.as_ref().map_or(0, |t| t.keys().map(|k| k.len() + 12).sum()) + v.hidden.as_ref().map_or(0, |h| 12 * h.len())).sum();
+        let anns: usize = self.annotations.iter().map(|a| 260 + if let Annotation::Text { text, .. } = a { text.len() } else { 0 }).sum();
+        let groups: usize = self.groups.values().map(|g| 110 + g.name.len() + g.tag.as_ref().map_or(0, String::len)).sum();
+        let insts: usize = self.instances.values().map(|i| 420 + i.name.len() + i.tag.as_ref().map_or(0, String::len) + attr_bytes(&i.attrs)).sum();
+        let defs: usize = self.definitions.values().map(|d| 160 + d.name.len() + d.source.as_ref().map_or(0, String::len) + attr_bytes(&d.attrs) + d.model.size_estimate()).sum();
+        let tags: usize = self.tags.keys().chain(self.tag_colors.keys()).map(|k| k.len() + 40).sum();
+        let photo: usize = self.photo_points.iter().map(|p| 40 + p.name.len() + p.marks.keys().map(|k| k.len() + 50).sum::<usize>()).sum();
+        256 + self.vertices.len() * 120 + self.edges.len() * 80 + faces + mats + clouds + views + anns + groups + insts + defs + tags + photo
+            + self.guides.len() * 150
+            + self.cages.values().map(|c| 16 + jsz(c)).sum::<usize>()
+            + self.photo_edges.len() * 16
+            + self.photo_guides.len() * 12
+            + jsz(&self.timeline)
+            + self.classes.values().map(|c| c.len() + 30).sum::<usize>()
+            + self.sections.iter().map(|s| 280 + s.name.len()).sum::<usize>()
+            + self.environment.as_ref().map_or(0, |e| e.len() + 20)
+            + self.units.len()
     }
 
     /// Things in the model that refer to something that isn't there, as short phrases ("edge 7", "material #ff0000"),
@@ -1438,7 +1502,45 @@ impl Model {
                 }
             }
         }
+        for (id, d) in &self.definitions {
+            // a component is a model of its own: held to the same rules, down the whole tree
+            for p in d.model.broken_refs(full).into_iter().take(MAX_PROBLEMS) {
+                add(format!("component {id}: {p}"));
+            }
+        }
         out.into_iter().collect()
+    }
+
+    /// The highest id used anywhere in this model (not inside components: each has its own counter).
+    fn max_own_id(&self) -> Id {
+        let top = |m: Option<&Id>| m.copied().unwrap_or(0);
+        let mut hi = top(self.vertices.keys().next_back()).max(top(self.edges.keys().next_back())).max(top(self.faces.keys().next_back())).max(top(self.groups.keys().next_back())).max(top(self.instances.keys().next_back())).max(top(self.definitions.keys().next_back())).max(top(self.clouds.keys().next_back())).max(top(self.cages.keys().next_back())).max(top(self.classes.keys().next_back()));
+        hi = hi.max(self.guides.iter().map(|g| g.id).max().unwrap_or(0)).max(self.annotations.iter().map(Annotation::id).max().unwrap_or(0)).max(self.sections.iter().map(|s| s.id).max().unwrap_or(0)).max(self.photo_guides.iter().copied().max().unwrap_or(0));
+        hi = hi.max(self.edges.values().filter_map(|e| e.curve).max().unwrap_or(0)).max(self.active_group.unwrap_or(0)).max(self.active_section.unwrap_or(0));
+        hi
+    }
+
+    /// Make every id counter in this model (and in every component) higher than any id in use, so that the next
+    /// thing drawn can never take the id of something already there. A file written by another tool, edited by hand
+    /// or damaged may carry a counter that is too low; the program's own files never do. Returns whether anything changed.
+    pub fn repair_ids(&mut self) -> bool {
+        let mut changed = false;
+        let hi = self.max_own_id();
+        if self.next_id < hi {
+            self.next_id = hi;
+            changed = true;
+        }
+        for d in self.definitions.values_mut() {
+            // look first: a shared component model is only copied if it needs the repair
+            if d.model.needs_id_repair() {
+                changed |= std::sync::Arc::make_mut(&mut d.model).repair_ids();
+            }
+        }
+        changed
+    }
+
+    fn needs_id_repair(&self) -> bool {
+        self.next_id < self.max_own_id() || self.definitions.values().any(|d| d.model.needs_id_repair())
     }
 
     /// How much geometry the model holds (points, edges, faces and placements, with every

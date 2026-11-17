@@ -1211,6 +1211,9 @@ pub struct Engine {
     /// the command being run comes from an agent or a plugin (tighter limits); false: the person, whose importers
     /// and terrain may use the whole model budget
     untrusted: bool,
+    /// set while `environment` runs its own fixed list of commands: they run as the person (the policy check passed for the
+    /// whole), but keep the limits of whoever asked for it
+    nested_untrusted: bool,
 }
 
 /// A batch nobody closed (the app went away mid-run) is closed after this (a plugin run is
@@ -1218,7 +1221,9 @@ pub struct Engine {
 pub const BATCH_MAX: std::time::Duration = std::time::Duration::from_secs(150);
 
 /// The biggest model file `open` and Restore read (a model in memory is several times its file's size).
-pub const MAX_OPEN_BYTES: u64 = 400 << 20;
+/// A model of the biggest size the program writes (`model::MAX_MODEL_BYTES`) is under this, with room: what the app
+/// saved it can open again.
+pub const MAX_OPEN_BYTES: u64 = 768 << 20;
 
 const UNDO_LIMIT: usize = 200;
 /// Undo history never holds more than about this much (per-step sizes are estimates).
@@ -1275,7 +1280,7 @@ impl Engine {
         if let Err(e) = crate::policy::vet(caller, &mut v) {
             return json!({"ok": false, "error": e});
         }
-        self.untrusted = !matches!(caller, Caller::Ui);
+        self.untrusted = !matches!(caller, Caller::Ui) || self.nested_untrusted;
         if let Err(e) = self.resolve(&mut v) {
             crate::policy::settle(caller, false);
             return json!({"ok": false, "error": e.to_string()});
@@ -1367,12 +1372,27 @@ impl Engine {
     }
 
     /// Put a carried history back after a reload. Returns how many steps could not be kept.
-    pub fn install_history(&mut self, h: crate::history::History) -> usize {
+    pub fn install_history(&mut self, h: crate::history::History) -> (usize, usize) {
         self.undo = h.undo;
         self.redo = h.redo;
         self.refused = None;
         self.trim_undo();
-        h.dropped
+        (h.dropped, h.dropped_redo)
+    }
+
+    /// A step that is not a whole-model copy is about to move through the model: the copy next to it on the other
+    /// list (the redo step beyond an Undo, the undo step beyond a Redo) is paired with the model as it is right now, so
+    /// that it survives another program's save as a set of changes instead of being let go (the copy alone says
+    /// nothing about what it leads from once a patch sits between).
+    fn pair_neighbour(&mut self, back: bool) {
+        let other = if back { &mut self.redo } else { &mut self.undo };
+        if let Some(Step::Snap(_)) = other.last() {
+            if let Some(Step::Snap(m)) = other.pop() {
+                let now = std::sync::Arc::new(self.model.clone());
+                // Undo: the redo copy is the model one step ahead of this one; Redo: the undo copy is one step behind
+                other.push(if back { Step::Stale { before: now, after: std::sync::Arc::new(*m) } } else { Step::Stale { before: std::sync::Arc::new(*m), after: now } });
+            }
+        }
     }
 
     /// Replace the whole model with `model` as one undoable step (a restore from a backup).
@@ -1380,12 +1400,15 @@ impl Engine {
         if self.batch.is_some() {
             bail!("a plugin is still running; try again when it has finished");
         }
-        model.check_sane()?;
         // a file that names points, placements or groups that aren't there would draw nothing but trouble
         if let Some(what) = model.broken_refs(false).first() {
             bail!("that file isn't a consistent model ({what} refers to something that isn't there), so it was not restored");
         }
         let mut model = model;
+        model.repair_ids();
+        // a model over the size limits is restored for viewing and cutting down, like Open: the limits never block getting work back
+        model.check_sane_with(false)?;
+        let over = model.entity_count() > crate::model::MAX_ENTITIES || model.size_estimate() > crate::model::MAX_MODEL_BYTES;
         // ids are never handed out twice: not after a restore either (an agent or another program may still hold the ones in use now)
         model.next_id = model.next_id.max(self.model.next_id);
         let before = std::mem::replace(&mut self.model, model);
@@ -1393,7 +1416,7 @@ impl Engine {
         self.redo.clear();
         self.ctx = None;
         self.names.clear();
-        self.oversize = false;
+        self.oversize = over;
         self.revision += 1;
         self.trim_undo();
         Ok(())
@@ -1413,6 +1436,16 @@ impl Engine {
     /// Build (or replace, or remove) the environment around the model: one
     /// undo step, in a locked group tagged "Environment".
     pub fn environment(&mut self, kind: &str) -> Result<Value> {
+        let (was, outer) = (self.nested_untrusted, self.untrusted);
+        self.nested_untrusted = outer;
+        let r = self.environment_inner(kind);
+        self.nested_untrusted = was;
+        // the nested commands set the flag as they ran: it goes back to what the caller's own command had
+        self.untrusted = outer;
+        r
+    }
+
+    fn environment_inner(&mut self, kind: &str) -> Result<Value> {
         if self.ctx.is_some() {
             bail!("close the component you're editing first");
         }
@@ -1500,16 +1533,16 @@ impl Engine {
         // everything needed to put things back as they were
         let saved = mutates.then(|| (self.model.clone(), self.ctx, self.names.clone(), self.undo.len()));
         let count_before = self.model.entity_count();
-        let bulk_before = self.model.bulk_bytes();
+        let bytes_before = if mutates { self.model.size_estimate() } else { 0 };
         let oversize_before = self.oversize;
         // how much one command may add: the person's importers and terrain may use up to the model's total; everything
         // else (repeat commands such as `array`, and anything an agent or a plugin runs) is held to MAX_GROWTH
-        let (grow_cap, bulk_cap) = if self.untrusted {
-            (crate::model::MAX_GROWTH, crate::model::MAX_BULK_GROWTH_UNTRUSTED)
+        let grow_cap = if self.untrusted {
+            crate::model::MAX_GROWTH
         } else if matches!(cmd, Command::ImportObj { .. } | Command::ImportSkp { .. } | Command::ImportDxf { .. } | Command::ImportDwg { .. } | Command::ImportFbx { .. } | Command::ImportIfc { .. } | Command::ImportCloud { .. } | Command::TerrainGrid { .. } | Command::TerrainFromContours { .. } | Command::Open { .. }) {
-            (crate::model::MAX_ENTITIES, crate::model::MAX_BULK_GROWTH)
+            crate::model::MAX_ENTITIES
         } else {
-            (crate::model::MAX_GROWTH, crate::model::MAX_BULK_GROWTH)
+            crate::model::MAX_GROWTH
         };
         crate::model::set_growth_limit(grow_cap);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1538,17 +1571,21 @@ impl Engine {
                 if mutates {
                     // a model over the geometry limit (opened that way) may only get smaller; one command may not add more than MAX_GROWTH
                     let count = self.model.entity_count();
+                    let bytes = self.model.size_estimate();
+                    let within = count <= crate::model::MAX_ENTITIES && bytes <= crate::model::MAX_MODEL_BYTES;
                     let checked = if is_open && self.oversize {
                         self.model.check_sane_with(false)
-                    } else if self.oversize && count <= crate::model::MAX_ENTITIES {
+                    } else if self.oversize && within {
                         self.oversize = false;
                         self.model.check_sane()
                     } else if self.oversize {
-                        self.model.check_sane_with(false).and_then(|_| if count > count_before { Err(anyhow::anyhow!("this model has more than {} points, edges and faces ({count_before}), so it is open for viewing and for deleting parts only; that would add more", crate::model::MAX_ENTITIES)) } else { Ok(()) })
+                        self.model.check_sane_with(false).and_then(|_| if count > count_before || bytes > bytes_before { Err(anyhow::anyhow!("this model is over the size limits ({} points, edges and faces; about {} MB), so it is open for viewing and for deleting parts only; that would add more", count_before, bytes_before >> 20)) } else { Ok(()) })
                     } else if !is_open && count > count_before.saturating_add(grow_cap) {
                         Err(anyhow::anyhow!("that would add {} points, edges and faces at once (the limit is {}), so it was not done", count - count_before, grow_cap))
-                    } else if !is_open && self.model.bulk_bytes() > bulk_before.saturating_add(bulk_cap) {
-                        Err(anyhow::anyhow!("that would add {} MB of images, photos or scan points at once (the limit is {} MB), so it was not done", (self.model.bulk_bytes() - bulk_before) >> 20, bulk_cap >> 20))
+                    } else if !is_open && self.untrusted && bytes > bytes_before.saturating_add(crate::model::MAX_GROWTH_BYTES_UNTRUSTED) {
+                        Err(anyhow::anyhow!("that would add {} MB of text, images, attributes or scan points at once (the limit for an agent or a plugin is {} MB), so it was not done", (bytes - bytes_before) >> 20, crate::model::MAX_GROWTH_BYTES_UNTRUSTED >> 20))
+                    } else if !is_open && self.untrusted && bytes > crate::model::MAX_MODEL_BYTES_UNTRUSTED && bytes > bytes_before {
+                        Err(anyhow::anyhow!("the model is about {} MB; an agent or a plugin can't make it bigger past {} MB (the person can), so it was not done", bytes >> 20, crate::model::MAX_MODEL_BYTES_UNTRUSTED >> 20))
                     } else {
                         self.model.check_sane()
                     };
@@ -1628,6 +1665,7 @@ impl Engine {
                     return Ok(json!({}));
                 }
                 Step::Stale { before, after } => {
+                    self.pair_neighbour(back);
                     let p = crate::history::patch_between(&before, &after);
                     if p.is_empty() {
                         // it changed nothing in the model's content (a view, a selection): not a step
@@ -1635,7 +1673,10 @@ impl Engine {
                     }
                     p
                 }
-                Step::Patch(p) => p,
+                Step::Patch(p) => {
+                    self.pair_neighbour(back);
+                    p
+                }
             };
             match step.apply(&self.model, !back) {
                 Ok(m) => {
@@ -2245,13 +2286,15 @@ impl Engine {
                 if len > MAX_OPEN_BYTES {
                     bail!("{path} is {} MB; SketchCraft opens models up to {} MB", len >> 20, MAX_OPEN_BYTES >> 20);
                 }
-                let opened: Model = serde_json::from_str(&std::fs::read_to_string(&path)?).map_err(|e| anyhow::anyhow!("{path} isn't a model SketchCraft can read: {e}"))?;
+                let mut opened: Model = serde_json::from_str(&std::fs::read_to_string(&path)?).map_err(|e| anyhow::anyhow!("{path} isn't a model SketchCraft can read: {e}"))?;
                 if let Some(what) = opened.broken_refs(false).first() {
                     bail!("{path} isn't a consistent model ({what} refers to something that isn't there)");
                 }
-                // too much geometry is not a reason to refuse the file: it opens for viewing and cutting down (see `oversize`)
+                // ids from outside: the counter must be above every id in the file, or the next drawing overwrites something
+                opened.repair_ids();
+                // too much geometry or too many bytes is not a reason to refuse the file: it opens for viewing and cutting down (see `oversize`)
                 opened.check_sane_with(false)?;
-                self.oversize = opened.entity_count() > crate::model::MAX_ENTITIES;
+                self.oversize = opened.entity_count() > crate::model::MAX_ENTITIES || opened.size_estimate() > crate::model::MAX_MODEL_BYTES;
                 self.model = opened;
                 self.batch = None;
                 self.ctx = None;
@@ -2938,10 +2981,8 @@ impl Engine {
                 let b64 = data.strip_prefix("data:image/png;base64,").ok_or_else(|| anyhow::anyhow!("expected a PNG data URL"))?;
                 let bytes = base64::engine::general_purpose::STANDARD.decode(b64)?;
                 // only a real picture is written: decode it (this also bounds its size)
-                let img = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).map_err(|e| anyhow::anyhow!("that isn't a PNG image: {e}"))?;
-                if img.width() > 16384 || img.height() > 16384 {
-                    bail!("that image is too large");
-                }
+                let img = crate::safety::decode_image(&bytes, Some(image::ImageFormat::Png)).map_err(|e| anyhow::anyhow!("that isn't a PNG image the program can save: {e}"))?;
+                let _ = img;
                 if let Some(dir) = std::path::Path::new(&path).parent() {
                     std::fs::create_dir_all(dir).ok();
                 }

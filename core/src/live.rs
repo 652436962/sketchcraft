@@ -27,6 +27,8 @@ const KEEP_SIDE: usize = 20;
 const KEEP_SIDE_BYTES: u64 = 1 << 30;
 /// How long a notice about a damaged file stays on the scene.
 const NOTICE_FOR: Duration = Duration::from_secs(600);
+/// Past this many points, edges and faces the person is told that changes are slow (see `model::MAX_ENTITIES`).
+const BIG_MODEL: usize = 1_000_000;
 /// A backup is taken at most this often while working.
 const BACKUP_EVERY: Duration = Duration::from_secs(300);
 /// Destructive commands that take a backup first.
@@ -70,6 +72,11 @@ pub struct Live {
     sticky: Option<PathBuf>,
     /// the last forced backup per origin: when, and how big the file was
     last_forced: HashMap<Origin, (SystemTime, u64)>,
+    /// the model file couldn't be read when this program started: nothing is saved over it until the person
+    /// restores something or starts over (see `load_failed`)
+    held: bool,
+    /// the side files this run wrote (names): the cap holds even when the index can't be read
+    own_side: Vec<String>,
 }
 
 fn mtime(p: &Path) -> Option<SystemTime> {
@@ -124,7 +131,7 @@ impl Live {
     }
 
     fn blank(engine: Engine, doc: PathBuf, persist: bool) -> Self {
-        Live { engine, doc, seen: None, persist, last_backup: None, notice: None, notice_at: None, unsaved_batch: false, batch_weight: 0, batch_destructive: false, blocked: false, dirty: false, sticky: None, last_forced: HashMap::new() }
+        Live { engine, doc, seen: None, persist, last_backup: None, notice: None, notice_at: None, unsaved_batch: false, batch_weight: 0, batch_destructive: false, blocked: false, dirty: false, sticky: None, last_forced: HashMap::new(), held: false, own_side: vec![] }
     }
 
     /// A model that is not saved anywhere.
@@ -163,23 +170,38 @@ impl Live {
             }
             // the file reads fine now: whatever was wrong is over
             self.blocked = false;
+            self.held = false;
             self.unsaved_batch = false;
             self.dirty = false;
-            let mut lost = 0;
+            let mut lost = (0, 0);
             if let Some(h) = history {
                 lost = self.engine.install_history(h);
             }
             if self.sticky.is_none() {
                 self.notice = None;
-                if lost > 0 {
-                    self.set_notice(format!("Another program saved this model. {lost} of your oldest steps couldn't be kept for Undo; the rest still work."));
+                if lost.0 + lost.1 > 0 {
+                    let mut what = vec![];
+                    if lost.0 > 0 {
+                        what.push(format!("{} of your oldest steps couldn't be kept for Undo", lost.0));
+                    }
+                    if lost.1 > 0 {
+                        what.push(format!("{} step{} couldn't be kept for Redo", lost.1, if lost.1 == 1 { "" } else { "s" }));
+                    }
+                    self.set_notice(format!("Another program saved this model. {}; the rest still work.", what.join(" and ")));
                 }
             }
             if self.engine.oversize {
-                self.set_notice(format!("This model has {} points, edges and faces, over the limit of {}. It is open for looking at and for deleting parts; it can't be saved until it is under the limit (the file on disk is untouched meanwhile).", self.engine.model.entity_count(), crate::model::MAX_ENTITIES));
+                self.set_notice(self.oversize_text());
+            } else if self.sticky.is_none() && self.engine.model.entity_count() > BIG_MODEL {
+                self.set_notice(format!("This is a big model ({} points, edges and faces). Everything works, but each change takes a second or more to save and the view takes a few seconds to redraw.", self.engine.model.entity_count()));
             }
             return true;
         }
+    }
+
+    fn oversize_text(&self) -> String {
+        let m = &self.engine.model;
+        format!("This model is over the size limits ({} points, edges and faces, limit {}; about {} MB, limit {} MB). It is open for looking at and for deleting parts (delete scans, images or geometry); saving resumes when it is under the limits, and the file on disk is untouched meanwhile.", m.entity_count(), crate::model::MAX_ENTITIES, m.size_estimate() >> 20, crate::model::MAX_MODEL_BYTES >> 20)
     }
 
     /// The model file couldn't be read: set it aside, keep what memory holds.
@@ -190,7 +212,14 @@ impl Live {
             Ok(_) => {
                 self.blocked = false;
                 self.index_side(&aside);
-                self.set_notice(format!("The model file couldn't be opened ({why}). A copy was kept at {}; this session started from {}. File > Restore from backup... lists it.", aside.display(), if at_start { "an empty model" } else { "the model in memory" }));
+                if at_start {
+                    // the first command must not write an empty model over the file the person's work is in: saving stays off
+                    // until the person restores something (this copy, or a backup) or starts over with New or Open
+                    self.held = true;
+                    self.set_notice(format!("The model file couldn't be opened ({why}). A copy was kept at {}. Nothing will be saved over the file until you choose: File > Restore from backup... lists that copy (Restore works on files of any size the program can read), or File > New or File > Open starts over (the file is then replaced; the copy stays).", aside.display()));
+                } else {
+                    self.set_notice(format!("The model file couldn't be opened ({why}). A copy was kept at {}; this session carries on with the model in memory. File > Restore from backup... lists it.", aside.display()));
+                }
                 self.prune_side(Side::Damaged);
             }
             Err(e) => {
@@ -219,23 +248,42 @@ impl Live {
     }
 
     /// Note a side file this program wrote in the hidden index beside the model. Only files named there are ever pruned.
-    fn index_side(&self, p: &Path) {
+    ///
+    /// The index is also rebuilt here: a lost, unreadable or garbled index would otherwise be replaced by a list of
+    /// one, and the earlier side files would no longer be listed or counted. Files that carry one of our names and
+    /// were written when the name says (`backups::provenance_ok`) are put back.
+    fn index_side(&mut self, p: &Path) {
         if let Some(name) = p.file_name().map(|n| n.to_string_lossy().into_owned()) {
             let mut names = backups::read_index(&self.doc);
-            if !names.contains(&name) {
-                names.push(name);
-                backups::write_index(&self.doc, &names);
+            for (_, secs, path, _) in backups::side_files(&self.doc) {
+                if let Some(n) = path.file_name().map(|n| n.to_string_lossy().into_owned()) {
+                    if !names.contains(&n) && backups::provenance_ok(secs, &path) {
+                        names.push(n);
+                    }
+                }
             }
+            if !names.contains(&name) {
+                names.push(name.clone());
+            }
+            backups::write_index(&self.doc, &names);
+            self.own_side.push(name);
         }
+    }
+
+    /// Is this side file one this program made (named in the index, written this run, or written when its name says)?
+    fn side_is_ours(&self, indexed: &[String], secs: u64, path: &Path) -> bool {
+        path.file_name().map(|n| n.to_string_lossy().into_owned()).is_some_and(|n| indexed.contains(&n) || self.own_side.contains(&n)) || backups::provenance_ok(secs, path)
     }
 
     /// Keep the side files of one kind within `KEEP_SIDE` files and `KEEP_SIDE_BYTES`: the oldest of the ones this
     /// program wrote go first, the newest never, and whatever goes is named in a notice.
     fn prune_side(&mut self, kind: Side) {
-        // an index that exists but can't be read: nothing is known about which files are ours, so nothing is removed
-        let Some(indexed) = backups::read_index_checked(&self.doc) else { return };
-        // only the files this program wrote count toward the limits; others (older builds, the person's own) are not ours to count or remove
-        let all: Vec<(Side, u64, PathBuf, u64)> = backups::side_files(&self.doc).into_iter().filter(|(k, _, p, _)| *k == kind && p.file_name().is_some_and(|n| indexed.contains(&n.to_string_lossy().into_owned()))).collect();
+        // an index that is gone or can't be read does not lift the cap: files this run wrote, and files that carry our names and
+        // were written when the name says, still count and can still be pruned
+        let readable = backups::read_index_checked(&self.doc);
+        let indexed = readable.clone().unwrap_or_default();
+        // only the files this program wrote count toward the limits; others (the person's own) are not ours to count or remove
+        let all: Vec<(Side, u64, PathBuf, u64)> = backups::side_files(&self.doc).into_iter().filter(|(k, secs, p, _)| *k == kind && self.side_is_ours(&indexed, *secs, p)).collect();
         let mut total: u64 = all.iter().map(|x| x.3).sum();
         let mut count = all.len();
         let mut removed: Vec<String> = vec![];
@@ -251,8 +299,11 @@ impl Live {
             }
         }
         if !removed.is_empty() {
-            let left: Vec<String> = indexed.into_iter().filter(|n| !removed.contains(n)).collect();
-            backups::write_index(&self.doc, &left);
+            if readable.is_some() {
+                let left: Vec<String> = indexed.into_iter().filter(|n| !removed.contains(n)).collect();
+                backups::write_index(&self.doc, &left);
+            }
+            self.own_side.retain(|n| !removed.contains(n));
             let msg = format!("{} older {} file{} beside the model {} removed to stay under {KEEP_SIDE} files / {} GB: {}.", removed.len(), kind.word(), if removed.len() == 1 { "" } else { "s" }, if removed.len() == 1 { "was" } else { "were" }, KEEP_SIDE_BYTES >> 30, removed.join(", "));
             let note = match self.notice.take() {
                 Some(n) => format!("{n} {msg}"),
@@ -365,6 +416,10 @@ impl Live {
         let (before, size_before, depth_before) = (self.engine.revision(), size(&self.engine), self.engine.undo_depth());
         let destructive = DESTRUCTIVE.contains(&name);
         let mut r = self.engine.exec_value_as(caller, cmd.clone());
+        // the person starting over (or opening something else) after the model file couldn't be read: saving resumes
+        if self.held && r["ok"] == true && matches!(caller, Caller::Ui) && matches!(name, "new" | "open") {
+            self.held = false;
+        }
         // inside a batch (a plugin run) the file is written once, when the batch ends
         let changed = r["ok"] == true && self.engine.revision() != before;
         if self.engine.in_batch() {
@@ -443,8 +498,11 @@ impl Live {
         if self.blocked {
             return Err("saving is off because the model file couldn't be read (see the notice)".into());
         }
+        if self.held {
+            return Err("saving is paused because the model file couldn't be read when the program started (see the notice): restore a copy or start a new model first".into());
+        }
         if self.engine.oversize {
-            return Err(format!("the model has {} points, edges and faces, over the limit of {}: delete parts of it and saving resumes", self.engine.model.entity_count(), crate::model::MAX_ENTITIES));
+            return Err(format!("the model is over the size limits ({} points, edges and faces, about {} MB): delete parts of it and saving resumes", self.engine.model.entity_count(), self.engine.model.size_estimate() >> 20));
         }
         self.engine.model.check_sane().map_err(|e| e.to_string())?;
         let bytes = serde_json::to_vec(&self.engine.model).map_err(|e| e.to_string())?;
@@ -470,9 +528,16 @@ impl Live {
             return;
         }
         let Ok(bytes) = std::fs::read(&self.doc) else { return };
-        match serde_json::from_slice::<crate::model::Model>(&bytes) {
-            Ok(m) if !m.is_blank() => {}
-            _ => return,
+        // blank or unreadable files are not worth a slot. A big file is certainly not blank (an empty model is a few hundred
+        // bytes), so it is only checked for being well-formed JSON, which on a model of millions of entities takes a
+        // third of the time of reading it into a model (and no memory)
+        if bytes.len() < (1 << 20) {
+            match serde_json::from_slice::<crate::model::Model>(&bytes) {
+                Ok(m) if !m.is_blank() => {}
+                _ => return,
+            }
+        } else if serde_json::from_slice::<serde::de::IgnoredAny>(&bytes).is_err() {
+            return;
         }
         let size = bytes.len() as u64;
         // pacing: a forced backup that comes too soon after the last one from the same origin is held back,
@@ -579,12 +644,16 @@ impl Live {
             let by = if b.pre && b.origin != Origin::Ui { format!(" by {}", b.origin.name()) } else { String::new() };
             items.push(json!({"kind": "backup", "name": b.name(), "secs": b.secs, "size": b.size, "label": format!("{what}{by}")}));
         }
-        // only what this program wrote and noted in its hidden index: a file that merely has such a name is not offered
+        // every file named exactly as one of ours is listed, so a lost index never hides a recovery file; the ones this
+        // program can vouch for (named in its index, or written by this run) come as they are, the rest say "not verified"
         let indexed = backups::read_index(&self.doc);
-        let mut side: Vec<_> = backups::side_files(&self.doc).into_iter().filter(|(_, _, p, _)| p.file_name().is_some_and(|n| indexed.contains(&n.to_string_lossy().into_owned()))).collect();
+        let mut side: Vec<_> = backups::side_files(&self.doc);
         side.reverse();
         for (kind, secs, path, size) in side {
-            items.push(json!({"kind": kind.word(), "name": path.file_name().map(|n| n.to_string_lossy().into_owned()), "secs": secs, "size": size, "label": kind.label()}));
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+            let vouched = name.as_ref().is_some_and(|n| indexed.contains(n) || self.own_side.contains(n));
+            let label = if vouched { kind.label().to_string() } else { format!("{} (not verified: this program didn't note it)", kind.label()) };
+            items.push(json!({"kind": kind.word(), "name": name, "secs": secs, "size": size, "label": label, "verified": vouched}));
         }
         items
     }
@@ -598,7 +667,7 @@ impl Live {
         let stem = self.stem();
         let path = match kind {
             "backup" if backups::parse(&stem, name).is_some() => self.doc.parent().map(|d| d.join("Backups").join(name)),
-            "unsaved" | "damaged" if backups::parse_side(&stem, name).is_some_and(|(s, _)| s.word() == kind) && backups::read_index(&self.doc).iter().any(|n| n == name) => self.doc.parent().filter(|d| !d.as_os_str().is_empty()).map(|d| d.join(name)).or_else(|| Some(PathBuf::from(name))),
+            "unsaved" | "damaged" if backups::parse_side(&stem, name).is_some_and(|(s, _)| s.word() == kind) => self.doc.parent().filter(|d| !d.as_os_str().is_empty()).map(|d| d.join(name)).or_else(|| Some(PathBuf::from(name))),
             _ => None,
         };
         let path = path.ok_or_else(|| "that isn't one of the model's backups".to_string())?;
@@ -663,10 +732,11 @@ impl Live {
             Ok(m) => m,
             Err(e) => return json!({"ok": false, "error": format!("that file isn't a model SketchCraft can read ({e})")}),
         };
-        let _ = ();
         if let Err(e) = self.engine.replace_model(model) {
             return json!({"ok": false, "error": e.to_string()});
         }
+        // the person chose what to carry on with: saving resumes
+        self.held = false;
         // the model it replaced is kept in Backups first (the outgoing file), and the restore is one undoable step
         match self.save_with(Some(Force { origin: Origin::Ui, kind: "rst", big: true })) {
             Ok(()) => {
