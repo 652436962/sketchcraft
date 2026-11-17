@@ -71,6 +71,9 @@ export default function Viewport(props: Props) {
   const [box, setBox] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
 
   const live = useRef(props);
+  /** How many quick presses in a row (1 single, 2 double, 3 triple) and the last press */
+  const clicks = useRef(1);
+  const lastDown = useRef<{ t: number; x: number; y: number; button: number } | null>(null);
   live.current = props;
 
   const t = useRef<{
@@ -2477,7 +2480,7 @@ export default function Viewport(props: Props) {
     const downSelect = async ({ e, L, sel }: DownArgs) => {
       const he = pickEdge(e);
       const h = he == null ? pick(e) : null;
-      if (e.detail >= 2) {
+      if (clicks.current >= 2) {
         // double-click: open a group or component; outside closes it
         if (h) {
           const ent = entityOf(h);
@@ -2495,12 +2498,12 @@ export default function Viewport(props: Props) {
           // loose geometry: double-click takes the face and its edges,
           // triple-click everything connected (SketchUp's select)
           if (ent.kind === "faces") {
-            const r = await exec({ cmd: "connected", id: ent.id, all: e.detail >= 3 });
+            const r = await exec({ cmd: "connected", id: ent.id, all: clicks.current >= 3 });
             if (r.ok) L.setSel(combine(sel, { ...EMPTY, faces: r.faces as number[], edges: r.edges as number[] }, selMode(e)));
             return;
           }
         } else if (he != null) {
-          const r = await exec({ cmd: "connected", id: he, all: e.detail >= 3 });
+          const r = await exec({ cmd: "connected", id: he, all: clicks.current >= 3 });
           if (r.ok) L.setSel(combine(sel, { ...EMPTY, faces: r.faces as number[], edges: r.edges as number[] }, selMode(e)));
           return;
         } else {
@@ -2520,7 +2523,7 @@ export default function Viewport(props: Props) {
     const downLine = async ({ e, E, op }: DownArgs) => {
       const sn = infer(E, e, op?.t === "line" ? { anchor: op.p0, lock: st.current.lock } : {});
       if (op?.t === "line") {
-        if (e.detail >= 2) return cancel();
+        if (clicks.current >= 2) return cancel();
         return void (await commitLine(sn.p));
       }
       st.current.op = { t: "line", p0: sn.p, start: sn.p, cur: sn.p };
@@ -2622,14 +2625,20 @@ export default function Viewport(props: Props) {
       return;
     };
     const downPush = async ({ e, op }: DownArgs) => {
+      const again = st.current.last?.t === "push" ? st.current.last : null;
+      // double-click: same distance as last time. The first press of it has already started a push (click-move-click),
+      // so that one, still untouched, is dropped for the repeat.
+      if (clicks.current >= 2 && again && (!op || (op.t === "push" && !op.dragged))) {
+        const h = pick(e);
+        if (h?.face) {
+          cancel();
+          await run({ cmd: "pushpull", face: h.face.id, distance: again.d });
+          return;
+        }
+      }
       if (op?.t === "push") return void (await commitPush()); // click-move-click
       const h = pick(e);
       if (!h?.face) return;
-      if (e.detail >= 2 && st.current.last?.t === "push") {
-        // double-click: same distance as last time
-        await run({ cmd: "pushpull", face: h.face.id, distance: st.current.last.d });
-        return;
-      }
       st.current.op = { t: "push", face: h.face, origin: h.point.clone(), n: V(h.face.normal), d: 0, dragged: false };
       el.setPointerCapture(e.pointerId);
       return;
@@ -2743,7 +2752,7 @@ export default function Viewport(props: Props) {
         const last = op.pts[op.pts.length - 1];
         const sn = infer(E, e, { anchor: last, lock: st.current.lock, plane: { origin: op.pts[0], normal: UP } });
         if (op.pts.length > 2 && sn.p.distanceTo(op.pts[0]) < 1e-6) return void (await commitWall(true));
-        if (e.detail >= 2) return void (await commitWall(false));
+        if (clicks.current >= 2) return void (await commitWall(false));
         if (sn.p.distanceTo(last) > 1e-4) op.pts.push(sn.p);
         st.current.lock = null;
         return;
@@ -2876,6 +2885,11 @@ export default function Viewport(props: Props) {
       if (k.startsWith("file:")) r = await run({ cmd: "insert_file", path: k.slice(5), at: arr(at), rotate: r4(rot) });
       else if (k.startsWith("component:")) r = await run({ cmd: "place", component: Number(k.slice(10)), at: arr(at), rotate: r4(rot), host });
       else r = await run({ cmd: "insert", asset: k, at: arr(at), rotate: r4(rot), host });
+      // refused (for one, a component is open for editing): leave Place mode, as the message says what to do
+      if (!r.ok) {
+        L.setTool("select");
+        return;
+      }
       const op = r.opening as { error?: string } | null | undefined;
       if (op?.error) L.onToast(`Placed, but no opening: ${op.error}`, true);
       return;
@@ -2883,6 +2897,11 @@ export default function Viewport(props: Props) {
 
     const down = async (e: PointerEvent) => {
       const L = live.current;
+      // PointerEvent.detail is 0 in Chromium (and WebView2), so count clicks here: the same place, quickly
+      const now = e.timeStamp;
+      const prev = lastDown.current;
+      clicks.current = prev && e.button === prev.button && now - prev.t < 450 && Math.hypot(e.clientX - prev.x, e.clientY - prev.y) < 6 ? clicks.current + 1 : 1;
+      lastDown.current = { t: now, x: e.clientX, y: e.clientY, button: e.button };
       if (e.button === 0 && !st.current.space && CAMERA_TOOLS.includes(L.tool)) {
         const c = camTool.current;
         el.setPointerCapture(e.pointerId);
