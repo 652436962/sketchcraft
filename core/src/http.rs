@@ -134,6 +134,16 @@ pub fn serve_with(mut live: Live, opts: Options) -> anyhow::Result<()> {
     let access = Access { token: token.clone(), page: opts.page.clone(), port };
     let server = Server::http(("127.0.0.1", port)).map_err(|e| anyhow::anyhow!("{e}"))?;
     write_token_file(&token_file, &token).map_err(|e| anyhow::anyhow!("couldn't write the token file {}: {e}", token_file.display()))?;
+    // the token file goes when the bridge stops (and only if it is still ours)
+    struct TokenFile(PathBuf, String);
+    impl Drop for TokenFile {
+        fn drop(&mut self) {
+            if std::fs::read_to_string(&self.0).is_ok_and(|t| t.trim() == self.1) {
+                std::fs::remove_file(&self.0).ok();
+            }
+        }
+    }
+    let _token_file = TokenFile(token_file.clone(), token.clone());
     eprintln!("sketchcraft bridge on http://127.0.0.1:{port}  (model: {})", live.doc.display());
     eprintln!("token file: {} (send its contents as {TOKEN_HEADER}; the dev page reads it for you)", token_file.display());
     loop {
