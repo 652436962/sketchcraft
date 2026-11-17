@@ -52,6 +52,8 @@ Tracked on GitHub as the **0.3.7 — Drafting** milestone.
 | 6 | **Large documents stay fast**: A1, 50+ pages, lots of text, with a performance test | Relative-Fondant6544 (Reddit) | 2026-11-17 | planned | |
 | 7 | **Interactive sheet editor**: place and size viewports, text, dimensions, tables, title blocks by mouse | Jason | 2026-11-17 | planned | |
 | 8 | **AI drafting**: "dimension this plan", "hatch by tag", "lay out a permit set" through the agents | hardluxe (Reddit) | 2026-11-17 | planned | |
+| 9 | **Dimensions and viewports stay attached** when the model changes | SketchUp pain-point research | 2026-11-17 | planned | |
+| 10 | **Trim, extend and continuous dimensions** on sheets | SketchUp pain-point research | 2026-11-17 | planned | |
 
 ## Sprint 4: 0.3.8, texturing (from 2026-11-17)
 
@@ -67,6 +69,73 @@ Tracked on GitHub as the **0.3.8 — Texturing** milestone.
 | 5 | **Vertex painting** | Relative-Fondant6544 (Reddit) | 2026-11-17 | planned | |
 | 6 | **glTF / GLB export** with UVs and vertex colours, for game engines | Relative-Fondant6544 (Reddit) | 2026-11-17 | planned | |
 | 7 | **Textures in SketchUp 2017–2020 imports** | timrowledge (GitHub #1) | 2026-11-17 | planned | |
+| 8 | **Lightmap UV channel (UV2)** for game engines | SketchUp pain-point research | 2026-11-17 | planned | |
+| 9 | **FBX export** | SketchUp pain-point research | 2026-11-17 | planned | |
+
+Sprints 5 to 9 come from research into what SketchUp users complain about most (forums, reviews, extension stores). See [ROADMAP.md](ROADMAP.md) for the why.
+
+## Sprint 5: 0.3.9, makers (from 2026-11-17)
+
+Quick wins for woodworkers and 3D printing, the people most likely to switch.
+Tracked on GitHub as the **0.3.9 — Makers** milestone.
+
+| # | Feature | Asked by | Added | Status | Completed |
+| - | ------- | -------- | ----- | ------ | --------- |
+| 1 | **Fix model**: one undoable command to make a model clean and solid | SketchUp pain-point research | 2026-11-17 | planned | |
+| 2 | **3D printing check** and **3MF export** | SketchUp pain-point research | 2026-11-17 | planned | |
+| 3 | **Woodworker pack**: cutting diagrams, labels, cost, CNC parts, joinery | SketchUp pain-point research | 2026-11-17 | planned | |
+| 4 | **Small tools**: Bezier curves, make faces, flatten to a height | SketchUp pain-point research | 2026-11-17 | planned | |
+
+## Sprint 6: 0.4.0, no extension tax (from 2026-11-17)
+
+The paid add-ons people buy most, built in.
+Tracked on GitHub as the **0.4.0 — No extension tax** milestone.
+
+| # | Feature | Asked by | Added | Status | Completed |
+| - | ------- | -------- | ----- | ------ | --------- |
+| 1 | **Round corners** on any edge and corner, concave too | SketchUp pain-point research | 2026-11-17 | planned | |
+| 2 | **Loft** between profiles | SketchUp pain-point research | 2026-11-17 | planned | |
+| 3 | **Thicken** and **Joint Push/Pull** | SketchUp pain-point research | 2026-11-17 | planned | |
+| 4 | **Bend, taper and twist** | SketchUp pain-point research | 2026-11-17 | planned | |
+| 5 | **Parametric profiles, railings and stairs** | SketchUp pain-point research | 2026-11-17 | planned | |
+
+## Sprint 7: 0.4.1, big models (from 2026-11-17)
+
+Big models stay fast; the Rust core is the advantage.
+Tracked on GitHub as the **0.4.1 — Big models** milestone.
+
+| # | Feature | Asked by | Added | Status | Completed |
+| - | ------- | -------- | ----- | ------ | --------- |
+| 1 | **Multithreaded** core operations | SketchUp pain-point research | 2026-11-17 | planned | |
+| 2 | **Decimate heavy imports** | SketchUp pain-point research | 2026-11-17 | planned | |
+| 3 | **Instancing and level of detail** | SketchUp pain-point research | 2026-11-17 | planned | |
+| 4 | **Incremental viewport updates** | SketchUp pain-point research | 2026-11-17 | planned | |
+| 5 | **Public big-model benchmark** | SketchUp pain-point research | 2026-11-17 | planned | |
+
+## Sprint 8: 0.4.2, switchers & your own AI (from 2026-11-17)
+
+For people leaving SketchUp over price and AI credits.
+Tracked on GitHub as the **0.4.2 — Switchers & your own AI** milestone.
+
+| # | Feature | Asked by | Added | Status | Completed |
+| - | ------- | -------- | ----- | ------ | --------- |
+| 1 | **SketchUp import report** | SketchUp pain-point research | 2026-11-17 | planned | |
+| 2 | **Run the top free SketchUp extensions** | SketchUp pain-point research | 2026-11-17 | planned | |
+| 3 | **Save as older SketchUp versions** (research) | SketchUp pain-point research | 2026-11-17 | planned | |
+| 4 | **Bring your own AI**: setup guide and recipes | SketchUp pain-point research | 2026-11-17 | planned | |
+| 5 | **Coming from SketchUp Make 2017** guide | SketchUp pain-point research | 2026-11-17 | planned | |
+| 6 | **Open CC0 asset library** | SketchUp pain-point research | 2026-11-17 | planned | |
+
+## Sprint 9: 0.4.3, rendering (from 2026-11-17)
+
+Better renders without a paid plugin.
+Tracked on GitHub as the **0.4.3 — Rendering** milestone.
+
+| # | Feature | Asked by | Added | Status | Completed |
+| - | ------- | -------- | ----- | ------ | --------- |
+| 1 | **AI denoiser** | SketchUp pain-point research | 2026-11-17 | planned | |
+| 2 | **GPU path tracing** | SketchUp pain-point research | 2026-11-17 | planned | |
+| 3 | **HDRI lighting** and **roughness/normal maps** | SketchUp pain-point research | 2026-11-17 | planned | |
 
 ## Later
 
