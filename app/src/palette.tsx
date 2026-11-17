@@ -2,6 +2,7 @@
 // action, pick it with the arrows and Enter.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Sheet } from "./sheet";
 
 export interface Command {
   label: string;
@@ -49,32 +50,30 @@ export function CommandPalette({ commands, onClose }: { commands: Command[]; onC
     c.run();
   };
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet palette" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Search commands">
-        <input
-          ref={input}
-          placeholder="Search tools and commands"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "ArrowDown") (e.preventDefault(), setAt((a) => Math.min(a + 1, list.length - 1)));
-            else if (e.key === "ArrowUp") (e.preventDefault(), setAt((a) => Math.max(a - 1, 0)));
-            else if (e.key === "Enter") pick(list[at]);
-            else if (e.key === "Escape") onClose();
-          }}
-          aria-activedescendant={list[at] ? `cmd-${at}` : undefined}
-        />
-        <ul role="listbox">
-          {list.map((c, i) => (
-            <li key={`${c.label}|${c.hint}`} id={`cmd-${i}`} role="option" aria-selected={i === at} className={i === at ? "on" : ""} onMouseEnter={() => setAt(i)} onClick={() => pick(c)}>
-              <span>{c.label}</span>
-              {c.hint && <span className="muted small">{c.hint}</span>}
-              {c.key && <kbd>{c.key}</kbd>}
-            </li>
-          ))}
-          {!list.length && <li className="muted">Nothing matches "{q}"</li>}
-        </ul>
-      </div>
-    </div>
+    <Sheet onClose={onClose} label="Search commands" className="palette">
+      <input
+        ref={input}
+        placeholder="Search tools and commands"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown") (e.preventDefault(), setAt((a) => Math.min(a + 1, list.length - 1)));
+          else if (e.key === "ArrowUp") (e.preventDefault(), setAt((a) => Math.max(a - 1, 0)));
+          else if (e.key === "Enter") pick(list[at]);
+          else if (e.key === "Escape") onClose();
+        }}
+        aria-activedescendant={list[at] ? `cmd-${at}` : undefined}
+      />
+      <ul role="listbox">
+        {list.map((c, i) => (
+          <li key={`${c.label}|${c.hint}`} id={`cmd-${i}`} role="option" aria-selected={i === at} className={i === at ? "on" : ""} onMouseEnter={() => setAt(i)} onClick={() => pick(c)}>
+            <span>{c.label}</span>
+            {c.hint && <span className="muted small">{c.hint}</span>}
+            {c.key && <kbd>{c.key}</kbd>}
+          </li>
+        ))}
+        {!list.length && <li className="muted">Nothing matches "{q}"</li>}
+      </ul>
+    </Sheet>
   );
 }

@@ -2,6 +2,7 @@
 // app's web view, so anything that needs a name or a label asks here.
 
 import { useEffect, useRef, useState } from "react";
+import { Sheet } from "./sheet";
 
 interface Ask {
   title: string;
@@ -59,28 +60,26 @@ export function AskHost() {
     setA(null);
   };
   return (
-    <div className="sheet-backdrop" onClick={() => finish(null)}>
-      <div className="sheet ask" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={a.title}>
-        <b>{a.title}</b>
-        {a.hint && <p className="muted small" style={{ whiteSpace: "pre-line" }}>{a.hint}</p>}
-        {!a.confirm && <input
-          ref={input}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") finish(text);
-            if (e.key === "Escape") finish(null);
-          }}
-        />}
-        <div className="row gap">
-          <button className="btn small" onClick={() => finish(text)}>
-            {a.confirm ?? "OK"}
-          </button>
-          <button className="btn small ghost" onClick={() => finish(null)}>
-            Cancel
-          </button>
-        </div>
+    <Sheet onClose={() => finish(null)} label={a.title} className="ask">
+      <b>{a.title}</b>
+      {a.hint && <p className="muted small" style={{ whiteSpace: "pre-line" }}>{a.hint}</p>}
+      {!a.confirm && <input
+        ref={input}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") finish(text);
+          if (e.key === "Escape") finish(null);
+        }}
+      />}
+      <div className="row gap">
+        <button className="btn small" onClick={() => finish(text)}>
+          {a.confirm ?? "OK"}
+        </button>
+        <button className="btn small ghost" onClick={() => finish(null)}>
+          Cancel
+        </button>
       </div>
-    </div>
+    </Sheet>
   );
 }

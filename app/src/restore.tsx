@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { exec, type Reply } from "./engine";
 import { ago, bytes, cleanItems, type Item } from "./restoreclean";
+import { Sheet } from "./sheet";
 
 type Run = (cmd: Record<string, unknown>) => Promise<Reply>;
 
@@ -77,28 +78,26 @@ export function RestoreDialog({ run, onClose, onToast }: { run: Run; onClose: ()
     );
   };
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" style={{ width: "min(720px, calc(100vw - 32px))" }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Restore from backup">
-        <div className="sheet-head">
-          <b>Restore from backup</b>
-          <span className="muted">Earlier copies of this model, newest first.</span>
-          <button className="btn" style={{ marginLeft: "auto" }} onClick={onClose}>
-            Close
-          </button>
-        </div>
-        {problem && <p className="muted">{problem}</p>}
-        {!problem && items === null && <p className="muted">Looking…</p>}
-        {items && backups.length === 0 && aside.length === 0 && <p className="muted">No backups yet. SketchCraft keeps one every few minutes while you work, and one before anything that removes a lot.</p>}
-        {backups.length > 0 && <ul className="restore-list">{backups.map(row)}</ul>}
-        {aside.length > 0 && (
-          <>
-            <h4 className="restore-sub">Work set aside</h4>
-            <p className="muted small">Kept beside your model when another program saved over it, or the file couldn't be read.</p>
-            <ul className="restore-list">{aside.map(row)}</ul>
-          </>
-        )}
-        <p className="muted small">Restore replaces the model with that version as one step (⌘Z takes it back), and the model it replaces is kept in the backups first. Files over 768 MB are too big to restore here. A file marked “not verified” has the right kind of name but SketchCraft didn’t note making it (its note was lost); it is checked like any other file before it replaces anything.</p>
+    <Sheet onClose={onClose} label="Restore from backup" width={720}>
+      <div className="sheet-head">
+        <b>Restore from backup</b>
+        <span className="muted">Earlier copies of this model, newest first.</span>
+        <button className="btn" style={{ marginLeft: "auto" }} onClick={onClose}>
+          Close
+        </button>
       </div>
-    </div>
+      {problem && <p className="muted">{problem}</p>}
+      {!problem && items === null && <p className="muted">Looking…</p>}
+      {items && backups.length === 0 && aside.length === 0 && <p className="muted">No backups yet. SketchCraft keeps one every few minutes while you work, and one before anything that removes a lot.</p>}
+      {backups.length > 0 && <ul className="restore-list">{backups.map(row)}</ul>}
+      {aside.length > 0 && (
+        <>
+          <h4 className="restore-sub">Work set aside</h4>
+          <p className="muted small">Kept beside your model when another program saved over it, or the file couldn't be read.</p>
+          <ul className="restore-list">{aside.map(row)}</ul>
+        </>
+      )}
+      <p className="muted small">Restore replaces the model with that version as one step (⌘Z takes it back), and the model it replaces is kept in the backups first. Files over 768 MB are too big to restore here. A file marked “not verified” has the right kind of name but SketchCraft didn’t note making it (its note was lost); it is checked like any other file before it replaces anything.</p>
+    </Sheet>
   );
 }

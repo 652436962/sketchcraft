@@ -13,6 +13,7 @@ import { prepareImage } from "./textures";
 import { useRef } from "react";
 import type { BuildSettings, Tool } from "./Viewport";
 import type { Cam } from "./Viewport";
+import { Sheet, SheetHead } from "./sheet";
 
 type Run = (cmd: Record<string, unknown>) => Promise<Reply>;
 
@@ -1075,30 +1076,28 @@ export const SHORTCUTS: [string, [string, string][]][] = [
 
 export function ShortcutSheet({ onClose }: { onClose: () => void }) {
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Keyboard shortcuts">
-        <div className="sheet-head">
-          <b>Keyboard shortcuts</b>
-          <span className="muted">SketchUp's defaults. On Windows, Ctrl stands in for ⌘.</span>
-          <button className="btn small ghost" onClick={onClose}>
-            Close
-          </button>
-        </div>
-        <div className="sheet-cols">
-          {SHORTCUTS.map(([title, rows]) => (
-            <div key={title} className="sheet-sec">
-              <div className="section-title">{title}</div>
-              {rows.map(([k, what]) => (
-                <div key={k + what} className="sheet-row">
-                  <kbd>{k}</kbd>
-                  <span>{what}</span>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
+    <Sheet onClose={onClose} label="Keyboard shortcuts">
+      <div className="sheet-head">
+        <b>Keyboard shortcuts</b>
+        <span className="muted">SketchUp's defaults. On Windows, Ctrl stands in for ⌘.</span>
+        <button className="btn small ghost" onClick={onClose}>
+          Close
+        </button>
       </div>
-    </div>
+      <div className="sheet-cols">
+        {SHORTCUTS.map(([title, rows]) => (
+          <div key={title} className="sheet-sec">
+            <div className="section-title">{title}</div>
+            {rows.map(([k, what]) => (
+              <div key={k + what} className="sheet-row">
+                <kbd>{k}</kbd>
+                <span>{what}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </Sheet>
   );
 }
 
@@ -1138,54 +1137,49 @@ export function SheetsDialog({ scene, onMake, onClose }: { scene: Scene; onMake:
     onMake({ sheet, project: project.trim() || "Project", pages, blueprint });
   };
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" style={{ width: "min(520px, calc(100vw - 32px))" }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Drawing sheets">
-        <div className="sheet-head">
-          <b>Drawing sheets</b>
-          <span className="muted">Views on paper, to scale, with a title block.</span>
-        </div>
-        <label className="field">
-          <span>Project</span>
-          <input value={project} onChange={(e) => setProject(e.target.value)} />
-        </label>
-        <label className="field">
-          <span>Sheet</span>
-          <select value={sheet} onChange={(e) => setSheet(e.target.value)}>
-            <option value="a4">A4</option>
-            <option value="a3">A3</option>
-            <option value="a2">A2</option>
-            <option value="letter">Letter</option>
-            <option value="tabloid">Tabloid (11×17)</option>
-          </select>
-        </label>
-        <label className="field check">
-          <input type="checkbox" checked={perPage} onChange={(e) => setPerPage(e.target.checked)} />
-          <span>One view per sheet</span>
-        </label>
-        <label className="field check">
-          <input type="checkbox" checked={blueprint} onChange={(e) => setBlueprint(e.target.checked)} />
-          <span>Blueprint (white lines on blue)</span>
-        </label>
-        <div className="section-title" style={{ marginTop: 10 }}>
-          Views <span className="muted">(scale like 1:100 for a true-scale drawing; blank to fit)</span>
-        </div>
-        {all.map((n) => (
-          <div key={n} className="sheet-row">
-            <input type="checkbox" checked={!!picked[n]?.on} onChange={(e) => setPicked((p) => ({ ...p, [n]: { ...p[n], on: e.target.checked } }))} />
-            <span>{label(n)}</span>
-            <input className="num" style={{ width: 70 }} placeholder="fit" value={picked[n]?.scale ?? ""} onChange={(e) => setPicked((p) => ({ ...p, [n]: { ...p[n], scale: e.target.value } }))} />
-          </div>
-        ))}
-        <div className="row gap" style={{ marginTop: 12 }}>
-          <button className="btn small" onClick={make}>
-            Make PDF…
-          </button>
-          <button className="btn small ghost" onClick={onClose}>
-            Cancel
-          </button>
-        </div>
+    <Sheet onClose={onClose} label="Drawing sheets" width={520}>
+      <SheetHead title="Drawing sheets" note="Views on paper, to scale, with a title block." />
+      <label className="field">
+        <span>Project</span>
+        <input value={project} onChange={(e) => setProject(e.target.value)} />
+      </label>
+      <label className="field">
+        <span>Sheet</span>
+        <select value={sheet} onChange={(e) => setSheet(e.target.value)}>
+          <option value="a4">A4</option>
+          <option value="a3">A3</option>
+          <option value="a2">A2</option>
+          <option value="letter">Letter</option>
+          <option value="tabloid">Tabloid (11×17)</option>
+        </select>
+      </label>
+      <label className="field check">
+        <input type="checkbox" checked={perPage} onChange={(e) => setPerPage(e.target.checked)} />
+        <span>One view per sheet</span>
+      </label>
+      <label className="field check">
+        <input type="checkbox" checked={blueprint} onChange={(e) => setBlueprint(e.target.checked)} />
+        <span>Blueprint (white lines on blue)</span>
+      </label>
+      <div className="section-title" style={{ marginTop: 10 }}>
+        Views <span className="muted">(scale like 1:100 for a true-scale drawing; blank to fit)</span>
       </div>
-    </div>
+      {all.map((n) => (
+        <div key={n} className="sheet-row">
+          <input type="checkbox" checked={!!picked[n]?.on} onChange={(e) => setPicked((p) => ({ ...p, [n]: { ...p[n], on: e.target.checked } }))} />
+          <span>{label(n)}</span>
+          <input className="num" style={{ width: 70 }} placeholder="fit" value={picked[n]?.scale ?? ""} onChange={(e) => setPicked((p) => ({ ...p, [n]: { ...p[n], scale: e.target.value } }))} />
+        </div>
+      ))}
+      <div className="row gap" style={{ marginTop: 12 }}>
+        <button className="btn small" onClick={make}>
+          Make PDF…
+        </button>
+        <button className="btn small ghost" onClick={onClose}>
+          Cancel
+        </button>
+      </div>
+    </Sheet>
   );
 }
 
@@ -1326,39 +1320,34 @@ export function LocationDialog({ onAdd, onClose, current }: { onAdd: (p: { lat: 
     if (Number.isFinite(a) && Number.isFinite(o) && s > 0) onAdd({ lat: a, lon: o, size: s, imagery });
   };
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" style={{ width: "min(420px, calc(100vw - 32px))" }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Add location">
-        <div className="sheet-head">
-          <b>Add location</b>
-          <span className="muted">Ground and map around a place.</span>
-        </div>
-        <label className="field">
-          <span>Latitude</span>
-          <input value={lat} placeholder="37.8199" onChange={(e) => paste(e.target.value) || setLat(e.target.value)} />
-        </label>
-        <label className="field">
-          <span>Longitude</span>
-          <input value={lon} placeholder="-122.4783" onChange={(e) => paste(e.target.value) || setLon(e.target.value)} />
-        </label>
-        <label className="field">
-          <span>Area (m across)</span>
-          <input value={size} onChange={(e) => setSize(e.target.value)} />
-        </label>
-        <label className="field check">
-          <input type="checkbox" checked={imagery} onChange={(e) => setImagery(e.target.checked)} />
-          <span>Map imagery (OpenStreetMap)</span>
-        </label>
-        <p className="muted small">Paste "lat, lon" from a map. The model's origin sits on the ground there, north up (+Y). Elevation: AWS Terrain Tiles; map © OpenStreetMap contributors.</p>
-        <div className="row gap" style={{ marginTop: 12 }}>
-          <button className="btn small" onClick={ok}>
-            Add
-          </button>
-          <button className="btn small ghost" onClick={onClose}>
-            Cancel
-          </button>
-        </div>
+    <Sheet onClose={onClose} label="Add location" width={420}>
+      <SheetHead title="Add location" note="Ground and map around a place." />
+      <label className="field">
+        <span>Latitude</span>
+        <input value={lat} placeholder="37.8199" onChange={(e) => paste(e.target.value) || setLat(e.target.value)} />
+      </label>
+      <label className="field">
+        <span>Longitude</span>
+        <input value={lon} placeholder="-122.4783" onChange={(e) => paste(e.target.value) || setLon(e.target.value)} />
+      </label>
+      <label className="field">
+        <span>Area (m across)</span>
+        <input value={size} onChange={(e) => setSize(e.target.value)} />
+      </label>
+      <label className="field check">
+        <input type="checkbox" checked={imagery} onChange={(e) => setImagery(e.target.checked)} />
+        <span>Map imagery (OpenStreetMap)</span>
+      </label>
+      <p className="muted small">Paste "lat, lon" from a map. The model's origin sits on the ground there, north up (+Y). Elevation: AWS Terrain Tiles; map © OpenStreetMap contributors.</p>
+      <div className="row gap" style={{ marginTop: 12 }}>
+        <button className="btn small" onClick={ok}>
+          Add
+        </button>
+        <button className="btn small ghost" onClick={onClose}>
+          Cancel
+        </button>
       </div>
-    </div>
+    </Sheet>
   );
 }
 
@@ -1517,10 +1506,7 @@ export function RenderDialog({ camera, aspect, name, onClose, onToast }: { camer
       }}
     >
       <div className={`sheet render-dlg${more ? " more" : ""}`} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Render">
-        <div className="sheet-head">
-          <b>Render</b>
-          <span className="muted">Photoreal: sunlight, sky, soft shadows, reflections.</span>
-        </div>
+        <SheetHead title="Render" note="Photoreal: sunlight, sky, soft shadows, reflections." />
         <div className="render-view">
           {img ? <img src={img} alt="Render" /> : <div className="render-empty">{busy ? "Starting…" : "Pick a quality and press Render."}</div>}
           {progress && (

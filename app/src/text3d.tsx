@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { type Reply, type Scene } from "./engine";
 import type { Cam } from "./Viewport";
 import { formatLength, parseLength } from "./units";
+import { Sheet, SheetHead } from "./sheet";
 
 type Run = (cmd: Record<string, unknown>) => Promise<Reply>;
 type Pt = [number, number];
@@ -165,50 +166,45 @@ export function Text3dDialog({ scene, run, camera, onClose, onToast }: { scene: 
     }
   };
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" style={{ width: "min(480px, calc(100vw - 32px))" }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="3D Text">
-        <div className="sheet-head">
-          <b>3D Text</b>
-          <span className="muted">Solid letters in any font on your computer.</span>
-        </div>
-        <label className="field">
-          <span>Text</span>
-          <textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} autoFocus onFocus={(e) => e.target.select()} />
+    <Sheet onClose={onClose} label="3D Text" width={480}>
+      <SheetHead title="3D Text" note="Solid letters in any font on your computer." />
+      <label className="field">
+        <span>Text</span>
+        <textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} autoFocus onFocus={(e) => e.target.select()} />
+      </label>
+      <canvas ref={preview} width={440} height={64} className="text3d-preview" aria-hidden />
+      <label className="field">
+        <span>Font</span>
+        <select value={font} onChange={(e) => setFont(e.target.value)}>
+          {FONTS.map((f) => (
+            <option key={f} value={f} style={{ fontFamily: f }}>
+              {f}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="row gap">
+        <label className="field" style={{ flex: 1 }}>
+          <span>Height (a capital letter)</span>
+          <input className="num" value={height} onChange={(e) => setHeight(e.target.value)} />
         </label>
-        <canvas ref={preview} width={440} height={64} className="text3d-preview" aria-hidden />
-        <label className="field">
-          <span>Font</span>
-          <select value={font} onChange={(e) => setFont(e.target.value)}>
-            {FONTS.map((f) => (
-              <option key={f} value={f} style={{ fontFamily: f }}>
-                {f}
-              </option>
-            ))}
-          </select>
+        <label className="field" style={{ flex: 1 }}>
+          <span>Depth (blank or 0: flat letters)</span>
+          <input className="num" value={depth} onChange={(e) => setDepth(e.target.value)} />
         </label>
-        <div className="row gap">
-          <label className="field" style={{ flex: 1 }}>
-            <span>Height (a capital letter)</span>
-            <input className="num" value={height} onChange={(e) => setHeight(e.target.value)} />
-          </label>
-          <label className="field" style={{ flex: 1 }}>
-            <span>Depth (blank or 0: flat letters)</span>
-            <input className="num" value={depth} onChange={(e) => setDepth(e.target.value)} />
-          </label>
-        </div>
-        <label className="check">
-          <input type="checkbox" checked={flat} onChange={(e) => setFlat(e.target.checked)} /> Lying flat (on the ground, like a sign painted on a road)
-        </label>
-        <div className="row gap" style={{ marginTop: 12 }}>
-          <button className="btn small" disabled={busy || !text.trim()} onClick={place}>
-            {busy ? "Making…" : "Place"}
-          </button>
-          <span style={{ flex: 1 }} />
-          <button className="btn small ghost" onClick={onClose}>
-            Cancel
-          </button>
-        </div>
       </div>
-    </div>
+      <label className="check">
+        <input type="checkbox" checked={flat} onChange={(e) => setFlat(e.target.checked)} /> Lying flat (on the ground, like a sign painted on a road)
+      </label>
+      <div className="row gap" style={{ marginTop: 12 }}>
+        <button className="btn small" disabled={busy || !text.trim()} onClick={place}>
+          {busy ? "Making…" : "Place"}
+        </button>
+        <span style={{ flex: 1 }} />
+        <button className="btn small ghost" onClick={onClose}>
+          Cancel
+        </button>
+      </div>
+    </Sheet>
   );
 }

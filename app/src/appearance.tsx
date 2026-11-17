@@ -10,6 +10,7 @@ import { Icons } from "./icons";
 import { iconOk, isDark, readSkin, SKINS, TOKEN_LABELS, TOKENS, type Skin, type SkinToken } from "./skins";
 import type { Tool } from "./Viewport";
 import { TOOL_INFO, WORKSPACES, type Workspace, type WorkspaceEdits } from "./workspace";
+import { Sheet } from "./sheet";
 
 /** the tools an icon set can cover (its files are named after these) */
 const TOOL_NAMES = Object.keys(TOOL_INFO);
@@ -297,53 +298,51 @@ export function WorkspaceDialog({ ws, onChange, onReset, onClose }: { ws: Worksp
     onChange({ tools: ORDER.map((g) => g.filter((x) => next.has(x))).filter((g) => g.length) });
   };
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" style={{ width: "min(560px, calc(100vw - 32px))" }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Customize workspace">
-        <div className="sheet-head">
-          <b>Customize {ws.name}</b>
-          <span className="muted">{ws.blurb}</span>
-        </div>
-        <div className="section-title">Toolbar: click a tool to add or remove it</div>
-        {ORDER.map((g, i) => (
-          <div key={i} className="ws-tools">
-            {g.map((t) => (
-              <button key={t} className={on.has(t) ? "on" : ""} title={`${TOOL_INFO[t as keyof typeof TOOL_INFO].name}${TOOL_INFO[t as keyof typeof TOOL_INFO].key ? ` (${TOOL_INFO[t as keyof typeof TOOL_INFO].key})` : ""}`} onClick={() => toggle(t)}>
-                {Icons[t as keyof typeof Icons]?.()}
-              </button>
-            ))}
-          </div>
-        ))}
-        <p className="muted small">Every shortcut key still works, even for tools you hide.</p>
-        <div className="kv" style={{ marginTop: 10 }}>
-          <span>Toolbar</span>
-          <select className="units-select" value={ws.dock} onChange={(e) => onChange({ dock: e.target.value as Workspace["dock"] })}>
-            <option value="bottom">Along the bottom</option>
-            <option value="left">Down the left side</option>
-            <option value="classic">Classic: docked above the model</option>
-          </select>
-          <span>Left panel</span>
-          <select className="units-select" value={ws.showLeft ? ws.leftTab : "off"} onChange={(e) => (e.target.value === "off" ? onChange({ showLeft: false }) : onChange({ showLeft: true, leftTab: e.target.value as Workspace["leftTab"] }))}>
-            <option value="outliner">Shown, on Outliner</option>
-            <option value="library">Shown, on Library</option>
-            <option value="views">Shown, on Views</option>
-            <option value="off">Hidden</option>
-          </select>
-          <span>Right panel</span>
-          <select className="units-select" value={ws.showRight ? "on" : "off"} onChange={(e) => onChange({ showRight: e.target.value === "on" })}>
-            <option value="on">Shown</option>
-            <option value="off">Hidden</option>
-          </select>
-        </div>
-        <div className="row gap" style={{ marginTop: 16 }}>
-          <button className="btn small ghost" onClick={onReset} disabled={JSON.stringify(ws) === JSON.stringify(base)}>
-            Reset {ws.name} to how it came
-          </button>
-          <span style={{ flex: 1 }} />
-          <button className="btn small" onClick={onClose}>
-            Done
-          </button>
-        </div>
+    <Sheet onClose={onClose} label="Customize workspace" width={560}>
+      <div className="sheet-head">
+        <b>Customize {ws.name}</b>
+        <span className="muted">{ws.blurb}</span>
       </div>
-    </div>
+      <div className="section-title">Toolbar: click a tool to add or remove it</div>
+      {ORDER.map((g, i) => (
+        <div key={i} className="ws-tools">
+          {g.map((t) => (
+            <button key={t} className={on.has(t) ? "on" : ""} title={`${TOOL_INFO[t as keyof typeof TOOL_INFO].name}${TOOL_INFO[t as keyof typeof TOOL_INFO].key ? ` (${TOOL_INFO[t as keyof typeof TOOL_INFO].key})` : ""}`} onClick={() => toggle(t)}>
+              {Icons[t as keyof typeof Icons]?.()}
+            </button>
+          ))}
+        </div>
+      ))}
+      <p className="muted small">Every shortcut key still works, even for tools you hide.</p>
+      <div className="kv" style={{ marginTop: 10 }}>
+        <span>Toolbar</span>
+        <select className="units-select" value={ws.dock} onChange={(e) => onChange({ dock: e.target.value as Workspace["dock"] })}>
+          <option value="bottom">Along the bottom</option>
+          <option value="left">Down the left side</option>
+          <option value="classic">Classic: docked above the model</option>
+        </select>
+        <span>Left panel</span>
+        <select className="units-select" value={ws.showLeft ? ws.leftTab : "off"} onChange={(e) => (e.target.value === "off" ? onChange({ showLeft: false }) : onChange({ showLeft: true, leftTab: e.target.value as Workspace["leftTab"] }))}>
+          <option value="outliner">Shown, on Outliner</option>
+          <option value="library">Shown, on Library</option>
+          <option value="views">Shown, on Views</option>
+          <option value="off">Hidden</option>
+        </select>
+        <span>Right panel</span>
+        <select className="units-select" value={ws.showRight ? "on" : "off"} onChange={(e) => onChange({ showRight: e.target.value === "on" })}>
+          <option value="on">Shown</option>
+          <option value="off">Hidden</option>
+        </select>
+      </div>
+      <div className="row gap" style={{ marginTop: 16 }}>
+        <button className="btn small ghost" onClick={onReset} disabled={JSON.stringify(ws) === JSON.stringify(base)}>
+          Reset {ws.name} to how it came
+        </button>
+        <span style={{ flex: 1 }} />
+        <button className="btn small" onClick={onClose}>
+          Done
+        </button>
+      </div>
+    </Sheet>
   );
 }

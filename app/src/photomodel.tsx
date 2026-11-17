@@ -6,6 +6,7 @@
 import { useMemo, useState } from "react";
 import { type Reply, type SavedView, type Scene } from "./engine";
 import { parseLength } from "./units";
+import { Sheet } from "./sheet";
 
 type Run = (cmd: Record<string, unknown>) => Promise<Reply>;
 type UV = [number, number];
@@ -149,117 +150,115 @@ export function PhotoModeler({ scene, run, onClose, onToast }: { scene: Scene; r
   }
   const missOf = (i: number) => (result?.misses[i]?.length ? Math.max(...result.misses[i].map((m) => m[1])) : null);
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet photomodel" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Model from photos">
-        <div className="sheet-head">
-          <b>Model from photos</b>
-          <span className="muted">{step}</span>
+    <Sheet onClose={onClose} label="Model from photos" className="photomodel">
+      <div className="sheet-head">
+        <b>Model from photos</b>
+        <span className="muted">{step}</span>
+      </div>
+      <div className="pm-body">
+        <div className="pm-photos">
+          {photos.map((v) => {
+            const a = aspect[v.name] ?? 4 / 3;
+            const pos = ([u, w]: UV) => ({ left: `${50 + (u * 50) / a}%`, top: `${50 - w * 50}%` });
+            const toSvg = ([u, w]: UV) => [50 + (u * 50) / a, 50 - w * 50];
+            return (
+              <figure key={v.name} className="pm-photo">
+                <div className="pm-frame" onClick={(e) => click(v.name, e)} title="Click a corner">
+                  <img src={v.photo} alt={v.name} onLoad={(e) => {
+                      const ratio = e.currentTarget.naturalWidth / e.currentTarget.naturalHeight;
+                      setAspect((s) => ({ ...s, [v.name]: ratio }));
+                    }} draggable={false} />
+                  <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                    {(epipolar[v.name] ?? []).map(([p, q], i) => {
+                      const [x1, y1] = toSvg(p);
+                      const [x2, y2] = toSvg(q);
+                      return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} className="pm-epi" />;
+                    })}
+                    {edges.map(([i, j], k) => {
+                      const p = points[i]?.marks[v.name];
+                      const q = points[j]?.marks[v.name];
+                      if (!p || !q) return null;
+                      const [x1, y1] = toSvg(p);
+                      const [x2, y2] = toSvg(q);
+                      return <line key={`e${k}`} x1={x1} y1={y1} x2={x2} y2={y2} className="pm-edge" />;
+                    })}
+                  </svg>
+                  {points.map((p, i) =>
+                    p.marks[v.name] ? (
+                      <span key={i} className={`pm-mark ${i === active ? "on" : ""}`} style={pos(p.marks[v.name])}>
+                        {i + 1}
+                      </span>
+                    ) : null
+                  )}
+                </div>
+                <figcaption>{v.name}</figcaption>
+              </figure>
+            );
+          })}
         </div>
-        <div className="pm-body">
-          <div className="pm-photos">
-            {photos.map((v) => {
-              const a = aspect[v.name] ?? 4 / 3;
-              const pos = ([u, w]: UV) => ({ left: `${50 + (u * 50) / a}%`, top: `${50 - w * 50}%` });
-              const toSvg = ([u, w]: UV) => [50 + (u * 50) / a, 50 - w * 50];
+        <aside className="pm-side">
+          <div className="section-title">Corners</div>
+          <ol className="pm-points">
+            {points.map((p, i) => {
+              const n = Object.keys(p.marks).length;
+              const miss = missOf(i);
               return (
-                <figure key={v.name} className="pm-photo">
-                  <div className="pm-frame" onClick={(e) => click(v.name, e)} title="Click a corner">
-                    <img src={v.photo} alt={v.name} onLoad={(e) => {
-                        const ratio = e.currentTarget.naturalWidth / e.currentTarget.naturalHeight;
-                        setAspect((s) => ({ ...s, [v.name]: ratio }));
-                      }} draggable={false} />
-                    <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                      {(epipolar[v.name] ?? []).map(([p, q], i) => {
-                        const [x1, y1] = toSvg(p);
-                        const [x2, y2] = toSvg(q);
-                        return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} className="pm-epi" />;
-                      })}
-                      {edges.map(([i, j], k) => {
-                        const p = points[i]?.marks[v.name];
-                        const q = points[j]?.marks[v.name];
-                        if (!p || !q) return null;
-                        const [x1, y1] = toSvg(p);
-                        const [x2, y2] = toSvg(q);
-                        return <line key={`e${k}`} x1={x1} y1={y1} x2={x2} y2={y2} className="pm-edge" />;
-                      })}
-                    </svg>
-                    {points.map((p, i) =>
-                      p.marks[v.name] ? (
-                        <span key={i} className={`pm-mark ${i === active ? "on" : ""}`} style={pos(p.marks[v.name])}>
-                          {i + 1}
-                        </span>
-                      ) : null
-                    )}
-                  </div>
-                  <figcaption>{v.name}</figcaption>
-                </figure>
+                <li key={i} className={i === active ? "on" : ""} onClick={() => setActive(i)}>
+                  <b>{i + 1}</b>
+                  <span className="name">{p.name}</span>
+                  <span className={`count ${n < 2 ? "warn" : ""}`}>{n < 2 ? "1 photo" : miss != null ? `±${fmtLen(miss, units)}` : `${n} photos`}</span>
+                  <button className="rowbtn" aria-label={`Remove ${p.name}`} onClick={(e) => (e.stopPropagation(), removePoint(i))}>
+                    ×
+                  </button>
+                </li>
               );
             })}
+            {!points.length && <li className="empty">Corners you mark show up here.</li>}
+          </ol>
+          <button className="btn small ghost" onClick={() => (setPoints([...points, { name: `Corner ${points.length + 1}`, marks: {} }]), setActive(points.length))}>
+            + New corner
+          </button>
+          <label className="field check" style={{ marginTop: 8 }}>
+            <input type="checkbox" checked={chain} onChange={(e) => setChain(e.target.checked)} />
+            <span>Connect as I go (trace an outline)</span>
+          </label>
+          <div className="section-title" style={{ marginTop: 12 }}>
+            Edges {edges.length ? `(${edges.length})` : ""}
           </div>
-          <aside className="pm-side">
-            <div className="section-title">Corners</div>
-            <ol className="pm-points">
-              {points.map((p, i) => {
-                const n = Object.keys(p.marks).length;
-                const miss = missOf(i);
-                return (
-                  <li key={i} className={i === active ? "on" : ""} onClick={() => setActive(i)}>
-                    <b>{i + 1}</b>
-                    <span className="name">{p.name}</span>
-                    <span className={`count ${n < 2 ? "warn" : ""}`}>{n < 2 ? "1 photo" : miss != null ? `±${fmtLen(miss, units)}` : `${n} photos`}</span>
-                    <button className="rowbtn" aria-label={`Remove ${p.name}`} onClick={(e) => (e.stopPropagation(), removePoint(i))}>
-                      ×
-                    </button>
-                  </li>
-                );
-              })}
-              {!points.length && <li className="empty">Corners you mark show up here.</li>}
-            </ol>
-            <button className="btn small ghost" onClick={() => (setPoints([...points, { name: `Corner ${points.length + 1}`, marks: {} }]), setActive(points.length))}>
-              + New corner
-            </button>
-            <label className="field check" style={{ marginTop: 8 }}>
-              <input type="checkbox" checked={chain} onChange={(e) => setChain(e.target.checked)} />
-              <span>Connect as I go (trace an outline)</span>
-            </label>
-            <div className="section-title" style={{ marginTop: 12 }}>
-              Edges {edges.length ? `(${edges.length})` : ""}
-            </div>
-            <p className="muted small">{edges.length ? edges.map(([a, b]) => `${a + 1}–${b + 1}`).join(", ") : "None yet. With Connect as I go on, each new corner joins the last."}</p>
-            {edges.length > 0 && (
-              <>
-                <div className="section-title" style={{ marginTop: 10 }}>
-                  Known length (sets the scale)
-                </div>
-                <div className="row gap">
-                  <select value={known.edge} onChange={(e) => setKnown({ ...known, edge: Number(e.target.value) })}>
-                    {edges.map(([a, b], k) => (
-                      <option key={k} value={k}>
-                        {a + 1}–{b + 1}
-                      </option>
-                    ))}
-                  </select>
-                  <input className="num" placeholder={units === "ft" || units === "in" ? `22'` : "6.7"} value={known.text} onChange={(e) => setKnown({ ...known, text: e.target.value })} />
-                </div>
-              </>
-            )}
-          </aside>
-        </div>
-        <div className="row gap" style={{ marginTop: 12 }}>
-          <button className="btn small" disabled={!ready} onClick={() => solve(false)} title="Work out where the corners are; they appear as guide points">
-            Solve ({ready} ready)
-          </button>
-          <button className="btn small ghost" disabled={!ready || !edges.length} onClick={() => solve(true)} title="Solve, then draw the edges between corners (closed outlines become faces)">
-            Solve and build edges
-          </button>
-          <span className="muted small">{result ? `${result.placed} placed. Lines snap to the guide points, so you can keep drawing from them.` : "Every photo must have its origin marker on the same real corner."}</span>
-          <span style={{ flex: 1 }} />
-          <button className="btn small ghost" onClick={onClose}>
-            Done
-          </button>
-        </div>
+          <p className="muted small">{edges.length ? edges.map(([a, b]) => `${a + 1}–${b + 1}`).join(", ") : "None yet. With Connect as I go on, each new corner joins the last."}</p>
+          {edges.length > 0 && (
+            <>
+              <div className="section-title" style={{ marginTop: 10 }}>
+                Known length (sets the scale)
+              </div>
+              <div className="row gap">
+                <select value={known.edge} onChange={(e) => setKnown({ ...known, edge: Number(e.target.value) })}>
+                  {edges.map(([a, b], k) => (
+                    <option key={k} value={k}>
+                      {a + 1}–{b + 1}
+                    </option>
+                  ))}
+                </select>
+                <input className="num" placeholder={units === "ft" || units === "in" ? `22'` : "6.7"} value={known.text} onChange={(e) => setKnown({ ...known, text: e.target.value })} />
+              </div>
+            </>
+          )}
+        </aside>
       </div>
-    </div>
+      <div className="row gap" style={{ marginTop: 12 }}>
+        <button className="btn small" disabled={!ready} onClick={() => solve(false)} title="Work out where the corners are; they appear as guide points">
+          Solve ({ready} ready)
+        </button>
+        <button className="btn small ghost" disabled={!ready || !edges.length} onClick={() => solve(true)} title="Solve, then draw the edges between corners (closed outlines become faces)">
+          Solve and build edges
+        </button>
+        <span className="muted small">{result ? `${result.placed} placed. Lines snap to the guide points, so you can keep drawing from them.` : "Every photo must have its origin marker on the same real corner."}</span>
+        <span style={{ flex: 1 }} />
+        <button className="btn small ghost" onClick={onClose}>
+          Done
+        </button>
+      </div>
+    </Sheet>
   );
 }
 

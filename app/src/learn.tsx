@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { type Scene } from "./engine";
 import { store } from "./skins";
+import { Sheet, SheetHead } from "./sheet";
 
 /** What a step can look at. */
 export interface LearnCtx {
@@ -221,87 +222,82 @@ export function LearnCenter({ onStart, onClose }: { onStart: (id: string) => voi
   const lessons = LESSONS.filter((l) => match(l.title, l.about, ...l.steps.map((s) => s.do + " " + (s.how ?? ""))));
   const watch = Object.entries(demos).filter(([, d]) => match(d.title, d.about, d.topic ?? ""));
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet learn" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Learn">
-        <div className="sheet-head">
-          <b>Learn</b>
-          <span className="muted">Lessons that watch what you do, and short demos of every feature.</span>
-        </div>
-        <div className="row gap learn-top">
-          <div className="seg" role="tablist">
-            <button role="tab" aria-selected={tab === "lessons"} className={tab === "lessons" ? "on" : ""} onClick={() => setTab("lessons")}>
-              Lessons ({done.length}/{LESSONS.length})
-            </button>
-            <button role="tab" aria-selected={tab === "watch"} className={tab === "watch" ? "on" : ""} onClick={() => setTab("watch")}>
-              Watch ({Object.keys(demos).length})
-            </button>
-          </div>
-          <input className="learn-search" placeholder="Search: groups, photos, render…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search lessons and demos" autoFocus />
-        </div>
-        {tab === "lessons" && (
-          <div className="learn-grid">
-            {lessons.map((l) => (
-              <article key={l.id} className={`learn-card ${done.includes(l.id) ? "done" : ""}`}>
-                <header>
-                  <b>{l.title}</b>
-                  <span className="muted small">{done.includes(l.id) ? "Done ✓" : `${l.minutes} min · ${l.steps.length} steps`}</span>
-                </header>
-                <p>{l.about}</p>
-                <ol className="small muted">
-                  {l.steps.map((s, i) => (
-                    <li key={i}>{s.do}</li>
-                  ))}
-                </ol>
-                <div className="row gap">
-                  <button className="btn small" onClick={() => onStart(l.id)}>
-                    {done.includes(l.id) ? "Do it again" : "Start"}
-                  </button>
-                  {l.demo && demos[l.demo] && (
-                    <button className="btn small ghost" onClick={() => (setTab("watch"), setWatching(l.demo!))}>
-                      Watch first
-                    </button>
-                  )}
-                </div>
-              </article>
-            ))}
-            {!lessons.length && <p className="muted">Nothing matches “{q}”.</p>}
-          </div>
-        )}
-        {tab === "watch" && (
-          <div className="learn-grid">
-            {watch.map(([name, d]) => (
-              <article key={name} className={`learn-card demo ${watching === name ? "on" : ""}`} onClick={() => setWatching(watching === name ? null : name)}>
-                <div className="demo-frame">{reduce ? <div className="demo-still">▶ Play the demo</div> : <img src={d.gif} alt={`${d.title}: ${d.about}`} loading="lazy" />}</div>
-                <header>
-                  <b>{d.title}</b>
-                  {d.topic && <span className="muted small">{d.topic}</span>}
-                </header>
-                <p className="small">{d.about}</p>
-              </article>
-            ))}
-            {!watch.length && <p className="muted">{Object.keys(demos).length ? `Nothing matches “${q}”.` : "No demos yet: run node tools/demos/capture.mjs all."}</p>}
-          </div>
-        )}
-        {watching && demos[watching] && (
-          <div className="demo-big" onClick={() => setWatching(null)} role="dialog" aria-label={demos[watching].title}>
-            <img src={demos[watching].gif} alt={demos[watching].about} />
-            <p>
-              <b>{demos[watching].title}</b> {demos[watching].about} <span className="muted">(click to close)</span>
-            </p>
-          </div>
-        )}
-        <div className="row gap" style={{ marginTop: 12 }}>
-          <span className="muted small">Press ? any time for every keyboard shortcut, and Shift+S to find any command.</span>
-          <button className="btn small ghost" onClick={openGuide} title="The SketchCraft guide, in your browser">
-            Read the guide
+    <Sheet onClose={onClose} label="Learn" className="learn">
+      <SheetHead title="Learn" note="Lessons that watch what you do, and short demos of every feature." />
+      <div className="row gap learn-top">
+        <div className="seg" role="tablist">
+          <button role="tab" aria-selected={tab === "lessons"} className={tab === "lessons" ? "on" : ""} onClick={() => setTab("lessons")}>
+            Lessons ({done.length}/{LESSONS.length})
           </button>
-          <span style={{ flex: 1 }} />
-          <button className="btn small ghost" onClick={onClose}>
-            Close
+          <button role="tab" aria-selected={tab === "watch"} className={tab === "watch" ? "on" : ""} onClick={() => setTab("watch")}>
+            Watch ({Object.keys(demos).length})
           </button>
         </div>
+        <input className="learn-search" placeholder="Search: groups, photos, render…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search lessons and demos" autoFocus />
       </div>
-    </div>
+      {tab === "lessons" && (
+        <div className="learn-grid">
+          {lessons.map((l) => (
+            <article key={l.id} className={`learn-card ${done.includes(l.id) ? "done" : ""}`}>
+              <header>
+                <b>{l.title}</b>
+                <span className="muted small">{done.includes(l.id) ? "Done ✓" : `${l.minutes} min · ${l.steps.length} steps`}</span>
+              </header>
+              <p>{l.about}</p>
+              <ol className="small muted">
+                {l.steps.map((s, i) => (
+                  <li key={i}>{s.do}</li>
+                ))}
+              </ol>
+              <div className="row gap">
+                <button className="btn small" onClick={() => onStart(l.id)}>
+                  {done.includes(l.id) ? "Do it again" : "Start"}
+                </button>
+                {l.demo && demos[l.demo] && (
+                  <button className="btn small ghost" onClick={() => (setTab("watch"), setWatching(l.demo!))}>
+                    Watch first
+                  </button>
+                )}
+              </div>
+            </article>
+          ))}
+          {!lessons.length && <p className="muted">Nothing matches “{q}”.</p>}
+        </div>
+      )}
+      {tab === "watch" && (
+        <div className="learn-grid">
+          {watch.map(([name, d]) => (
+            <article key={name} className={`learn-card demo ${watching === name ? "on" : ""}`} onClick={() => setWatching(watching === name ? null : name)}>
+              <div className="demo-frame">{reduce ? <div className="demo-still">▶ Play the demo</div> : <img src={d.gif} alt={`${d.title}: ${d.about}`} loading="lazy" />}</div>
+              <header>
+                <b>{d.title}</b>
+                {d.topic && <span className="muted small">{d.topic}</span>}
+              </header>
+              <p className="small">{d.about}</p>
+            </article>
+          ))}
+          {!watch.length && <p className="muted">{Object.keys(demos).length ? `Nothing matches “${q}”.` : "No demos yet: run node tools/demos/capture.mjs all."}</p>}
+        </div>
+      )}
+      {watching && demos[watching] && (
+        <div className="demo-big" onClick={() => setWatching(null)} role="dialog" aria-label={demos[watching].title}>
+          <img src={demos[watching].gif} alt={demos[watching].about} />
+          <p>
+            <b>{demos[watching].title}</b> {demos[watching].about} <span className="muted">(click to close)</span>
+          </p>
+        </div>
+      )}
+      <div className="row gap" style={{ marginTop: 12 }}>
+        <span className="muted small">Press ? any time for every keyboard shortcut, and Shift+S to find any command.</span>
+        <button className="btn small ghost" onClick={openGuide} title="The SketchCraft guide, in your browser">
+          Read the guide
+        </button>
+        <span style={{ flex: 1 }} />
+        <button className="btn small ghost" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </Sheet>
   );
 }
 

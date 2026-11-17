@@ -5,6 +5,7 @@
 import { useState } from "react";
 import { type Reply, type Scene } from "./engine";
 import { prepareImage } from "./textures";
+import { Sheet, SheetHead } from "./sheet";
 
 type Run = (cmd: Record<string, unknown>) => Promise<Reply>;
 type Plane = "front" | "side" | "top";
@@ -87,40 +88,35 @@ export function RefImageDialog({ scene, run, onClose, onToast }: { scene: Scene;
     }
   };
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" style={{ width: "min(520px, calc(100vw - 32px))" }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Add a reference image">
-        <div className="sheet-head">
-          <b>Reference image</b>
-          <span className="muted">A photo or drawing to model over: see-through and locked.</span>
-        </div>
-        <label className="field">
-          <span>Image</span>
-          <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-        </label>
-        <div className="field">
-          <span>Which view</span>
-          <div className="seg" role="radiogroup">
-            {(["front", "side", "top"] as Plane[]).map((p) => (
-              <button key={p} className={plane === p ? "on" : ""} onClick={() => setPlane(p)} aria-pressed={plane === p}>
-                {p === "front" ? "Front" : p === "side" ? "Side" : "Top"}
-              </button>
-            ))}
-          </div>
-        </div>
-        <label className="field">
-          <span>Width (meters): how wide the picture is in real life</span>
-          <input className="num" value={width} onChange={(e) => setWidth(e.target.value)} />
-        </label>
-        <div className="row gap" style={{ marginTop: 12 }}>
-          <button className="btn small" disabled={!file || busy} onClick={place}>
-            {busy ? "Placing…" : "Place it"}
-          </button>
-          <span style={{ flex: 1 }} />
-          <button className="btn small ghost" onClick={onClose}>
-            Cancel
-          </button>
+    <Sheet onClose={onClose} label="Add a reference image" width={520}>
+      <SheetHead title="Reference image" note="A photo or drawing to model over: see-through and locked." />
+      <label className="field">
+        <span>Image</span>
+        <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+      </label>
+      <div className="field">
+        <span>Which view</span>
+        <div className="seg" role="radiogroup">
+          {(["front", "side", "top"] as Plane[]).map((p) => (
+            <button key={p} className={plane === p ? "on" : ""} onClick={() => setPlane(p)} aria-pressed={plane === p}>
+              {p === "front" ? "Front" : p === "side" ? "Side" : "Top"}
+            </button>
+          ))}
         </div>
       </div>
-    </div>
+      <label className="field">
+        <span>Width (meters): how wide the picture is in real life</span>
+        <input className="num" value={width} onChange={(e) => setWidth(e.target.value)} />
+      </label>
+      <div className="row gap" style={{ marginTop: 12 }}>
+        <button className="btn small" disabled={!file || busy} onClick={place}>
+          {busy ? "Placing…" : "Place it"}
+        </button>
+        <span style={{ flex: 1 }} />
+        <button className="btn small ghost" onClick={onClose}>
+          Cancel
+        </button>
+      </div>
+    </Sheet>
   );
 }
