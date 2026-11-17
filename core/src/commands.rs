@@ -1205,11 +1205,20 @@ pub struct Engine {
     /// the model was opened with more geometry than the limit allows: it can be looked at and
     /// cut down, but nothing that adds geometry runs and it can't be saved until it is under
     pub oversize: bool,
+    /// the last Undo (true) or Redo (false) that was refused because of another program's change, and left
+    /// its step in the list: asking again skips that step
+    refused: Option<bool>,
+    /// the command being run comes from an agent or a plugin (tighter limits); false: the person, whose importers
+    /// and terrain may use the whole model budget
+    untrusted: bool,
 }
 
 /// A batch nobody closed (the app went away mid-run) is closed after this (a plugin run is
 /// limited to 60 s, a Ruby replay to the same).
 pub const BATCH_MAX: std::time::Duration = std::time::Duration::from_secs(150);
+
+/// The biggest model file `open` and Restore read (a model in memory is several times its file's size).
+pub const MAX_OPEN_BYTES: u64 = 400 << 20;
 
 const UNDO_LIMIT: usize = 200;
 /// Undo history never holds more than about this much (per-step sizes are estimates).
@@ -1266,6 +1275,7 @@ impl Engine {
         if let Err(e) = crate::policy::vet(caller, &mut v) {
             return json!({"ok": false, "error": e});
         }
+        self.untrusted = !matches!(caller, Caller::Ui);
         if let Err(e) = self.resolve(&mut v) {
             crate::policy::settle(caller, false);
             return json!({"ok": false, "error": e.to_string()});
@@ -1346,19 +1356,21 @@ impl Engine {
     }
 
     /// The undo and redo lists in a form that survives the reload of a model somebody else saved
-    /// (see `history`). Nothing here changes the engine; give the result to `install_history` once the
-    /// new model is in.
-    pub fn history_for_reload(&self) -> Option<crate::history::History> {
+    /// (see `history`: nothing is worked out yet, so this is instant). The lists are taken out of the
+    /// engine: give the result to `install_history` once the reload is over, whether it worked or not.
+    pub fn history_for_reload(&mut self) -> Option<crate::history::History> {
         if self.undo.is_empty() && self.redo.is_empty() {
             return None;
         }
-        Some(crate::history::carry(&self.undo, &self.redo, &self.model))
+        let (undo, redo) = (std::mem::take(&mut self.undo), std::mem::take(&mut self.redo));
+        Some(crate::history::carry(undo, redo, &self.model))
     }
 
     /// Put a carried history back after a reload. Returns how many steps could not be kept.
     pub fn install_history(&mut self, h: crate::history::History) -> usize {
         self.undo = h.undo;
         self.redo = h.redo;
+        self.refused = None;
         self.trim_undo();
         h.dropped
     }
@@ -1369,6 +1381,13 @@ impl Engine {
             bail!("a plugin is still running; try again when it has finished");
         }
         model.check_sane()?;
+        // a file that names points, placements or groups that aren't there would draw nothing but trouble
+        if let Some(what) = model.broken_refs(false).first() {
+            bail!("that file isn't a consistent model ({what} refers to something that isn't there), so it was not restored");
+        }
+        let mut model = model;
+        // ids are never handed out twice: not after a restore either (an agent or another program may still hold the ones in use now)
+        model.next_id = model.next_id.max(self.model.next_id);
         let before = std::mem::replace(&mut self.model, model);
         self.undo.push(Step::Snap(Box::new(before)));
         self.redo.clear();
@@ -1472,13 +1491,27 @@ impl Engine {
         // step back to a model that isn't the one on disk
         let is_open = matches!(cmd, Command::Open { .. });
         let mutates = cmd.mutates() || is_env;
+        if mutates {
+            self.refused = None;
+        }
         if mutates || matches!(cmd, Command::Undo | Command::Redo) {
             self.revision += 1;
         }
         // everything needed to put things back as they were
         let saved = mutates.then(|| (self.model.clone(), self.ctx, self.names.clone(), self.undo.len()));
         let count_before = self.model.entity_count();
+        let bulk_before = self.model.bulk_bytes();
         let oversize_before = self.oversize;
+        // how much one command may add: the person's importers and terrain may use up to the model's total; everything
+        // else (repeat commands such as `array`, and anything an agent or a plugin runs) is held to MAX_GROWTH
+        let (grow_cap, bulk_cap) = if self.untrusted {
+            (crate::model::MAX_GROWTH, crate::model::MAX_BULK_GROWTH_UNTRUSTED)
+        } else if matches!(cmd, Command::ImportObj { .. } | Command::ImportSkp { .. } | Command::ImportDxf { .. } | Command::ImportDwg { .. } | Command::ImportFbx { .. } | Command::ImportIfc { .. } | Command::ImportCloud { .. } | Command::TerrainGrid { .. } | Command::TerrainFromContours { .. } | Command::Open { .. }) {
+            (crate::model::MAX_ENTITIES, crate::model::MAX_BULK_GROWTH)
+        } else {
+            (crate::model::MAX_GROWTH, crate::model::MAX_BULK_GROWTH)
+        };
+        crate::model::set_growth_limit(grow_cap);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if let Command::Environment { kind } = &cmd {
                 // pushes its own (single) undo step
@@ -1512,8 +1545,10 @@ impl Engine {
                         self.model.check_sane()
                     } else if self.oversize {
                         self.model.check_sane_with(false).and_then(|_| if count > count_before { Err(anyhow::anyhow!("this model has more than {} points, edges and faces ({count_before}), so it is open for viewing and for deleting parts only; that would add more", crate::model::MAX_ENTITIES)) } else { Ok(()) })
-                    } else if !is_open && count > count_before.saturating_add(crate::model::MAX_GROWTH) {
-                        Err(anyhow::anyhow!("that would add {} points, edges and faces at once (the limit is {}), so it was not done", count - count_before, crate::model::MAX_GROWTH))
+                    } else if !is_open && count > count_before.saturating_add(grow_cap) {
+                        Err(anyhow::anyhow!("that would add {} points, edges and faces at once (the limit is {}), so it was not done", count - count_before, grow_cap))
+                    } else if !is_open && self.model.bulk_bytes() > bulk_before.saturating_add(bulk_cap) {
+                        Err(anyhow::anyhow!("that would add {} MB of images, photos or scan points at once (the limit is {} MB), so it was not done", (self.model.bulk_bytes() - bulk_before) >> 20, bulk_cap >> 20))
                     } else {
                         self.model.check_sane()
                     };
@@ -1561,6 +1596,69 @@ impl Engine {
         while self.redo.len() > 1 && redo_total > limit {
             redo_total = redo_total.saturating_sub(self.redo[0].approx_bytes());
             self.redo.remove(0);
+        }
+    }
+
+    /// Undo (`back`) or Redo one step. A step taken since the last reload is a copy of the model; one taken before
+    /// another program saved is worked out now (see `history`) and applied on top of the model as it is, touching only
+    /// what that step changed. If another program's change stands in the way the step is refused with a reason and
+    /// stays in the list; asking again skips it and goes one step further.
+    fn step_history(&mut self, back: bool) -> Result<Value> {
+        let verb = if back { "Undo" } else { "Redo" };
+        let mut skipped = 0;
+        loop {
+            let step = if back { self.undo.pop() } else { self.redo.pop() };
+            let Some(step) = step else {
+                if skipped > 0 {
+                    self.refused = None;
+                    bail!("{verb}: {skipped} step{} couldn't be {} because another program changed what {} touched, and there is nothing further {}", if skipped == 1 { "" } else { "s" }, if back { "taken back" } else { "done again" }, if skipped == 1 { "it" } else { "they" }, if back { "back" } else { "ahead" });
+                }
+                bail!("nothing to {}", verb.to_lowercase())
+            };
+            let step = match step {
+                Step::Snap(other) => {
+                    // a step taken since the last reload: the model is exactly as that step left it
+                    let next = self.model.next_id;
+                    let was = std::mem::replace(&mut self.model, *other);
+                    // ids are never handed out twice: not after Undo either (another program may have used the ones this step freed)
+                    self.model.next_id = self.model.next_id.max(next);
+                    let was = Step::Snap(Box::new(was));
+                    if back { self.redo.push(was) } else { self.undo.push(was) }
+                    self.refused = None;
+                    return Ok(json!({}));
+                }
+                Step::Stale { before, after } => {
+                    let p = crate::history::patch_between(&before, &after);
+                    if p.is_empty() {
+                        // it changed nothing in the model's content (a view, a selection): not a step
+                        continue;
+                    }
+                    p
+                }
+                Step::Patch(p) => p,
+            };
+            match step.apply(&self.model, !back) {
+                Ok(m) => {
+                    let next = self.model.next_id;
+                    self.model = m;
+                    self.model.next_id = self.model.next_id.max(next);
+                    if back { self.redo.push(Step::Patch(step)) } else { self.undo.push(Step::Patch(step)) }
+                    self.refused = None;
+                    return Ok(if skipped > 0 { json!({"skipped": skipped}) } else { json!({}) });
+                }
+                Err(why) => {
+                    if self.refused == Some(back) {
+                        // asked again after a refusal: this step is let go and the next one is tried
+                        self.refused = None;
+                        skipped += 1;
+                        continue;
+                    }
+                    // kept: the other program may take its change back, and then this works
+                    if back { self.undo.push(Step::Patch(step)) } else { self.redo.push(Step::Patch(step)) }
+                    self.refused = Some(back);
+                    bail!("{verb} stopped: this step can't be {} right now because {why} (another program changed it). The step is kept: try again after that program's change is taken back, or press {verb} again to skip this step and go one {}.", if back { "taken back" } else { "done again" }, if back { "further back" } else { "further ahead" });
+                }
+            }
         }
     }
 
@@ -2044,48 +2142,13 @@ impl Engine {
                 if self.batch.is_some() {
                     bail!("a plugin is still running; Undo works when it has finished");
                 }
-                match self.undo.pop() {
-                    None => bail!("nothing to undo"),
-                    // a step taken since the last reload: the model is exactly as that step left it
-                    Some(Step::Snap(prev)) => {
-                        let next = self.model.next_id;
-                        let was = std::mem::replace(&mut self.model, *prev);
-                        // ids are never handed out twice: not after Undo either (another program may have used the ones this step freed)
-                        self.model.next_id = self.model.next_id.max(next);
-                        self.redo.push(Step::Snap(Box::new(was)));
-                    }
-                    // a step carried across another program's save: take back what it changed, nothing else
-                    Some(Step::Patch(p)) => match p.apply(&self.model, false) {
-                        Ok(m) => {
-                            self.model = m;
-                            self.redo.push(Step::Patch(p));
-                        }
-                        Err(why) => bail!("Undo stopped: this step can't be taken back because {why} (another program changed it). The step was dropped; Undo again goes one step further back."),
-                    },
-                }
-                json!({})
+                self.step_history(true)?
             }
             Command::Redo => {
                 if self.batch.is_some() {
                     bail!("a plugin is still running; Redo works when it has finished");
                 }
-                match self.redo.pop() {
-                    None => bail!("nothing to redo"),
-                    Some(Step::Snap(next)) => {
-                        let keep = self.model.next_id;
-                        let was = std::mem::replace(&mut self.model, *next);
-                        self.model.next_id = self.model.next_id.max(keep);
-                        self.undo.push(Step::Snap(Box::new(was)));
-                    }
-                    Some(Step::Patch(p)) => match p.apply(&self.model, true) {
-                        Ok(m) => {
-                            self.model = m;
-                            self.undo.push(Step::Patch(p));
-                        }
-                        Err(why) => bail!("Redo stopped: this step can't be done again because {why} (another program changed it). The step was dropped."),
-                    },
-                }
-                json!({})
+                self.step_history(false)?
             }
             Command::Photoreal { out, samples, bounces, mut sun_azimuth, mut sun_altitude, sun_strength, denoise, exposure, sky_strength, background, ground, ground_color, warmth, date, time, utc_offset, progressive, opts } => {
                 let model = &self.model;
@@ -2177,7 +2240,15 @@ impl Engine {
                 json!({"path": path})
             }
             Command::Open { path } => {
+                // the whole file is read into memory (a model takes several times its file size once opened): look at the size first
+                let len = std::fs::metadata(&path)?.len();
+                if len > MAX_OPEN_BYTES {
+                    bail!("{path} is {} MB; SketchCraft opens models up to {} MB", len >> 20, MAX_OPEN_BYTES >> 20);
+                }
                 let opened: Model = serde_json::from_str(&std::fs::read_to_string(&path)?).map_err(|e| anyhow::anyhow!("{path} isn't a model SketchCraft can read: {e}"))?;
+                if let Some(what) = opened.broken_refs(false).first() {
+                    bail!("{path} isn't a consistent model ({what} refers to something that isn't there)");
+                }
                 // too much geometry is not a reason to refuse the file: it opens for viewing and cutting down (see `oversize`)
                 opened.check_sane_with(false)?;
                 self.oversize = opened.entity_count() > crate::model::MAX_ENTITIES;

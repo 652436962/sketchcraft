@@ -217,7 +217,9 @@ impl Model {
             let outer = face.outer.iter().map(|v| map[v]).collect();
             let holes = face.holes.iter().map(|h| h.iter().map(|v| map[v]).collect()).collect();
             if let Some(m) = &face.material {
-                def.materials.insert(m.clone(), self.materials[m].clone());
+                if let Some(mat) = self.materials.get(m) {
+                    def.materials.insert(m.clone(), mat.clone());
+                }
             }
             def.insert_face(Face { outer, holes, material: face.material.clone(), ..Default::default() });
         }
@@ -291,7 +293,9 @@ impl Model {
                 nf.reverse();
             }
             if let Some(m) = &f.material {
-                self.materials.entry(m.clone()).or_insert_with(|| def.materials[m].clone());
+                if let Some(dm) = def.materials.get(m) {
+                    self.materials.entry(m.clone()).or_insert_with(|| dm.clone());
+                }
             }
             self.insert_face(nf);
         }

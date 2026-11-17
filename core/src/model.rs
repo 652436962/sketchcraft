@@ -1245,6 +1245,22 @@ fn sane3(v: DVec3) -> bool {
 /// models are far below it (a 360,000-line site plan is under 1 million).
 pub const MAX_GROWTH: usize = 500_000;
 pub const MAX_ENTITIES: usize = 2_000_000;
+/// The most bulk data (textures, photos on views, scan points) a model may hold, and the most one command may add:
+/// the person's (imports of photos or scans) and an agent's or a plugin's. The geometry limits above don't see these,
+/// and every one of them is rewritten on each save, read by each program and copied into each backup.
+pub const MAX_BULK: usize = 256 << 20;
+pub const MAX_BULK_GROWTH: usize = 128 << 20;
+pub const MAX_BULK_GROWTH_UNTRUSTED: usize = 32 << 20;
+
+thread_local! {
+    /// what the command running on this thread may add (see `Engine::exec`)
+    static GROWTH: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_GROWTH) };
+}
+
+/// Set how many points, edges and faces the command about to run may add in one go.
+pub fn set_growth_limit(n: usize) {
+    GROWTH.with(|g| g.set(n));
+}
 
 impl Model {
     /// Every number the model holds is finite and within `MAX_COORD`. A model
@@ -1303,10 +1319,21 @@ impl Model {
         if count && self.entity_count() > MAX_ENTITIES {
             bail!("the model has more than {MAX_ENTITIES} points, edges and faces ({}), so it can't be saved: delete parts of it until it is under the limit", self.entity_count());
         }
+        if count && self.bulk_bytes() > MAX_BULK {
+            bail!("the model's images, photos and scan points add up to {} MB, over the limit of {} MB, so that was not done (remove some images or scans first)", self.bulk_bytes() >> 20, MAX_BULK >> 20);
+        }
         if self.text_bytes() > MAX_TEXT_BYTES {
             bail!("the model's names and notes add up to more than {} MB, so that was not done", MAX_TEXT_BYTES >> 20);
         }
         Ok(())
+    }
+
+    /// Bytes of bulk data the model holds: texture images, photos on views, scan points (components' own too).
+    pub fn bulk_bytes(&self) -> usize {
+        let tex: usize = self.materials.values().map(|m| m.texture.as_ref().map_or(0, |t| t.data.len())).sum();
+        let photos: usize = self.views.iter().map(|v| v.photo.as_ref().map_or(0, String::len)).sum();
+        let clouds: usize = self.clouds.values().map(|c| 4 * c.points.len() + c.colors.len()).sum();
+        tex + photos + clouds + self.definitions.values().map(|d| d.model.bulk_bytes()).sum::<usize>()
     }
 
     /// Bytes of names, notes and other free text the model holds (counted
@@ -1324,6 +1351,94 @@ impl Model {
             + self.definitions.values().map(|d| d.name.len() + d.model.text_bytes()).sum::<usize>()
             + notes
             + views
+    }
+
+    /// Things in the model that refer to something that isn't there, as short phrases ("edge 7", "material #ff0000"),
+    /// sorted, at most `MAX_PROBLEMS`. `full` false: only what would make drawing or saving panic or fail (a point,
+    /// a component definition that is missing); `full` true: also every group, material and other reference.
+    pub fn broken_refs(&self, full: bool) -> Vec<String> {
+        const MAX_PROBLEMS: usize = 50;
+        let mut out: BTreeSet<String> = BTreeSet::new();
+        let mut add = |s: String| {
+            if out.len() < MAX_PROBLEMS {
+                out.insert(s);
+            }
+        };
+        let edge_keys: Option<std::collections::HashSet<(Id, Id)>> = full.then(|| self.edges.values().map(|e| (e.a.min(e.b), e.a.max(e.b))).collect());
+        let group_ok = |g: &Option<Id>| g.is_none_or(|g| self.groups.contains_key(&g));
+        for (id, v) in &self.vertices {
+            if full && !group_ok(&v.group) {
+                add(format!("point {id} (group)"));
+            }
+        }
+        for (id, e) in &self.edges {
+            if !self.vertices.contains_key(&e.a) || !self.vertices.contains_key(&e.b) {
+                add(format!("edge {id}"));
+            }
+            if full && !group_ok(&e.group) {
+                add(format!("edge {id} (group)"));
+            }
+        }
+        for (id, f) in &self.faces {
+            for l in f.loops() {
+                if l.iter().any(|v| !self.vertices.contains_key(v)) {
+                    add(format!("face {id}"));
+                    continue;
+                }
+                if let Some(keys) = &edge_keys {
+                    for i in 0..l.len() {
+                        let (a, b) = (l[i], l[(i + 1) % l.len()]);
+                        if !keys.contains(&(a.min(b), a.max(b))) {
+                            add(format!("face {id}"));
+                            break;
+                        }
+                    }
+                }
+            }
+            if full {
+                if !group_ok(&f.group) {
+                    add(format!("face {id} (group)"));
+                }
+                if let Some(m) = f.material.as_ref().filter(|m| !self.materials.contains_key(*m)) {
+                    add(format!("material {m}"));
+                }
+            }
+        }
+        for (id, i) in &self.instances {
+            if !self.definitions.contains_key(&i.def) {
+                add(format!("placement {id}"));
+            }
+            if full && !group_ok(&i.parent) {
+                add(format!("placement {id} (group)"));
+            }
+        }
+        if full {
+            for (id, g) in &self.groups {
+                if !group_ok(&g.parent) {
+                    add(format!("group {id}"));
+                }
+            }
+            if !group_ok(&self.active_group) {
+                add("the group being edited".into());
+            }
+            for id in self.cages.keys() {
+                if !self.groups.contains_key(id) {
+                    add(format!("subdivision cage {id}"));
+                }
+            }
+            for id in self.classes.keys() {
+                if !self.groups.contains_key(id) && !self.instances.contains_key(id) {
+                    add(format!("class of {id}"));
+                }
+            }
+            let guide_ids: std::collections::HashSet<Id> = self.guides.iter().map(|g| g.id).collect();
+            for id in &self.photo_guides {
+                if !guide_ids.contains(id) {
+                    add(format!("photo guide {id}"));
+                }
+            }
+        }
+        out.into_iter().collect()
     }
 
     /// How much geometry the model holds (points, edges, faces and placements, with every
@@ -1355,8 +1470,9 @@ impl Model {
 
     /// Refuse to grow past the limits: `adding` more entities in one go, or the model's total.
     pub fn check_room(&self, adding: usize) -> Result<()> {
-        if adding > MAX_GROWTH || self.entity_count().saturating_add(adding) > MAX_ENTITIES {
-            bail!("that would add about {adding} points, edges and faces to a model of {}; the limits are {MAX_GROWTH} at a time and {MAX_ENTITIES} in all, so it was not done", self.entity_count());
+        let per_command = GROWTH.with(|g| g.get());
+        if adding > per_command || self.entity_count().saturating_add(adding) > MAX_ENTITIES {
+            bail!("that would add about {adding} points, edges and faces to a model of {}; the limits are {per_command} at a time and {MAX_ENTITIES} in all, so it was not done", self.entity_count());
         }
         Ok(())
     }

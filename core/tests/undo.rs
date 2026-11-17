@@ -105,7 +105,12 @@ fn a_step_that_the_other_client_built_on_is_refused_and_nothing_of_theirs_is_los
     let msg = r["error"].as_str().unwrap();
     assert!(msg.contains("Undo stopped") && msg.contains("changed"), "{msg}");
     assert_eq!(std::fs::read(&doc).unwrap(), before, "the file is untouched");
-    assert_eq!(a.engine.undo_depth(), 0, "the step that can't be undone was dropped, so the next Undo isn't stuck behind it");
+    assert_eq!(a.engine.undo_depth(), 1, "the refused step is kept: the other program may take its change back");
+    assert!(msg.contains("press Undo again to skip"), "{msg}");
+    // asking again skips it (nothing further back: said so, and the list is empty)
+    let again = a.exec(&json!({"cmd": "undo"}));
+    assert_eq!(again["ok"], false, "{again}");
+    assert_eq!(a.engine.undo_depth(), 0, "the second Undo let the step go, so Undo isn't stuck behind it");
     std::fs::remove_dir_all(&dir).ok();
 }
 

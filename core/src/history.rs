@@ -6,11 +6,16 @@
 //! brings in someone else's save, each step is turned into a `Patch`: exactly what that step changed
 //! (entity by entity), and undoing a patch puts back only those entities, on top of the model as it is
 //! now. A step can be undone only if everything it touched is still as the step left it and nothing
-//! built on it since; otherwise Undo refuses with a message and drops that step, and nothing is guessed.
+//! built on it since; otherwise Undo refuses with a message, and nothing is guessed. A refused step stays
+//! in the list (the other program may undo its change), and asking again skips it.
+//!
+//! The conversion is lazy: a reload only pairs each model copy with the one after it (`Step::Stale`, no
+//! work, no copying), and the changes are worked out when that very step is undone, so a big model
+//! never freezes on another program's save and no step is let go for being slow.
 
 use crate::model::Model;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::sync::Arc;
 
 /// One entry of the undo (or redo) list.
 pub enum Step {
@@ -18,6 +23,10 @@ pub enum Step {
     Snap(Box<Model>),
     /// what the step changed (a step that was carried across another program's save)
     Patch(Patch),
+    /// a step taken before another program's save, not yet turned into a `Patch`: the model before the step and
+    /// the model after it (the next step's "before", or what was on screen); the changes are worked out when it
+    /// is undone (or redone)
+    Stale { before: Arc<Model>, after: Arc<Model> },
 }
 
 impl Step {
@@ -25,6 +34,7 @@ impl Step {
         match self {
             Step::Snap(m) => m.approx_bytes(),
             Step::Patch(p) => p.bytes,
+            Step::Stale { before, .. } => before.approx_bytes(),
         }
     }
 }
@@ -48,6 +58,28 @@ const SKIP: [&str; 1] = ["next_id"];
 
 fn norm(v: Option<&Value>) -> Option<Value> {
     v.filter(|v| !v.is_null()).cloned()
+}
+
+/// Two stored values are the same, give or take the last digit of a number (a coordinate that went through a
+/// file and back can come out one unit in the last place away).
+fn close(a: &Option<Value>, b: &Option<Value>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => values_close(x, y),
+        _ => false,
+    }
+}
+
+fn values_close(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
+            (Some(x), Some(y)) => x == y || (x - y).abs() <= 1e-9 * (1.0 + x.abs().max(y.abs())),
+            _ => x == y,
+        },
+        (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| values_close(p, q)),
+        (Value::Object(x), Value::Object(y)) => x.len() == y.len() && x.iter().all(|(k, p)| y.get(k).is_some_and(|q| values_close(p, q))),
+        _ => a == b,
+    }
 }
 
 fn size_of(v: &Option<Value>) -> usize {
@@ -113,7 +145,7 @@ impl Patch {
             match change {
                 Change::Whole(b, a) => {
                     let (expect, to) = pick(b, a);
-                    if norm(obj.get(name)) != expect {
+                    if !close(&norm(obj.get(name)), &expect) {
                         conflicts.push(name.clone());
                         continue;
                     }
@@ -133,7 +165,7 @@ impl Patch {
                     };
                     for (k, b, a) in keys {
                         let (expect, to) = pick(b, a);
-                        if norm(map.get(k)) != expect {
+                        if !close(&norm(map.get(k)), &expect) {
                             conflicts.push(format!("{name} {k}"));
                             continue;
                         }
@@ -152,8 +184,10 @@ impl Patch {
         }
         let model: Model = serde_json::from_value(v).map_err(|e| format!("the result wasn't a model ({e})"))?;
         model.check_sane().map_err(|e| e.to_string())?;
-        // nothing may be left pointing at something the step took away (another program built on it)
-        if let Some(what) = dangling(&model) {
+        // nothing may be left pointing at something the step took away (another program built on it): a point, an
+        // edge, a group, a material... Problems the model already had before are not this step's doing.
+        let had = current.broken_refs(true);
+        if let Some(what) = model.broken_refs(true).into_iter().find(|w| !had.contains(w)) {
             return Err(format!("{what} now depends on it"));
         }
         Ok(model)
@@ -166,43 +200,6 @@ fn conflicts_text(c: &[String]) -> String {
     format!("{}{more} changed since", shown.join(", "))
 }
 
-/// Something in the model that refers to a thing that isn't there, if anything does.
-fn dangling(m: &Model) -> Option<String> {
-    let edge_keys: HashSet<(u64, u64)> = m.edges.values().map(|e| (e.a.min(e.b) as u64, e.a.max(e.b) as u64)).collect();
-    for (id, e) in &m.edges {
-        if !m.vertices.contains_key(&e.a) || !m.vertices.contains_key(&e.b) {
-            return Some(format!("edge {id}"));
-        }
-    }
-    for (id, f) in &m.faces {
-        for l in f.loops() {
-            if l.iter().any(|v| !m.vertices.contains_key(v)) {
-                return Some(format!("face {id}"));
-            }
-            for i in 0..l.len() {
-                let (a, b) = (l[i], l[(i + 1) % l.len()]);
-                if !edge_keys.contains(&(a.min(b) as u64, a.max(b) as u64)) {
-                    return Some(format!("face {id}"));
-                }
-            }
-        }
-        if f.group.is_some_and(|g| !m.groups.contains_key(&g)) {
-            return Some(format!("face {id}"));
-        }
-    }
-    for (id, i) in &m.instances {
-        if !m.definitions.contains_key(&i.def) || i.parent.is_some_and(|g| !m.groups.contains_key(&g)) {
-            return Some(format!("placement {id}"));
-        }
-    }
-    for (id, g) in &m.groups {
-        if g.parent.is_some_and(|p| !m.groups.contains_key(&p)) {
-            return Some(format!("group {id}"));
-        }
-    }
-    None
-}
-
 /// The undo and redo lists of an engine, carried across a reload.
 pub struct History {
     pub undo: Vec<Step>,
@@ -211,84 +208,68 @@ pub struct History {
     pub dropped: usize,
 }
 
-/// How long turning the history into patches may take before the older steps are let go.
-const CONVERT_SECONDS: u64 = 4;
-
 /// Turn the undo and redo lists (as they are with `current` on screen) into ones that survive a reload.
-/// Steps already patches are kept; model copies become patches, newest first, until the time is up.
-pub fn carry(undo: &[Step], redo: &[Step], current: &Model) -> History {
-    let started = std::time::Instant::now();
+/// Nothing is worked out here: each model copy is paired with the one that follows it (`Step::Stale`), and
+/// the changes are found when that step is undone. Steps already patches stay as they are.
+pub fn carry(undo: Vec<Step>, redo: Vec<Step>, current: &Model) -> History {
     let mut dropped = 0;
-    // undo: [oldest .. newest]. Patches (from an earlier reload) sit below the copies.
-    let first_snap = undo.iter().position(|s| matches!(s, Step::Snap(_))).unwrap_or(undo.len());
+    let mut cur: Option<Arc<Model>> = None;
+    let mut now = || cur.get_or_insert_with(|| Arc::new(current.clone())).clone();
+    // undo: [oldest .. newest]. A copy's "after" is the next copy's "before", or what is on screen.
+    enum Item {
+        Copy(Arc<Model>),
+        Other(Step),
+    }
+    let items: Vec<Item> = undo
+        .into_iter()
+        .map(|s| match s {
+            Step::Snap(m) => Item::Copy(Arc::new(*m)),
+            other => Item::Other(other),
+        })
+        .collect();
     let mut out_undo: Vec<Step> = vec![];
-    let mut converted: Vec<Patch> = vec![];
-    let mut give_up = false;
-    if first_snap < undo.len() {
-        let mut after = serde_json::to_value(current).ok();
-        for s in undo[first_snap..].iter().rev() {
-            let Step::Snap(before) = s else { continue };
-            if give_up || started.elapsed().as_secs() >= CONVERT_SECONDS {
-                give_up = true;
-                dropped += 1;
-                continue;
-            }
-            let Some(a) = after.take() else {
-                give_up = true;
-                dropped += 1;
-                continue;
-            };
-            let b = serde_json::to_value(before.as_ref()).unwrap_or(Value::Null);
-            let p = Patch::between(&b, &a);
-            after = Some(b);
-            // a step that changed nothing in the model's content (a view, a selection) is no step
-            if !p.is_empty() {
-                converted.push(p);
+    for i in 0..items.len() {
+        match &items[i] {
+            Item::Other(Step::Patch(p)) => out_undo.push(Step::Patch(p.clone_patch())),
+            Item::Other(Step::Stale { before, after }) => out_undo.push(Step::Stale { before: before.clone(), after: after.clone() }),
+            Item::Other(Step::Snap(_)) => {}
+            Item::Copy(before) => {
+                let after = match items.get(i + 1) {
+                    None => Some(now()),
+                    Some(Item::Copy(n)) => Some(n.clone()),
+                    // a patch above a copy: what the copy led to is unknown
+                    Some(Item::Other(_)) => None,
+                };
+                match after {
+                    Some(after) => out_undo.push(Step::Stale { before: before.clone(), after }),
+                    None => dropped += 1,
+                }
             }
         }
     }
-    if give_up {
-        // a gap: what lies below it is let go too, rather than undone out of order
-        dropped += first_snap;
-    } else {
-        for s in undo[..first_snap].iter() {
-            if let Step::Patch(p) = s {
-                out_undo.push(Step::Patch(Patch { parts: p.parts.iter().map(|(n, c)| (n.clone(), clone_change(c))).collect(), bytes: p.bytes }));
-            }
-        }
-    }
-    out_undo.extend(converted.into_iter().rev().map(Step::Patch));
-    // redo: [bottom .. next]. Leading patches stay; copies are converted only when no patch is above them
+    // redo: [bottom .. next]. From the next step down, each copy leads to the one under it; past a patch the model
+    // isn't known, so copies below one can't be paired.
     let mut out_redo: Vec<Step> = vec![];
-    let mut patches_above = false;
-    let mut chain: Vec<&Model> = vec![];
-    for s in redo.iter().rev() {
+    let mut prev: Option<Arc<Model>> = Some(now());
+    for s in redo.into_iter().rev() {
         match s {
-            Step::Patch(p) => {
-                if chain.is_empty() {
-                    patches_above = true;
-                    out_redo.push(Step::Patch(Patch { parts: p.parts.iter().map(|(n, c)| (n.clone(), clone_change(c))).collect(), bytes: p.bytes }));
-                } else {
-                    dropped += 1;
-                }
-            }
             Step::Snap(m) => {
-                if patches_above || started.elapsed().as_secs() >= CONVERT_SECONDS {
-                    dropped += 1;
-                } else {
-                    chain.push(m.as_ref());
+                let next = Arc::new(*m);
+                match prev.take() {
+                    Some(before) => {
+                        out_redo.push(Step::Stale { before, after: next.clone() });
+                        prev = Some(next);
+                    }
+                    None => dropped += 1,
                 }
             }
-        }
-    }
-    if !chain.is_empty() {
-        let mut prev = serde_json::to_value(current).unwrap_or(Value::Null);
-        for m in chain {
-            let next = serde_json::to_value(m).unwrap_or(Value::Null);
-            let p = Patch::between(&prev, &next);
-            prev = next;
-            if !p.is_empty() {
+            Step::Patch(p) => {
                 out_redo.push(Step::Patch(p));
+                prev = None;
+            }
+            Step::Stale { before, after } => {
+                out_redo.push(Step::Stale { before, after });
+                prev = None;
             }
         }
     }
@@ -297,9 +278,22 @@ pub fn carry(undo: &[Step], redo: &[Step], current: &Model) -> History {
     History { undo: out_undo, redo: out_redo, dropped }
 }
 
+impl Patch {
+    fn clone_patch(&self) -> Patch {
+        Patch { parts: self.parts.iter().map(|(n, c)| (n.clone(), clone_change(c))).collect(), bytes: self.bytes }
+    }
+}
+
 fn clone_change(c: &Change) -> Change {
     match c {
         Change::Whole(a, b) => Change::Whole(a.clone(), b.clone()),
         Change::Keys(k) => Change::Keys(k.clone()),
     }
+}
+
+/// The changes between two models, as a patch (empty when the step changed nothing in the model's content).
+pub fn patch_between(before: &Model, after: &Model) -> Patch {
+    let b = serde_json::to_value(before).unwrap_or(Value::Null);
+    let a = serde_json::to_value(after).unwrap_or(Value::Null);
+    Patch::between(&b, &a)
 }
