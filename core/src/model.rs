@@ -355,10 +355,22 @@ impl Face {
     }
 }
 
+/// What a component's own model may refer to besides its own tables: the root model's component definitions and materials.
+struct Root {
+    defs: BTreeSet<Id>,
+    materials: BTreeSet<String>,
+}
+
 impl Model {
     pub(crate) fn new_id(&mut self) -> Id {
-        self.next_id += 1;
-        self.next_id
+        // never wraps (a wrapped id would overwrite something that is there): past the end the command fails and is undone
+        match self.next_id.checked_add(1) {
+            Some(n) => {
+                self.next_id = n;
+                n
+            }
+            None => panic!("{IDS_OUT}"),
+        }
     }
 
     // ----- vertices & edges -------------------------------------------------
@@ -1135,6 +1147,72 @@ impl Model {
         Ok(())
     }
 
+    /// How many faces use material `name`, in the model and in every component.
+    pub fn material_uses(&self, name: &str) -> usize {
+        self.faces.values().filter(|f| f.material.as_deref() == Some(name)).count() + self.definitions.values().map(|d| d.model.material_uses(name)).sum::<usize>()
+    }
+
+    /// Take material `name` (and its picture) out of the model. Faces that use it (here and in components) go to
+    /// `replace_with`, an existing material, or back to the plain default look. Returns how many faces were changed.
+    pub fn remove_material(&mut self, name: &str, replace_with: Option<&str>) -> Result<usize> {
+        if !self.materials.contains_key(name) && self.material_uses(name) == 0 && !self.definitions.values().any(|d| d.model.materials.contains_key(name)) {
+            bail!("no material {name}");
+        }
+        if let Some(r) = replace_with {
+            if r == name {
+                bail!("a material can't replace itself");
+            }
+            if !self.materials.contains_key(r) {
+                bail!("no material {r} to put in its place");
+            }
+        }
+        fn go(m: &mut Model, name: &str, to: Option<&str>) -> usize {
+            let mut n = 0;
+            for f in m.faces.values_mut().filter(|f| f.material.as_deref() == Some(name)) {
+                f.material = to.map(str::to_string);
+                n += 1;
+            }
+            m.materials.remove(name);
+            for d in m.definitions.values_mut() {
+                // look first: a shared component model is only copied if it uses the material
+                if d.model.material_uses(name) > 0 || d.model.materials.contains_key(name) {
+                    n += go(std::sync::Arc::make_mut(&mut d.model), name, to);
+                }
+            }
+            n
+        }
+        Ok(go(self, name, replace_with))
+    }
+
+    /// Remove every material that no face uses (and no placement or component names in its `material` attribute).
+    /// Returns the names removed, and about how many bytes of pictures went with them.
+    pub fn purge_materials(&mut self) -> (Vec<String>, usize) {
+        let named: BTreeSet<String> = {
+            fn collect(m: &Model, out: &mut BTreeSet<String>) {
+                for a in m.instances.values().map(|i| &i.attrs).chain(m.definitions.values().map(|d| &d.attrs)) {
+                    for (k, v) in a {
+                        if k.eq_ignore_ascii_case("material") {
+                            out.insert(v.trim().to_string());
+                        }
+                    }
+                }
+                for d in m.definitions.values() {
+                    collect(&d.model, out);
+                }
+            }
+            let mut out = BTreeSet::new();
+            collect(self, &mut out);
+            out
+        };
+        let unused: Vec<String> = self.materials.keys().filter(|k| self.material_uses(k) == 0 && !named.contains(*k)).cloned().collect();
+        let mut bytes = 0;
+        for k in &unused {
+            bytes += self.materials.get(k).and_then(|m| m.texture.as_ref()).map_or(0, |t| t.data.len());
+            let _ = self.remove_material(k, None);
+        }
+        (unused, bytes)
+    }
+
     /// A group and every group nested in it, at any depth.
     pub fn subtree(&self, gid: Id) -> BTreeSet<Id> {
         let mut out = BTreeSet::from([gid]);
@@ -1221,11 +1299,50 @@ impl Model {
     }
 }
 
+/// A model whose counter or any id is above this is refused on Open, Restore and insert (the program never writes one:
+/// that is 4 billion ids; a file from outside might). The room left is more than any command can use.
+pub const ID_LIMIT: Id = u32::MAX - 50_000_000;
+/// What the panic says when the counter would pass the top of the id range (turned into a plain error reply).
+pub const IDS_OUT: &str = "this model has used up its ids";
+
 /// Free text (names, notes) a model may hold in total.
-pub const MAX_TEXT_BYTES: usize = 8 << 20;
+///
+/// The size budget (`MAX_MODEL_BYTES`) is what bounds the whole model; this one stops text from using all of it. 64 MB
+/// holds a model of a million named, tagged placements. An agent or a plugin gets a smaller share (`MAX_TEXT_BYTES_UNTRUSTED`:
+/// it may not take the model's text past 2 MB), so the person's own naming, notes and colours always have room.
+pub const MAX_TEXT_BYTES: usize = 64 << 20;
+pub const MAX_TEXT_BYTES_UNTRUSTED: usize = 2 << 20;
 
 fn attr_bytes(m: &BTreeMap<String, String>) -> usize {
     m.iter().map(|(k, v)| k.len() + v.len() + 8).sum()
+}
+
+/// What the text costs in the file: its bytes, plus what escaping adds (`"` and `\\` are written as two bytes; a control
+/// character as two or six). Counted in one pass over the bytes, so the estimate never falls under the real size
+/// whatever characters a string holds (non-ASCII is written as it is, so its length already counts).
+pub fn jl(s: &str) -> usize {
+    let b = s.as_bytes();
+    let mut extra = 0usize;
+    // 240 bytes at a time in byte-sized counters: the compiler turns this into vector instructions (a 300 MB picture in
+    // a few tens of milliseconds, where counting with two passes and word-sized counters took 0.2 s)
+    let mut chunks = b.chunks_exact(240);
+    for chunk in &mut chunks {
+        let (mut quoted, mut ctrl) = (0u8, 0u8);
+        for &c in chunk {
+            quoted += ((c == b'"') | (c == b'\\')) as u8;
+            ctrl += (c < 0x20) as u8;
+        }
+        extra += quoted as usize + 5 * ctrl as usize;
+    }
+    for &c in chunks.remainder() {
+        extra += ((c == b'"') | (c == b'\\')) as usize + 5 * (c < 0x20) as usize;
+    }
+    b.len() + extra
+}
+
+/// `attr_bytes` as the file holds it (escaping counted).
+fn attr_json(m: &BTreeMap<String, String>) -> usize {
+    m.iter().map(|(k, v)| jl(k) + jl(v) + 8).sum()
 }
 
 /// Bytes `serde_json` would write for a value (counted, never stored).
@@ -1302,7 +1419,19 @@ impl Model {
     /// `check_sane`, with or without the limit on how much geometry the model holds (a model over it
     /// is opened for viewing and for deleting parts, never refused outright).
     pub fn check_sane_with(&self, count: bool) -> Result<()> {
+        self.check_sane_inner(count, None)
+    }
+
+    /// `check_sane` for a caller that has just worked out the size estimate (a walk over every string and picture).
+    pub fn check_sane_est(&self, estimate: usize) -> Result<()> {
+        self.check_sane_inner(true, Some(estimate))
+    }
+
+    fn check_sane_inner(&self, count: bool, estimate: Option<usize>) -> Result<()> {
         let bad = |what: &str| -> Result<()> { bail!("that would put a non-finite or absurdly large number ({what}) in the model, so it was not done") };
+        if self.next_id > ID_LIMIT || self.max_own_id() > ID_LIMIT {
+            bail!("this model's ids are too close to the top of the range ({} is the most the program accepts), so it can't be used: a file edited by hand or damaged may do this; open an earlier copy", ID_LIMIT);
+        }
         if !self.vertices.values().all(|v| sane3(v.p)) {
             return bad("a point");
         }
@@ -1347,16 +1476,72 @@ impl Model {
         if count && self.entity_count() > MAX_ENTITIES {
             bail!("the model has more than {MAX_ENTITIES} points, edges and faces ({}), so it can't be saved: delete parts of it until it is under the limit", self.entity_count());
         }
-        if count && self.size_estimate() > MAX_MODEL_BYTES {
-            bail!("the model would be about {} MB (names, notes, attributes, images and scans included), over the limit of {} MB, so that was not done", self.size_estimate() >> 20, MAX_MODEL_BYTES >> 20);
+        let est = if count { estimate.unwrap_or_else(|| self.size_estimate()) } else { 0 };
+        if count && est > MAX_MODEL_BYTES {
+            bail!("the model would be about {} MB (names, notes, attributes, images and scans included), over the limit of {} MB, so that was not done", est >> 20, MAX_MODEL_BYTES >> 20);
         }
-        if self.definitions.values().any(|d| d.attrs.len() > MAX_ATTRS) || self.instances.values().any(|i| i.attrs.len() > MAX_ATTRS) {
+        if count && self.attrs_over() {
             bail!("a component or placement has more than {MAX_ATTRS} attributes, so that was not done");
         }
-        if self.text_bytes() > MAX_TEXT_BYTES {
-            bail!("the model's names and notes add up to more than {} MB, so that was not done", MAX_TEXT_BYTES >> 20);
+        if count && self.text_bytes() > MAX_TEXT_BYTES {
+            bail!("the model's names, notes and attributes add up to more than {} MB ({}), so that was not done", MAX_TEXT_BYTES >> 20, self.text_use());
         }
         Ok(())
+    }
+
+    /// Take out any picture (a texture, a photo on a view; components' too) that is over the picture limits, which only a file from
+    /// outside can hold: the person's window would decode it at whatever size it claims. The material keeps its color, the view its
+    /// camera. Returns what was taken out, for the notice ("texture Brick: 30000 x 30000 pixels").
+    pub fn vet_pictures(&mut self) {
+        for what in self.drop_oversize_pictures() {
+            crate::safety::note_skipped(&what, "over the picture limits, so the picture was left out of the model (the rest is as it was)");
+        }
+    }
+
+    fn drop_oversize_pictures(&mut self) -> Vec<String> {
+        let mut out = vec![];
+        let bad = |d: &str| crate::safety::picture_too_big(d);
+        for (k, m) in self.materials.iter_mut() {
+            if let Some((w, h)) = m.texture.as_ref().and_then(|t| bad(&t.data)) {
+                m.texture = None;
+                out.push(format!("texture {k}: {w} x {h} pixels"));
+            }
+        }
+        for v in self.views.iter_mut() {
+            if let Some((w, h)) = v.photo.as_deref().and_then(bad) {
+                v.photo = None;
+                out.push(format!("photo of view {}: {w} x {h} pixels", v.name));
+            }
+        }
+        for d in self.definitions.values_mut() {
+            // look first: a shared component model is only copied if it holds a picture to take out
+            let any = d.model.materials.values().any(|m| m.texture.as_ref().is_some_and(|t| bad(&t.data).is_some())) || d.model.views.iter().any(|v| v.photo.as_deref().is_some_and(|p| bad(p).is_some())) || d.model.definitions.values().any(|x| x.model.materials.values().any(|m| m.texture.is_some()));
+            if any {
+                out.extend(std::sync::Arc::make_mut(&mut d.model).drop_oversize_pictures());
+            }
+        }
+        out.truncate(20);
+        out
+    }
+
+    /// A component or placement carries more attributes than a command may give it (a file from outside can).
+    pub fn attrs_over(&self) -> bool {
+        self.definitions.values().any(|d| d.attrs.len() > MAX_ATTRS) || self.instances.values().any(|i| i.attrs.len() > MAX_ATTRS)
+    }
+
+    /// Over any of the limits a command may not take a model past (geometry, bytes, text, attributes): such a model is
+    /// opened for looking at and cutting down, never refused (see `check_sane_with`).
+    pub fn over_limits(&self) -> bool {
+        self.entity_count() > MAX_ENTITIES || self.size_estimate() > MAX_MODEL_BYTES || self.text_bytes() > MAX_TEXT_BYTES || self.attrs_over()
+    }
+
+    /// What the text in the model is made of, for a message ("placements 7.9 MB, components 0.1 MB, everything else 0.2 MB").
+    pub fn text_use(&self) -> String {
+        let mb = |n: usize| format!("{:.1} MB", n as f64 / (1 << 20) as f64);
+        let places: usize = self.instances.values().map(|i| i.name.len() + i.tag.as_ref().map_or(0, String::len) + attr_bytes(&i.attrs)).sum();
+        let comps: usize = self.definitions.values().map(|d| d.name.len() + d.source.as_ref().map_or(0, String::len) + attr_bytes(&d.attrs) + d.model.text_bytes()).sum();
+        let all = self.text_bytes();
+        format!("placements {}, components {}, everything else {}", mb(places), mb(comps), mb(all.saturating_sub(places + comps)))
     }
 
     /// Bytes of bulk data the model holds: texture images, photos on views, scan points (components' own too).
@@ -1395,32 +1580,39 @@ impl Model {
     /// which is why every command can afford it. The constants are on the high side of what the writer produces (a
     /// test compares them with real files), so the open limit has room over this limit.
     pub fn size_estimate(&self) -> usize {
-        let faces: usize = self.faces.values().map(|f| 80 + 10 * f.outer.len() + f.holes.iter().map(|h| 10 * h.len() + 4).sum::<usize>() + f.material.as_ref().map_or(0, |m| m.len() + 4)).sum();
-        let mats: usize = self.materials.iter().map(|(k, m)| k.len() + 200 + m.texture.as_ref().map_or(0, |t| t.data.len() + 200)).sum();
-        let clouds: usize = self.clouds.values().map(|c| c.name.len() + 128 + (4 * c.points.len() + c.colors.len()) * 4 / 3 + 8).sum();
-        let views: usize = self.views.iter().map(|v| 320 + v.name.len() + v.photo.as_ref().map_or(0, String::len) + v.style.as_ref().map_or(0, jsz) + v.tags.as_ref().map_or(0, |t| t.keys().map(|k| k.len() + 12).sum()) + v.hidden.as_ref().map_or(0, |h| 12 * h.len())).sum();
-        let anns: usize = self.annotations.iter().map(|a| 260 + if let Annotation::Text { text, .. } = a { text.len() } else { 0 }).sum();
-        let groups: usize = self.groups.values().map(|g| 110 + g.name.len() + g.tag.as_ref().map_or(0, String::len)).sum();
-        let insts: usize = self.instances.values().map(|i| 420 + i.name.len() + i.tag.as_ref().map_or(0, String::len) + attr_bytes(&i.attrs)).sum();
-        let defs: usize = self.definitions.values().map(|d| 160 + d.name.len() + d.source.as_ref().map_or(0, String::len) + attr_bytes(&d.attrs) + d.model.size_estimate()).sum();
-        let tags: usize = self.tags.keys().chain(self.tag_colors.keys()).map(|k| k.len() + 40).sum();
-        let photo: usize = self.photo_points.iter().map(|p| 40 + p.name.len() + p.marks.keys().map(|k| k.len() + 50).sum::<usize>()).sum();
+        let faces: usize = self.faces.values().map(|f| 80 + 10 * f.outer.len() + f.holes.iter().map(|h| 10 * h.len() + 4).sum::<usize>() + f.material.as_ref().map_or(0, |m| jl(m) + 4)).sum();
+        let mats: usize = self.materials.iter().map(|(k, m)| jl(k) + 200 + m.texture.as_ref().map_or(0, |t| jl(&t.data) + 200)).sum();
+        let clouds: usize = self.clouds.values().map(|c| jl(&c.name) + 128 + (4 * c.points.len() + c.colors.len()) * 4 / 3 + 8).sum();
+        let views: usize = self.views.iter().map(|v| 320 + jl(&v.name) + v.photo.as_ref().map_or(0, |p| jl(p)) + v.style.as_ref().map_or(0, jsz) + v.tags.as_ref().map_or(0, |t| t.keys().map(|k| jl(k) + 12).sum()) + v.hidden.as_ref().map_or(0, |h| 12 * h.len())).sum();
+        let anns: usize = self.annotations.iter().map(|a| 260 + if let Annotation::Text { text, .. } = a { jl(text) } else { 0 }).sum();
+        let groups: usize = self.groups.values().map(|g| 110 + jl(&g.name) + g.tag.as_ref().map_or(0, |t| jl(t))).sum();
+        let insts: usize = self.instances.values().map(|i| 420 + jl(&i.name) + i.tag.as_ref().map_or(0, |t| jl(t)) + attr_json(&i.attrs)).sum();
+        let defs: usize = self.definitions.values().map(|d| 160 + jl(&d.name) + d.source.as_ref().map_or(0, |t| jl(t)) + attr_json(&d.attrs) + d.model.size_estimate()).sum();
+        let tags: usize = self.tags.keys().chain(self.tag_colors.keys()).map(|k| jl(k) + 40).sum();
+        let photo: usize = self.photo_points.iter().map(|p| 40 + jl(&p.name) + p.marks.keys().map(|k| jl(k) + 50).sum::<usize>()).sum();
         256 + self.vertices.len() * 120 + self.edges.len() * 80 + faces + mats + clouds + views + anns + groups + insts + defs + tags + photo
             + self.guides.len() * 150
             + self.cages.values().map(|c| 16 + jsz(c)).sum::<usize>()
             + self.photo_edges.len() * 16
             + self.photo_guides.len() * 12
             + jsz(&self.timeline)
-            + self.classes.values().map(|c| c.len() + 30).sum::<usize>()
-            + self.sections.iter().map(|s| 280 + s.name.len()).sum::<usize>()
-            + self.environment.as_ref().map_or(0, |e| e.len() + 20)
-            + self.units.len()
+            + self.classes.values().map(|c| jl(c) + 30).sum::<usize>()
+            + self.sections.iter().map(|s| 280 + jl(&s.name)).sum::<usize>()
+            + self.environment.as_ref().map_or(0, |e| jl(e) + 20)
+            + jl(&self.units)
     }
 
     /// Things in the model that refer to something that isn't there, as short phrases ("edge 7", "material #ff0000"),
     /// sorted, at most `MAX_PROBLEMS`. `full` false: only what would make drawing or saving panic or fail (a point,
     /// a component definition that is missing); `full` true: also every group, material and other reference.
     pub fn broken_refs(&self, full: bool) -> Vec<String> {
+        let root = Root { defs: self.definitions.keys().copied().collect(), materials: self.materials.keys().cloned().collect() };
+        self.broken_refs_in(full, &root)
+    }
+
+    /// `broken_refs` for a model that is a component's own: its placements name definitions in the *root* model's
+    /// table (`root`), not in its own (usually empty) one; a standalone file (a library part) has its own as well.
+    fn broken_refs_in(&self, full: bool, root: &Root) -> Vec<String> {
         const MAX_PROBLEMS: usize = 50;
         let mut out: BTreeSet<String> = BTreeSet::new();
         let mut add = |s: String| {
@@ -1463,13 +1655,13 @@ impl Model {
                 if !group_ok(&f.group) {
                     add(format!("face {id} (group)"));
                 }
-                if let Some(m) = f.material.as_ref().filter(|m| !self.materials.contains_key(*m)) {
+                if let Some(m) = f.material.as_ref().filter(|m| !self.materials.contains_key(*m) && !root.materials.contains(*m)) {
                     add(format!("material {m}"));
                 }
             }
         }
         for (id, i) in &self.instances {
-            if !self.definitions.contains_key(&i.def) {
+            if !self.definitions.contains_key(&i.def) && !root.defs.contains(&i.def) {
                 add(format!("placement {id}"));
             }
             if full && !group_ok(&i.parent) {
@@ -1504,7 +1696,7 @@ impl Model {
         }
         for (id, d) in &self.definitions {
             // a component is a model of its own: held to the same rules, down the whole tree
-            for p in d.model.broken_refs(full).into_iter().take(MAX_PROBLEMS) {
+            for p in d.model.broken_refs_in(full, root).into_iter().take(MAX_PROBLEMS) {
                 add(format!("component {id}: {p}"));
             }
         }

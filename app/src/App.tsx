@@ -161,6 +161,17 @@ function rememberedEdits(): Partial<Record<WorkspaceId, WorkspaceEdits>> {
   }
 }
 
+/** Pictures the engine left out of a render, an import or a projection (too big, unreadable), said plainly. */
+function skippedText(list: string[]): string {
+  const shown = list.slice(0, 3).join("; ");
+  return `${list.length} picture${list.length === 1 ? " was" : "s were"} left out: ${shown}${list.length > 3 ? `; and ${list.length - 3} more` : ""}.`;
+}
+
+/** What an import left out, to follow its "Imported ..." line (empty when nothing was). */
+function importedSkips(r: Reply): string {
+  return Array.isArray(r.skipped_pictures) && r.skipped_pictures.length ? ` ${skippedText(r.skipped_pictures as string[])}` : "";
+}
+
 export default function App() {
   const [scene, setScene] = useState<Scene | null>(null);
   const [tool, setTool] = useState<Tool>("rect");
@@ -366,7 +377,7 @@ export default function App() {
 
   const say = useCallback((text: string, bad = false) => {
     setToast({ text, bad });
-    window.setTimeout(() => setToast((t) => (t?.text === text ? null : t)), 3600);
+    window.setTimeout(() => setToast((t) => (t?.text === text ? null : t)), bad && text.length > 120 ? 9000 : 3600);
   }, []);
 
   const refresh = useCallback(async () => setScene(await loadScene()), []);
@@ -376,6 +387,7 @@ export default function App() {
       const r = await exec(cmd);
       if (!r.ok) say(r.error ?? "That didn't work", true);
       else if (r.save_error) say(`Couldn't save your model: ${r.save_error}`, true);
+      else if (Array.isArray(r.skipped_pictures) && r.skipped_pictures.length) say(skippedText(r.skipped_pictures as string[]), true);
       await refresh();
       return r;
     },
@@ -629,7 +641,7 @@ export default function App() {
       r = await run({ cmd: "import_obj", text: await file.text(), up: "y" });
     }
     if (r.ok) {
-      say(r.layers != null ? cadSummary(file.name, r) : `Imported ${file.name}: ${r.faces} faces`);
+      say(`${r.layers != null ? cadSummary(file.name, r) : `Imported ${file.name}: ${r.faces} faces`}${importedSkips(r)}`, importedSkips(r) !== "");
       if (r.focus) {
         await refresh();
         landOn(r);
@@ -673,7 +685,7 @@ export default function App() {
             ? await run({ cmd: "import_dwg", path })
             : await run({ cmd: "import_obj", path, up: "y" });
     if (r.ok) {
-      say(r.layers != null ? cadSummary(path.split("/").pop()!, r) : `Imported ${path.split("/").pop()}: ${r.faces} faces`);
+      say(`${r.layers != null ? cadSummary(path.split("/").pop()!, r) : `Imported ${path.split("/").pop()}: ${r.faces} faces`}${importedSkips(r)}`, importedSkips(r) !== "");
       if (r.focus) {
         await refresh();
         landOn(r);

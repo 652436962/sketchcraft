@@ -82,8 +82,17 @@ impl Images {
             if out.contains_key(name) {
                 continue;
             }
-            let Ok((_, data)) = bytes(t) else { continue };
-            let Ok(img) = crate::safety::decode_image(&data, None) else { continue };
+            let Ok((_, data)) = bytes(t) else {
+                crate::safety::note_skipped(name, "its picture isn't readable, so it is drawn in its plain color");
+                continue;
+            };
+            let img = match crate::safety::decode_image(&data, None) {
+                Ok(i) => i,
+                Err(e) => {
+                    crate::safety::note_skipped(name, &format!("{e}; it is drawn in its plain color"));
+                    continue;
+                }
+            };
             let img = if img.width().max(img.height()) > 2048 { img.thumbnail(2048, 2048) } else { img };
             out.insert(name.clone(), img.to_rgb8());
         }

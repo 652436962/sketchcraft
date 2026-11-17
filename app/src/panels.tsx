@@ -2,7 +2,7 @@
 // model's components), Views (saved cameras), Entity Info, and the
 // right-click menu.
 import { useEffect, useLayoutEffect, useState } from "react";
-import { ask } from "./ask";
+import { ask, confirm } from "./ask";
 import { ASSETS, exec, type Reply, type Scene } from "./engine";
 import { pickOpen, pickSave } from "./files";
 import { Icons } from "./icons";
@@ -825,6 +825,12 @@ const FINISHES: { label: string; roughness?: number; metalness?: number; glass?:
   { label: "Glow", roughness: 0.9, emission: 3 },
 ];
 
+/** A picture's size in the model, as people read it. */
+function pictureSize(data: string): string {
+  const mb = (data.length * 0.75) / (1 << 20);
+  return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round((data.length * 0.75) / 1024))} KB`;
+}
+
 export function Textures({
   scene,
   paintMaterial,
@@ -860,6 +866,34 @@ export function Textures({
       onToast(String(e), true);
     }
   };
+  const replacer = useRef<HTMLInputElement>(null);
+  // a new picture for a material that exists: every face that uses it shows the new one
+  const replace = async (file: File) => {
+    if (!active) return;
+    try {
+      const img = await prepareImage(file);
+      const r = await run({ cmd: "texture", name: active.name, data: img.data, color: img.color, width: active.texture!.width, height: active.texture!.width * img.aspect });
+      if (r.ok) onToast(`${active.name} now shows ${file.name}. Undo brings the old picture back.`);
+    } catch (e) {
+      onToast(String(e), true);
+    }
+  };
+  // take a material (and its picture) out of the model; its faces go to another material or back to the plain look
+  const remove = async (replaceWith?: string) => {
+    if (!active) return;
+    const uses = scene.faces.filter((f) => f.material === active.name).length;
+    const where = replaceWith ? `They'll use ${replaceWith.replace(/^[a-z]+:/, "")}.` : "They go back to the plain look.";
+    if (!(await confirm(`Delete ${active.name}?`, `${uses} face${uses === 1 ? " uses" : "s use"} it. ${where} Its picture (${pictureSize(active.texture!.data)}) is removed from the model. Undo brings it back.`, "Delete"))) return;
+    const r = await run(replaceWith ? { cmd: "delete_material", name: active.name, replace_with: replaceWith } : { cmd: "delete_material", name: active.name });
+    if (r.ok) {
+      choose(null);
+      onToast(`Deleted ${active.name}.`);
+    }
+  };
+  const purgeUnused = async () => {
+    const r = await run({ cmd: "purge_materials" });
+    if (r.ok) onToast(Number(r.removed) ? `Removed ${r.removed} unused material${r.removed === 1 ? "" : "s"}${Number(r.freed_mb) ? ` (${r.freed_mb} MB of pictures)` : ""}. Undo brings them back.` : "Every material is in use.");
+  };
   const project = async () => {
     if (!active) return;
     const c = camera();
@@ -885,7 +919,7 @@ export function Textures({
             key={m.name}
             className={`swatch texture ${paintMaterial === m.name ? "on" : ""}`}
             style={{ backgroundImage: `url(${m.texture!.data})` }}
-            title={m.name}
+            title={`${m.name} (${pictureSize(m.texture!.data)})`}
             onClick={() => {
               choose(m.name);
               if (ids.length) run({ cmd: "paint", ids, material: m.name });
@@ -896,6 +930,18 @@ export function Textures({
           <Icons.plus />
         </button>
         <input ref={input} type="file" accept="image/*" hidden onChange={(e) => e.target.files?.[0] && add(e.target.files[0])} />
+      </div>
+      {textures.length > 0 && (
+        <p className="muted small">
+          {textures.length} picture{textures.length === 1 ? "" : "s"}, {pictureSize(textures.map((m) => m.texture!.data).join(""))} in all.{" "}
+          {[...textures].sort((a, b) => b.texture!.data.length - a.texture!.data.length).slice(0, 3).map((m) => `${m.name} ${pictureSize(m.texture!.data)}`).join(", ")}
+          {textures.length > 3 ? "…" : ""}
+        </p>
+      )}
+      <div className="row gap">
+        <button className="btn small ghost" title="Remove every material that no face uses (and its picture)" onClick={purgeUnused}>
+          Remove unused materials
+        </button>
       </div>
       {active?.texture && (
         <div className="build-options">
@@ -922,6 +968,28 @@ export function Textures({
               </button>
             )}
           </div>
+          <div className="row gap">
+            <button className="btn small ghost" title="Show another picture on every face that uses this material" onClick={() => replacer.current?.click()}>
+              Replace picture…
+            </button>
+            <button className="btn small ghost" title="Take this material and its picture out of the model" onClick={() => remove()}>
+              Delete
+            </button>
+            <input ref={replacer} type="file" accept="image/*" hidden onChange={(e) => e.target.files?.[0] && replace(e.target.files[0])} />
+          </div>
+          {scene.materials.some((m) => m.name !== active.name) && (
+            <label className="field" title="Delete this material and put another one on the faces that use it">
+              <span>Delete, and use instead</span>
+              <select value="" onChange={(e) => e.target.value && remove(e.target.value)}>
+                <option value="">Choose a material…</option>
+                {scene.materials.filter((m) => m.name !== active.name).map((m) => (
+                  <option key={m.name} value={m.name}>
+                    {m.name.replace(/^[a-z]+:/, "")}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
       )}
     </div>

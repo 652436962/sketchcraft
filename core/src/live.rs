@@ -32,7 +32,7 @@ const BIG_MODEL: usize = 1_000_000;
 /// A backup is taken at most this often while working.
 const BACKUP_EVERY: Duration = Duration::from_secs(300);
 /// Destructive commands that take a backup first.
-const DESTRUCTIVE: [&str; 8] = ["new", "open", "delete", "purge", "explode", "ungroup", "clear_guides", "delete_view"];
+const DESTRUCTIVE: [&str; 10] = ["new", "open", "delete", "purge", "explode", "ungroup", "clear_guides", "delete_view", "delete_material", "purge_materials"];
 /// At most one forced backup this often per origin (the person's own steps / an agent's or a plugin's),
 /// unless the model changed size a lot (more than half, or the file doubled or halved).
 const FORCE_EVERY_UI: Duration = Duration::from_secs(15);
@@ -66,6 +66,8 @@ pub struct Live {
     batch_destructive: bool,
     /// saving is off: the file couldn't be read and couldn't be copied aside
     blocked: bool,
+    /// the next time a file that couldn't be read is tried again (see `retry_blocked`)
+    retry_after: Option<SystemTime>,
     /// memory holds work the file doesn't (a save failed): never replaced without keeping it first
     dirty: bool,
     /// the side file that holds work set aside; the notice about it stays while the file does
@@ -77,6 +79,15 @@ pub struct Live {
     held: bool,
     /// the side files this run wrote (names): the cap holds even when the index can't be read
     own_side: Vec<String>,
+}
+
+/// "Left out: ..." for a notice: what was skipped, with the reasons.
+fn skipped_text(list: &[String]) -> String {
+    format!("{} picture{} left out: {}.", list.len(), if list.len() == 1 { " was" } else { "s were" }, list.join("; "))
+}
+
+fn big_model_text(n: usize) -> String {
+    format!("This is a big model ({n} points, edges and faces). Everything works, but each change takes a second or more to save and the view takes a few seconds to redraw.")
 }
 
 fn mtime(p: &Path) -> Option<SystemTime> {
@@ -131,7 +142,7 @@ impl Live {
     }
 
     fn blank(engine: Engine, doc: PathBuf, persist: bool) -> Self {
-        Live { engine, doc, seen: None, persist, last_backup: None, notice: None, notice_at: None, unsaved_batch: false, batch_weight: 0, batch_destructive: false, blocked: false, dirty: false, sticky: None, last_forced: HashMap::new(), held: false, own_side: vec![] }
+        Live { engine, doc, seen: None, persist, last_backup: None, notice: None, notice_at: None, unsaved_batch: false, batch_weight: 0, batch_destructive: false, blocked: false, retry_after: None, dirty: false, sticky: None, last_forced: HashMap::new(), held: false, own_side: vec![] }
     }
 
     /// A model that is not saved anywhere.
@@ -190,10 +201,16 @@ impl Live {
                     self.set_notice(format!("Another program saved this model. {}; the rest still work.", what.join(" and ")));
                 }
             }
+            let skipped: Vec<String> = r["skipped_pictures"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
+            if !skipped.is_empty() {
+                self.set_notice(skipped_text(&skipped));
+            }
             if self.engine.oversize {
-                self.set_notice(self.oversize_text());
+                let note = self.oversize_text();
+                let note = if skipped.is_empty() { note } else { format!("{note} {}", skipped_text(&skipped)) };
+                self.set_notice(note);
             } else if self.sticky.is_none() && self.engine.model.entity_count() > BIG_MODEL {
-                self.set_notice(format!("This is a big model ({} points, edges and faces). Everything works, but each change takes a second or more to save and the view takes a few seconds to redraw.", self.engine.model.entity_count()));
+                self.set_notice(big_model_text(self.engine.model.entity_count()));
             }
             return true;
         }
@@ -201,7 +218,7 @@ impl Live {
 
     fn oversize_text(&self) -> String {
         let m = &self.engine.model;
-        format!("This model is over the size limits ({} points, edges and faces, limit {}; about {} MB, limit {} MB). It is open for looking at and for deleting parts (delete scans, images or geometry); saving resumes when it is under the limits, and the file on disk is untouched meanwhile.", m.entity_count(), crate::model::MAX_ENTITIES, m.size_estimate() >> 20, crate::model::MAX_MODEL_BYTES >> 20)
+        format!("This model is over the size limits ({} points, edges and faces, limit {}; about {} MB, limit {} MB; names and notes {} MB, limit {} MB). It is open for looking at and for cutting down; saving resumes when it is under the limits, and the file on disk is untouched meanwhile. To cut it down: delete geometry or placements; in the Materials panel delete or replace the textures that take the most room (or choose \"Remove unused materials\"); in the Views panel delete scenes whose photos are large. File > Restore from backup... still has the earlier copies.", m.entity_count(), crate::model::MAX_ENTITIES, m.size_estimate() >> 20, crate::model::MAX_MODEL_BYTES >> 20, m.text_bytes() >> 20, crate::model::MAX_TEXT_BYTES >> 20)
     }
 
     /// The model file couldn't be read: set it aside, keep what memory holds.
@@ -224,7 +241,7 @@ impl Live {
             }
             Err(e) => {
                 self.blocked = true;
-                self.set_notice(format!("The model file couldn't be opened ({why}) and couldn't be copied aside ({e}), so nothing will be saved over it. Repair or move {} and it will be picked up again.", self.doc.display()));
+                self.set_notice(format!("The model file couldn't be opened ({why}) and couldn't be copied aside ({e}), so nothing will be saved over it. Repair or move {} and it will be picked up again (saving resumes by itself), or File > New or File > Open starts over. File > Save As... keeps the work in memory in another file meanwhile.", self.doc.display()));
             }
         }
         false
@@ -417,8 +434,9 @@ impl Live {
         let destructive = DESTRUCTIVE.contains(&name);
         let mut r = self.engine.exec_value_as(caller, cmd.clone());
         // the person starting over (or opening something else) after the model file couldn't be read: saving resumes
-        if self.held && r["ok"] == true && matches!(caller, Caller::Ui) && matches!(name, "new" | "open") {
+        if (self.held || self.blocked) && r["ok"] == true && matches!(caller, Caller::Ui) && matches!(name, "new" | "open") {
             self.held = false;
+            self.blocked = false;
         }
         // inside a batch (a plugin run) the file is written once, when the batch ends
         let changed = r["ok"] == true && self.engine.revision() != before;
@@ -447,7 +465,7 @@ impl Live {
                 let kind = match name {
                     "new" => "new",
                     "open" => "open",
-                    "delete" | "purge" | "explode" | "ungroup" | "clear_guides" | "delete_view" => "del",
+                    "delete" | "purge" | "explode" | "ungroup" | "clear_guides" | "delete_view" | "delete_material" | "purge_materials" => "del",
                     _ => "shr",
                 };
                 Some(Force { origin, kind: if shrank && !destructive { "shr" } else { kind }, big: false })
@@ -477,6 +495,10 @@ impl Live {
                     self.dirty = false;
                     if self.notice.as_deref().is_some_and(|n| n.starts_with("Couldn't save")) {
                         self.notice = None;
+                    }
+                    // an import (or anything else) that made the model big: say so now, not only when the file is next loaded
+                    if self.notice.is_none() && self.sticky.is_none() && self.engine.model.entity_count() > BIG_MODEL {
+                        self.set_notice(big_model_text(self.engine.model.entity_count()));
                     }
                 }
                 Err(e) => {
@@ -599,6 +621,7 @@ impl Live {
         if self.engine.in_batch() {
             return false;
         }
+        self.retry_blocked();
         let now = mtime(&self.doc);
         if now.is_some() && now != self.seen {
             if self.blocked || self.dirty {
@@ -613,6 +636,36 @@ impl Live {
             return self.load(false);
         }
         false
+    }
+
+    /// Saving was switched off because the file couldn't be read and couldn't be copied aside. It is switched back on when
+    /// the cause is gone: the file can be read again (a permission put back, a cloud file downloaded), or it was moved away
+    /// (the next save writes a new one). Work in memory that the file doesn't hold is set aside first, like another program's save.
+    fn retry_blocked(&mut self) {
+        if !self.blocked {
+            return;
+        }
+        if !self.doc.exists() {
+            self.blocked = false;
+            self.seen = None;
+            if self.sticky.is_none() {
+                self.notice = None;
+            }
+            // what memory holds is written now, so it doesn't wait for the next change
+            if self.dirty && self.save_with(None).is_ok() {
+                self.dirty = false;
+            }
+        } else if std::fs::File::open(&self.doc).is_ok() {
+            // readable now (a file that is only still unreadable costs nothing to look at again): try it, but not more than every few seconds
+            if self.retry_after.is_some_and(|t| SystemTime::now() < t) {
+                return;
+            }
+            self.retry_after = Some(SystemTime::now() + Duration::from_secs(5));
+            let now = mtime(&self.doc);
+            if self.take_theirs(false, "The model file can be read again.") {
+                self.seen = now;
+            }
+        }
     }
 
     pub fn scene(&self) -> Value {
@@ -740,6 +793,11 @@ impl Live {
         }
         // the person chose what to carry on with: saving resumes
         self.held = false;
+        self.blocked = false;
+        let skipped = crate::safety::take_skipped();
+        if !skipped.is_empty() {
+            self.set_notice(skipped_text(&skipped));
+        }
         // the model it replaced is kept in Backups first (the outgoing file), and the restore is one undoable step
         match self.save_with(Some(Force { origin: Origin::Ui, kind: "rst", big: true })) {
             Ok(()) => {

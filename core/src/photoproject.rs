@@ -61,7 +61,7 @@ pub fn project(m: &mut Model, view: &str, faces: &[Id], size: u32) -> Result<Pro
     let Some(photo) = &v.photo else { bail!("{view:?} has no photo: match a photo first (Views › Match photo…)") };
     let tex = Texture { data: photo.clone(), width: 1.0, height: 1.0, project: None, origin: None };
     let (_, bytes) = crate::texmap::bytes(&tex)?;
-    let img = crate::safety::decode_image(&bytes, None).context("the photo can't be read")?.to_rgb8();
+    let img = crate::safety::decode_image(&bytes, None).map_err(|e| anyhow::anyhow!("the photo can't be read: {e}"))?.to_rgb8();
     let aspect = img.width() as f64 / img.height() as f64;
     let size = size.clamp(64, 4096) as f64;
     let mut out = Projected { faces: vec![], away: 0 };

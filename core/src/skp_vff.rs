@@ -173,7 +173,7 @@ pub fn parse(d: &[u8], version: String) -> Result<SkpFile> {
                 Some(xml[j..j + xml[j..].find('"')?].to_string())
             });
             let bytes = img.and_then(|p| read(&format!("materials/{name}/{p}")));
-            if let Some((data, aspect)) = bytes.and_then(|b| shrink(&b)) {
+            if let Some((data, aspect)) = bytes.and_then(|b| shrink(&b, name.trim_start_matches("_LC_"))) {
                 let mut t = tiles.remove(&id).unwrap_or_default();
                 t.sort_by(|a, b| a.total_cmp(b));
                 let inches = t.get(t.len() / 2).copied().filter(|v| *v > 0.5 && *v < 2000.0).unwrap_or(39.37);
@@ -189,9 +189,16 @@ pub fn parse(d: &[u8], version: String) -> Result<SkpFile> {
 }
 
 /// An image as a data URL no bigger than 1024 px (JPEG unless it has alpha).
-fn shrink(bytes: &[u8]) -> Option<(String, f64)> {
+fn shrink(bytes: &[u8], name: &str) -> Option<(String, f64)> {
     use base64::Engine as _;
-    let img = crate::safety::decode_image(bytes, None).ok()?;
+    let img = match crate::safety::decode_image(bytes, None) {
+        Ok(i) => i,
+        Err(e) => {
+            // the material keeps its color; the import says which picture was left out
+            crate::safety::note_skipped(name, &format!("{e}; the material keeps its color"));
+            return None;
+        }
+    };
     let img = if img.width().max(img.height()) > 1024 { img.thumbnail(1024, 1024) } else { img };
     let mut out = Cursor::new(Vec::new());
     let mime = if img.color().has_alpha() {

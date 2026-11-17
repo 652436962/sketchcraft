@@ -1520,10 +1520,10 @@ fn subdivision_rounds_a_cage_like_blender() {
 #[test]
 fn saving_a_view_again_keeps_its_photo() {
     let mut e = Engine::new();
-    run(&mut e, json!({"cmd":"save_view","name":"Street","eye":[10,-10,5],"target":[0,0,0],"photo":"data:image/png;base64,AA=="}));
+    run(&mut e, json!({"cmd":"save_view","name":"Street","eye":[10,-10,5],"target":[0,0,0],"photo":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}));
     run(&mut e, json!({"cmd":"save_view","name":"Street","eye":[11,-10,5],"target":[0,0,0]}));
     let v = e.model.views.iter().find(|v| v.name == "Street").unwrap();
-    assert_eq!(v.photo.as_deref(), Some("data:image/png;base64,AA=="), "re-saving kept the photo");
+    assert_eq!(v.photo.as_deref(), Some("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), "re-saving kept the photo");
     assert_eq!(v.eye[0], 11.0);
     assert_eq!(e.exec_json(&json!({"cmd":"save_view","name":"X","eye":[1,1,1],"target":[0,0,0],"photo":"http://x"}).to_string())["ok"], false);
 }
@@ -1580,7 +1580,7 @@ fn reference_images_can_be_see_through() {
     let mut e = Engine::new();
     run(&mut e, json!({"cmd":"material","name":"Plain","color":[0.5,0.5,0.5]}));
     assert_eq!(e.model.materials["Plain"].opacity, 1.0, "new materials are solid");
-    run(&mut e, json!({"cmd":"texture","name":"Ref","data":"data:image/png;base64,AA==","width":2.0,"height":1.0}));
+    run(&mut e, json!({"cmd":"texture","name":"Ref","data":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==","width":2.0,"height":1.0}));
     assert_eq!(e.model.materials["Ref"].opacity, 1.0);
     run(&mut e, json!({"cmd":"opacity","material":"Ref","value":0.4}));
     assert!((e.model.materials["Ref"].opacity - 0.4).abs() < 1e-6);

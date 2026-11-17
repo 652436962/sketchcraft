@@ -399,7 +399,13 @@ fn build_scene(m: &Model, o: &PtOpts) -> Scene {
                         use base64::Engine as _;
                         let b64 = t.data.split_once(',')?.1;
                         let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
-                        let img = crate::safety::decode_image(&bytes, None).ok()?;
+                        let img = match crate::safety::decode_image(&bytes, None) {
+                            Ok(i) => i,
+                            Err(e) => {
+                                crate::safety::note_skipped(&name, &format!("{e}; it is drawn in its plain color"));
+                                return None;
+                            }
+                        };
                         // the tracer keeps three floats a pixel: never more than 2048 on a side
                         let img = if img.width().max(img.height()) > 2048 { img.thumbnail(2048, 2048) } else { img }.to_rgb8();
                         let px = img.pixels().map(|p| Vec3::new(srgb_to_linear(p[0] as f32 / 255.0), srgb_to_linear(p[1] as f32 / 255.0), srgb_to_linear(p[2] as f32 / 255.0))).collect();

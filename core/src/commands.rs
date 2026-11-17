@@ -621,6 +621,15 @@ pub enum Command {
     },
     /// Remove components nothing places.
     Purge,
+    /// Take a material and its picture out of the model (the person's own command: an agent or a plugin can't).
+    /// Faces that use it get `replace_with` (a material that exists), or the plain default look.
+    DeleteMaterial {
+        name: String,
+        #[serde(default)]
+        replace_with: Option<String>,
+    },
+    /// Remove every material no face uses (the person's own command).
+    PurgeMaterials,
     /// Show a file or the library folder in Finder / Explorer.
     Reveal {
         #[serde(default)]
@@ -1224,6 +1233,9 @@ pub const BATCH_MAX: std::time::Duration = std::time::Duration::from_secs(150);
 /// A model of the biggest size the program writes (`model::MAX_MODEL_BYTES`) is under this, with room: what the app
 /// saved it can open again.
 pub const MAX_OPEN_BYTES: u64 = 768 << 20;
+/// What an agent's `open` reads: its own model cap (`model::MAX_MODEL_BYTES_UNTRUSTED`, 160 MB) plus the room a file has over
+/// its estimate. A library part or a thumbnail is held to `library::MAX_LIBRARY_BYTES`.
+pub const MAX_OPEN_BYTES_UNTRUSTED: u64 = 256 << 20;
 
 const UNDO_LIMIT: usize = 200;
 /// Undo history never holds more than about this much (per-step sizes are estimates).
@@ -1406,9 +1418,10 @@ impl Engine {
         }
         let mut model = model;
         model.repair_ids();
+        model.vet_pictures();
         // a model over the size limits is restored for viewing and cutting down, like Open: the limits never block getting work back
         model.check_sane_with(false)?;
-        let over = model.entity_count() > crate::model::MAX_ENTITIES || model.size_estimate() > crate::model::MAX_MODEL_BYTES;
+        let over = model.over_limits();
         // ids are never handed out twice: not after a restore either (an agent or another program may still hold the ones in use now)
         model.next_id = model.next_id.max(self.model.next_id);
         let before = std::mem::replace(&mut self.model, model);
@@ -1534,6 +1547,7 @@ impl Engine {
         let saved = mutates.then(|| (self.model.clone(), self.ctx, self.names.clone(), self.undo.len()));
         let count_before = self.model.entity_count();
         let bytes_before = if mutates { self.model.size_estimate() } else { 0 };
+        let text_before = if mutates { self.model.text_bytes() } else { 0 };
         let oversize_before = self.oversize;
         // how much one command may add: the person's importers and terrain may use up to the model's total; everything
         // else (repeat commands such as `array`, and anything an agent or a plugin runs) is held to MAX_GROWTH
@@ -1553,8 +1567,14 @@ impl Engine {
                     (v, false)
                 });
             }
+            crate::safety::take_skipped();
             self.run(cmd).map(|mut v| {
                 v["ok"] = json!(true);
+                // pictures left out of a render, an import or a projection are said, never dropped silently
+                let skipped = crate::safety::take_skipped();
+                if !skipped.is_empty() && v.is_object() {
+                    v["skipped_pictures"] = json!(skipped);
+                }
                 (v, mutates)
             })
         }));
@@ -1572,22 +1592,25 @@ impl Engine {
                     // a model over the geometry limit (opened that way) may only get smaller; one command may not add more than MAX_GROWTH
                     let count = self.model.entity_count();
                     let bytes = self.model.size_estimate();
-                    let within = count <= crate::model::MAX_ENTITIES && bytes <= crate::model::MAX_MODEL_BYTES;
+                    let text = self.model.text_bytes();
+                    let within = count <= crate::model::MAX_ENTITIES && bytes <= crate::model::MAX_MODEL_BYTES && text <= crate::model::MAX_TEXT_BYTES && !self.model.attrs_over();
                     let checked = if is_open && self.oversize {
                         self.model.check_sane_with(false)
                     } else if self.oversize && within {
                         self.oversize = false;
-                        self.model.check_sane()
+                        self.model.check_sane_est(bytes)
                     } else if self.oversize {
-                        self.model.check_sane_with(false).and_then(|_| if count > count_before || bytes > bytes_before { Err(anyhow::anyhow!("this model is over the size limits ({} points, edges and faces; about {} MB), so it is open for viewing and for deleting parts only; that would add more", count_before, bytes_before >> 20)) } else { Ok(()) })
+                        self.model.check_sane_with(false).and_then(|_| if count > count_before || bytes > bytes_before || text > text_before { Err(anyhow::anyhow!("this model is over the size limits ({} points, edges and faces; about {} MB), so it is open for viewing and for deleting parts only; that would add more", count_before, bytes_before >> 20)) } else { Ok(()) })
                     } else if !is_open && count > count_before.saturating_add(grow_cap) {
                         Err(anyhow::anyhow!("that would add {} points, edges and faces at once (the limit is {}), so it was not done", count - count_before, grow_cap))
                     } else if !is_open && self.untrusted && bytes > bytes_before.saturating_add(crate::model::MAX_GROWTH_BYTES_UNTRUSTED) {
                         Err(anyhow::anyhow!("that would add {} MB of text, images, attributes or scan points at once (the limit for an agent or a plugin is {} MB), so it was not done", (bytes - bytes_before) >> 20, crate::model::MAX_GROWTH_BYTES_UNTRUSTED >> 20))
+                    } else if !is_open && self.untrusted && text > crate::model::MAX_TEXT_BYTES_UNTRUSTED && text > text_before {
+                        Err(anyhow::anyhow!("the model's names, notes and attributes are about {} MB; an agent or a plugin can't add more past {} MB (the person's own naming has the rest of the room), so it was not done ({})", text >> 20, crate::model::MAX_TEXT_BYTES_UNTRUSTED >> 20, self.model.text_use()))
                     } else if !is_open && self.untrusted && bytes > crate::model::MAX_MODEL_BYTES_UNTRUSTED && bytes > bytes_before {
                         Err(anyhow::anyhow!("the model is about {} MB; an agent or a plugin can't make it bigger past {} MB (the person can), so it was not done", bytes >> 20, crate::model::MAX_MODEL_BYTES_UNTRUSTED >> 20))
                     } else {
-                        self.model.check_sane()
+                        self.model.check_sane_est(bytes)
                     };
                     if let Err(e) = checked {
                         restore(self, saved);
@@ -1614,6 +1637,9 @@ impl Engine {
                 let msg = panic.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| panic.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown".into());
                 eprintln!("sketchcraft: a command panicked: {msg}");
                 restore(self, saved);
+                if msg.starts_with(crate::model::IDS_OUT) {
+                    return json!({"ok": false, "error": "this model has used up its ids (the counter is at the top of its range), so nothing more can be added; export it (OBJ or SketchUp) and import it into a new model. Nothing was changed."});
+                }
                 json!({"ok": false, "error": "SketchCraft hit a bug running that. Nothing was changed."})
             }
         }
@@ -1836,9 +1862,7 @@ impl Engine {
                 let mat = m.materials.entry(name.clone()).or_default();
                 let mut tex = mat.texture.clone().unwrap_or(crate::model::Texture { data: String::new(), width: 1.0, height: 1.0, project: None, origin: None });
                 if let Some(d) = data {
-                    if !d.starts_with("data:image/") {
-                        bail!("texture data must be a data:image/... URL");
-                    }
+                    crate::safety::check_picture(&d).map_err(|e| anyhow::anyhow!("texture {name}: {e}"))?;
                     tex.data = d;
                 }
                 if tex.data.is_empty() {
@@ -2046,21 +2070,18 @@ impl Engine {
                 json!({})
             }
             Command::Guide { point, direction } => {
-                let id = m.next_id + 1;
-                m.next_id = id;
+                let id = m.new_id();
                 m.guides.push(crate::model::Guide { id, p: v3(point), dir: direction.map(|d| v3(d).normalize()) });
                 json!({"guide": id})
             }
             Command::Dimension { from, to, offset } => {
-                let id = m.next_id + 1;
-                m.next_id = id;
+                let id = m.new_id();
                 let (a, b) = (v3(from), v3(to));
                 m.annotations.push(crate::model::Annotation::Dimension { id, a, b, offset: v3(offset) });
                 json!({"dimension": id, "length": round(a.distance(b))})
             }
             Command::Text { at, text, leader } => {
-                let id = m.next_id + 1;
-                m.next_id = id;
+                let id = m.new_id();
                 m.annotations.push(crate::model::Annotation::Text { id, at: v3(at), text, leader: leader.map(v3) });
                 json!({"text": id})
             }
@@ -2097,8 +2118,8 @@ impl Engine {
                 serde_json::to_value(&v)?
             }
             Command::SaveView { name, eye, target, fov, photo, style, section, camera_only } => {
-                if photo.as_deref().is_some_and(|p| !p.starts_with("data:image/")) {
-                    bail!("photo must be a data:image/... URL");
+                if let Some(p) = photo.as_deref() {
+                    crate::safety::check_picture(p).map_err(|e| anyhow::anyhow!("photo: {e}"))?;
                 }
                 // re-saving a matched photo's scene keeps its photo
                 let photo = photo.or_else(|| m.views.iter().find(|v| v.name == name).and_then(|v| v.photo.clone()));
@@ -2114,12 +2135,11 @@ impl Engine {
                 json!({})
             }
             Command::MatchPhoto { name, width, height, red, green, origin, distance, photo } => {
-                let cam = crate::matchphoto::solve(width, height, red, green, origin, distance)?;
+                // the picture is looked at before any work is done on it
                 if let Some(p) = &photo {
-                    if !p.starts_with("data:image/") {
-                        bail!("photo must be a data:image/... URL");
-                    }
+                    crate::safety::check_picture(p).map_err(|e| anyhow::anyhow!("photo: {e}"))?;
                 }
+                let cam = crate::matchphoto::solve(width, height, red, green, origin, distance)?;
                 m.views.retain(|v| v.name != name);
                 m.views.push(crate::model::View { name: name.clone(), eye: cam.eye.to_array(), target: cam.target.to_array(), fov: cam.fov, photo, style: None, tags: None, hidden: None, section: None });
                 json!({"view": name, "eye": cam.eye.to_array(), "target": cam.target.to_array(), "fov": cam.fov})
@@ -2286,15 +2306,23 @@ impl Engine {
                 if len > MAX_OPEN_BYTES {
                     bail!("{path} is {} MB; SketchCraft opens models up to {} MB", len >> 20, MAX_OPEN_BYTES >> 20);
                 }
+                // an agent opens what an agent may hold (its own model cap, with room for the file's escapes), not the person's whole 768 MB
+                if self.untrusted && len > MAX_OPEN_BYTES_UNTRUSTED {
+                    bail!("{path} is {} MB; an agent or a plugin can open models up to {} MB (the person can open larger ones)", len >> 20, MAX_OPEN_BYTES_UNTRUSTED >> 20);
+                }
                 let mut opened: Model = serde_json::from_str(&std::fs::read_to_string(&path)?).map_err(|e| anyhow::anyhow!("{path} isn't a model SketchCraft can read: {e}"))?;
                 if let Some(what) = opened.broken_refs(false).first() {
                     bail!("{path} isn't a consistent model ({what} refers to something that isn't there)");
                 }
                 // ids from outside: the counter must be above every id in the file, or the next drawing overwrites something
                 opened.repair_ids();
+                opened.vet_pictures();
+                if self.untrusted && opened.size_estimate() > crate::model::MAX_MODEL_BYTES_UNTRUSTED {
+                    bail!("{path} is a model of about {} MB; an agent or a plugin can open models up to {} MB (the person can open larger ones)", opened.size_estimate() >> 20, crate::model::MAX_MODEL_BYTES_UNTRUSTED >> 20);
+                }
                 // too much geometry or too many bytes is not a reason to refuse the file: it opens for viewing and cutting down (see `oversize`)
                 opened.check_sane_with(false)?;
-                self.oversize = opened.entity_count() > crate::model::MAX_ENTITIES || opened.size_estimate() > crate::model::MAX_MODEL_BYTES;
+                self.oversize = opened.over_limits();
                 self.model = opened;
                 self.batch = None;
                 self.ctx = None;
@@ -2905,6 +2933,14 @@ impl Engine {
                 json!({"added": crate::library::add_files(&d, &paths, collection.as_deref().unwrap_or(""), true)?})
             }
             Command::Purge => json!({"removed": crate::library::purge(m)}),
+            Command::DeleteMaterial { name, replace_with } => {
+                let faces = m.remove_material(&name, replace_with.as_deref())?;
+                json!({"material": name, "faces": faces})
+            }
+            Command::PurgeMaterials => {
+                let (names, bytes) = m.purge_materials();
+                json!({"removed": names.len(), "materials": names, "freed_mb": bytes >> 20})
+            }
             Command::Skins => {
                 let dir = skins_dir();
                 let mut out = Vec::new();

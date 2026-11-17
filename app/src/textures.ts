@@ -19,6 +19,10 @@ export async function prepareImage(file: File, max = 1024): Promise<Prepared> {
       i.onerror = () => bad(new Error("That file isn't an image the browser can read"));
       i.src = url;
     });
+    // the engine takes pictures up to 16,384 px a side and 100 million pixels (the window shrinks them to `max` first)
+    if (img.naturalWidth > 16384 || img.naturalHeight > 16384 || img.naturalWidth * img.naturalHeight > 100_000_000) {
+      throw new Error(`That picture is ${img.naturalWidth} × ${img.naturalHeight} pixels; SketchCraft takes pictures up to 16384 on a side and 100 million pixels. Shrink it first.`);
+    }
     const scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
     const w = Math.max(1, Math.round(img.naturalWidth * scale));
     const h = Math.max(1, Math.round(img.naturalHeight * scale));

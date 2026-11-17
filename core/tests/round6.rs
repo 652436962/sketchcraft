@@ -158,8 +158,10 @@ fn a_huge_picture_in_a_tiny_file_is_refused_before_decoding() {
     // and a render of a model that holds it doesn't decode it either (no texture, no crash)
     let mut e = sample();
     let data = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&png));
-    let r = as_agent(&mut e, json!({"cmd": "texture", "name": "huge", "data": data}));
-    assert_eq!(r["ok"], true, "{r}");
+    // (round 7: the size is judged when the picture is stored, so the agent can't put it in; a file from outside can still hold one)
+    let r = as_agent(&mut e, json!({"cmd": "texture", "name": "huge", "data": data.clone()}));
+    assert_eq!(r["ok"], false, "{r}");
+    e.model.materials.insert("huge".into(), serde_json::from_value(json!({"color": [1, 1, 1], "texture": {"data": data, "width": 1, "height": 1}})).unwrap());
     let imgs = sketchcraft::texmap::Images::load(&e.model);
     assert!(imgs.get("huge").is_none());
     // an ordinary picture still decodes

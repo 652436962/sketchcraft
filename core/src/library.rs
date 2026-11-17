@@ -66,13 +66,16 @@ pub fn list(dir: &Path) -> Vec<Entry> {
     out
 }
 
+/// The most a library file, an inserted file or a thumbnail's source may be.
+pub const MAX_LIBRARY_BYTES: u64 = 128 << 20;
+
 /// A file's contents as a model (imports land in it as they would in a document).
 pub fn load_file(path: &str) -> Result<Model> {
     let p = Path::new(path);
-    // the same size limit as opening a model: a library file or a thumbnail never reads more than that into memory
+    // a part, a library file or a thumbnail is read whole into memory by whoever opens the library panel: a smaller limit than a model
     let len = std::fs::metadata(p)?.len();
-    if len > crate::commands::MAX_OPEN_BYTES {
-        bail!("{} is {} MB; SketchCraft reads models up to {} MB", p.display(), len >> 20, crate::commands::MAX_OPEN_BYTES >> 20);
+    if len > MAX_LIBRARY_BYTES {
+        bail!("{} is {} MB; the library reads parts up to {} MB (open it as a model instead)", p.display(), len >> 20, MAX_LIBRARY_BYTES >> 20);
     }
     let ext = p.extension().and_then(|x| x.to_str()).map(|x| x.to_ascii_lowercase()).unwrap_or_default();
     let name = nice_name(&p.file_stem().unwrap_or_default().to_string_lossy());
@@ -85,6 +88,7 @@ pub fn load_file(path: &str) -> Result<Model> {
                 bail!("{name} isn't a consistent model ({what} refers to something that isn't there)");
             }
             m.repair_ids();
+            m.vet_pictures();
             m.check_sane_with(false)?;
         }
         "skp" => {
