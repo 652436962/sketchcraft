@@ -1,6 +1,6 @@
-# SketchCraft 0.3.7 "Drafting": design
+# SketchCraft 0.3.8 "Drafting": design
 
-Status: proposal (2026-11-17). Scope: issues #3–#10, #18, #19 in the **0.3.7 — Drafting** milestone.
+Status: proposal (2026-11-17). Scope: issues #3–#10, #18, #19 in the **0.3.8 — Drafting** milestone (renamed **0.3.8 — Drafting** after 0.3.7 became the safety-and-polish release).
 Order follows the pain-point research (§2, §5): big-document speed, then attached dimensions,
 then weights, hatches and cut fills, then opacity, trim/extend, the editor, AI drafting, and tables last.
 
@@ -101,8 +101,8 @@ Places the compiler or tests will force us to update:
 - **Never add a new `Annotation` variant.** 0.3.6 can't read an unknown `kind`. All paper
   content goes in the new top-level maps.
 - **Older app, newer file.** Today 0.3.6 opens it and drops the sheets on the next save. Fix:
-  1. 0.3.7 writes `format: 2` and `needs: ["sheets"]`.
-  2. Ship **0.3.6.1** right away. It reads as a `Value` first. If there are top-level keys it
+  1. 0.3.8 writes `format: 2` and `needs: ["sheets"]`.
+  2. Ship the guard first, as **0.3.7**. It reads as a `Value` first. If there are top-level keys it
      doesn't know, or `format` > 1, it opens **read-only**, refuses Save and live persistence,
      and says "Saved by a newer SketchCraft: update to edit."
 - **From now on**, drafting structs carry `#[serde(flatten)] extra: BTreeMap<String, Value>`, and
@@ -334,7 +334,7 @@ Size: **S** ≤ 2 days, **M** ≤ 1 week, **L** ≤ 2 weeks. Sprint 0 testing (#
 
 | # | Step | Size | Tests |
 |---|---|---|---|
-| 0 | **0.3.6.1 format guard**, plus `format`/`needs` | S | A newer file opens read-only, Save refused, live file untouched |
+| 0 | **Format guard, shipped as 0.3.7** (#57), plus `format`/`needs` | S | A newer file opens read-only, Save refused, live file untouched |
 | 1 | **Saved sheets data model**, CRUD commands, policy, `skeleton`/`TYPED`/`broken_refs`/`repair_ids` | M | Round trip; 0.3.6 file opens; per-item patches across reload; policy tests |
 | 2 | **Display list and new PDF writer**; A1, A0, ARCH C/D/E; imperial scales; port `plan_cut`/callouts | L | SVG goldens; PDF structure; moving a far tree leaves the page unchanged |
 | 3 | **Vector hidden lines** (BVH) | L | Box behind box exact to 0.05 mm; goldens |
@@ -355,7 +355,7 @@ Size: **S** ≤ 2 days, **M** ≤ 1 week, **L** ≤ 2 weeks. Sprint 0 testing (#
 1. **A Layout workspace?** Recommend yes, as a fifth workspace.
 2. **Sheets in the model file?** Recommend the same `.sketchcraft` file.
 3. **Live or frozen viewports?** Recommend live, plus an "Issued" revision per sheet and a "changed since issue" badge.
-4. **Ship 0.3.6.1 (the format guard) now?** Recommend yes, within the week.
+4. **Ship the format guard first?** Recommend yes, within the week (now 0.3.7).
 5. **PDF and font libraries?** Recommend adopting `pdf-writer` + `subsetter` + `ttf-parser` (MIT/Apache).
 6. **Hatch library?** Recommend our own CC0 built-ins, plus loading the user's `.pat` files.
 7. **Line weight meaning?** Recommend paper-mm pens that don't change with scale.
@@ -367,7 +367,7 @@ Size: **S** ≤ 2 days, **M** ≤ 1 week, **L** ≤ 2 weeks. Sprint 0 testing (#
 
 ### Decided (2026-11-17)
 
-- **Format guard first** (step 0): older versions open newer files read-only instead of dropping their sheets.
+- **Format guard first**, shipped on its own as **0.3.7** (a three-part version is required, so "0.3.6.1" isn't possible). Drafting becomes 0.3.8, Texturing 0.3.9, Makers 0.3.10.
 - **Layout** is a new fifth workspace.
 - **Sheets live in the model file, and viewports are live**, with an Issued snapshot per sheet and a "changed since issue" badge.
 - **Adopt `pdf-writer` + `subsetter` + `ttf-parser`** (MIT/Apache) for embedded fonts and Unicode text.

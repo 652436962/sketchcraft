@@ -13,17 +13,25 @@ guess today.
 | Release | Theme | In a sentence |
 | --- | --- | --- |
 | **0.3.6** | Opens your files | SketchUp files from any version (6 to 27), a security review, faster and steadier everywhere |
-| **0.3.7** | Drafting | LayOut-class drawings: line weights, hatches and cut fills per tag, dimensions that stay attached, big documents that stay fast |
-| **0.3.8** | Texturing | A blocky beaver to paint, then put textures exactly where you want them, unwrap UVs, paint vertices, export to game engines |
-| **0.3.9** | Makers | Fix a model in one click, check it for 3D printing, cut lists with diagrams and CNC files |
+| **0.3.7** | Safety & polish | Older versions can't damage newer files, a Subdivide button, a contributor's Trim fix and Vertical layout, and the full test suite in CI |
+| **0.3.8** | Drafting | LayOut-class drawings: line weights, hatches and cut fills per tag, dimensions that stay attached, big documents that stay fast |
+| **0.3.9** | Texturing | A blocky beaver to paint, then put textures exactly where you want them, unwrap UVs, paint vertices, export to game engines |
+| **0.3.10** | Makers | Fix a model in one click, check it for 3D printing, cut lists with diagrams and CNC files |
 | **0.4.0** | No extension tax | The add-ons people pay for most, built in: round corners, loft, thicken, bend, parametric railings and stairs |
 | **0.4.1** | Big models | Every CPU core, lighter imports, smooth orbiting on huge sites |
 | **0.4.2** | Switchers & your own AI | Coming from SketchUp made easy, your old extensions, and AI without credits |
 | **0.4.3** | Rendering | Clean, fast renders on the GPU with HDRI lighting, no paid plugin |
 
-## 0.3.7: Drafting
+## 0.3.7: Safety & polish
 
-**First, Sprint 0: testing.** The test suite grows with the app from here on: the UI tests run in CI on every PR, every tool gets a test, plus frontend unit tests, screenshot comparisons and SketchUp's own test files. Every feature after this lands with its tests.
+A small, solid release before drafting:
+
+1. **Format guard**: an older SketchCraft opens a newer file read-only instead of silently dropping what it doesn't understand
+2. **Subdivide button** and a SubD box starter
+3. **Trim keeps nested hardware** and the **Vertical tools layout** (thanks, Kad26)
+4. **The test suite in CI**: UI tests on every PR, a test for every tool, unit tests, screenshot comparisons, SketchUp's own test files
+
+## 0.3.8: Drafting
 
 The biggest reason professionals stay on SketchUp is LayOut, and the biggest
 complaint about LayOut is that it's slow and loses your dimensions. So:
@@ -39,7 +47,7 @@ complaint about LayOut is that it's slow and loses your dimensions. So:
 9. **AI drafting**: "dimension this plan", "lay out a permit set"
 10. **Tables and text blocks**
 
-## 0.3.8: Texturing
+## 0.3.9: Texturing
 
 1. **Blocky Beaver** and a **texturing test set** (dice, can, globe, crate, soccer ball): every feature below is built and tested on them
 2. **glTF / GLB export** with UVs and vertex colours, plus **FBX** and a **lightmap UV channel**
@@ -50,7 +58,7 @@ complaint about LayOut is that it's slow and loses your dimensions. So:
 7. **Textures in SketchUp 2017–2020 imports**
 8. **Vertex painting**
 
-## 0.3.9: Makers
+## 0.3.10: Makers
 
 1. **Fix model**: holes, stray edges, internal faces, reversed faces, merged coplanar faces, in one undoable step
 2. **3D printing check** and **3MF export**

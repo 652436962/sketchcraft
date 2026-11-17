@@ -39,7 +39,7 @@ buttons, forms and tools.
 
 ## Sprint 0 of 0.3.7: testing (from 2026-11-17)
 
-The suite grows with the app: from here on every feature lands with its tests. Issues #49–#54 in the **0.3.7 — Drafting** milestone.
+The suite grows with the app: from here on every feature lands with its tests. Issues #49–#54 in the **0.3.7 — Safety & polish** milestone.
 
 | # | Feature | Asked by | Added | Status | Completed |
 | - | ------- | -------- | ----- | ------ | --------- |
@@ -50,10 +50,10 @@ The suite grows with the app: from here on every feature lands with its tests. I
 | 5 | **SketchUp file corpus in CI** (#53) | Jason | 2026-11-17 | planned | |
 | 6 | **How to run the tests, in CONTRIBUTING** (#54) | Jason | 2026-11-17 | planned | |
 
-## Sprint 3: 0.3.7, drafting (from 2026-11-17)
+## Sprint 3: 0.3.8, drafting (from 2026-11-17)
 
 LayOut-class documentation. People who draft for a living say the money is here, and SketchUp's LayOut does it badly.
-Tracked on GitHub as the **0.3.7 — Drafting** milestone.
+Tracked on GitHub as the **0.3.8 — Drafting** milestone.
 
 | # | Feature | Asked by | Added | Status | Completed |
 | - | ------- | -------- | ----- | ------ | --------- |
@@ -68,10 +68,10 @@ Tracked on GitHub as the **0.3.7 — Drafting** milestone.
 | 9 | **Dimensions and viewports stay attached** when the model changes | SketchUp pain-point research | 2026-11-17 | planned | |
 | 10 | **Trim, extend and continuous dimensions** on sheets | SketchUp pain-point research | 2026-11-17 | planned | |
 
-## Sprint 4: 0.3.8, texturing (from 2026-11-17)
+## Sprint 4: 0.3.9, texturing (from 2026-11-17)
 
 Built-in UV and material tools for rendering and game assets, so the half-dozen texture add-ons aren't needed.
-Tracked on GitHub as the **0.3.8 — Texturing** milestone.
+Tracked on GitHub as the **0.3.9 — Texturing** milestone.
 
 | # | Feature | Asked by | Added | Status | Completed |
 | - | ------- | -------- | ----- | ------ | --------- |
@@ -89,10 +89,10 @@ Tracked on GitHub as the **0.3.8 — Texturing** milestone.
 
 Sprints 5 to 9 come from research into what SketchUp users complain about most (forums, reviews, extension stores). See [ROADMAP.md](ROADMAP.md) for the why.
 
-## Sprint 5: 0.3.9, makers (from 2026-11-17)
+## Sprint 5: 0.3.10, makers (from 2026-11-17)
 
 Quick wins for woodworkers and 3D printing, the people most likely to switch.
-Tracked on GitHub as the **0.3.9 — Makers** milestone.
+Tracked on GitHub as the **0.3.10 — Makers** milestone.
 
 | # | Feature | Asked by | Added | Status | Completed |
 | - | ------- | -------- | ----- | ------ | --------- |
@@ -159,7 +159,7 @@ Tracked on GitHub as the **0.4.3 — Rendering** milestone.
 | SketchCraft Lite (Android) | RuliAvo25, Lasm998 (Reddit) | 2026-11-16 | later | Its own app; touch-first push/pull |
 | More of SketchUp's Ruby API: mouse tools (Sketchup::Tool), HtmlDialog, observers, followme, textures | rats4final (Reddit) | 2026-11-16 | later | The geometry-building core runs (sprint 2, #7) |
 | Library of scale figures (people, cyclists, cars) for pathways | EuphoricPenguin22 (Reddit) | 2026-11-16 | done (2026-11-16) | Ten figures in Library › Scale figures; original art drawn from simple shapes by tools/scale_figures/scale_figures.py, not traced from photos |
-| 2D drafting done right: a dimension style editor (arrows, text, units, precision) and fonts for text and tables, what people miss in CADCraft | Waste-Affect5021 (r/ArtCraftAI, about CADCraft) | 2026-11-16 | in 0.3.7 | Part of sprint 3 (drafting) |
+| 2D drafting done right: a dimension style editor (arrows, text, units, precision) and fonts for text and tables, what people miss in CADCraft | Waste-Affect5021 (r/ArtCraftAI, about CADCraft) | 2026-11-16 | in 0.3.8 | Part of sprint 3 (drafting) |
 
 ## Done before this list
 
