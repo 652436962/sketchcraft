@@ -152,8 +152,9 @@ pub fn serve_with(mut live: Live, opts: Options) -> anyhow::Result<()> {
                     Err(e) => json!({"ok": false, "error": format!("bad JSON: {e}")}),
                 }
             }
-            (Method::Get, "/scene") => live.scene(),
-            (Method::Get, "/sync") => json!(live.sync()),
+            // reads are guarded like commands: a bug on a damaged model answers with an error, not a dead bridge
+            (Method::Get, "/scene") => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| live.scene())).unwrap_or_else(|_| json!({"ok": false, "error": "SketchCraft couldn't draw this model."})),
+            (Method::Get, "/sync") => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| live.sync())).map(|b| json!(b)).unwrap_or_else(|_| json!(false)),
             _ => json!({"ok": false, "error": "not found"}),
         };
         let resp = Response::from_string(body.to_string())

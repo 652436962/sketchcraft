@@ -152,7 +152,7 @@ const LIBRARY: [&str; 3] = ["library", "save_to_library", "library_add"];
 
 /// Commands that only change or inspect the model: safe for plugins.
 const MODEL: &[&str] = &[
-    "rect", "polygon", "line", "circle", "arc", "offset", "follow_me", "pushpull", "push_pull", "move", "rotate", "scale", "duplicate", "array", "delete", "reverse", "paint", "texture", "begin_group", "end_group", "group", "faces", "pick", "copy", "info", "parts", "make_component", "place", "component_cuts", "component_face_me", "edit", "close", "explode", "components", "hide", "unhide", "tag", "tag_visible", "tag_color", "rename_tag", "set_parent", "ungroup", "lock", "soften", "rename", "guide", "clear_guides", "units", "dimension", "text", "save_view", "show_view", "delete_view", "undo", "redo", "render", "door_swing", "levels", "solid", "intersect", "flip", "section", "terrain_from_contours", "terrain_grid", "smoove", "stamp", "drape", "flip_edge", "match_photo", "set_attrs", "cloud_data", "cloud", "connected", "same_as", "resize", "section_plane", "section_edit", "section_off", "set_axes", "finish", "options", "report", "classify", "bevel", "divide", "slice", "material", "subd", "cage_edit", "subdivide", "timeline", "timeline_frames", "weld", "explode_curve", "make_unique", "orient_faces", "text_3d", "text3d", "opacity", "environment", "sun", "volume", "wall", "stairs", "roof", "column", "insert", "assets", "raise_walls", "project_photo", "photo_solve", "purge",
+    "rect", "polygon", "line", "circle", "arc", "offset", "follow_me", "pushpull", "push_pull", "move", "rotate", "scale", "duplicate", "array", "delete", "reverse", "paint", "texture", "begin_group", "end_group", "group", "faces", "pick", "copy", "info", "parts", "make_component", "place", "component_cuts", "component_face_me", "edit", "close", "explode", "components", "hide", "unhide", "tag", "tag_visible", "tag_color", "rename_tag", "set_parent", "ungroup", "lock", "soften", "rename", "guide", "clear_guides", "units", "dimension", "text", "save_view", "show_view", "delete_view", "render", "door_swing", "levels", "solid", "intersect", "flip", "section", "terrain_from_contours", "terrain_grid", "smoove", "stamp", "drape", "flip_edge", "match_photo", "set_attrs", "cloud_data", "cloud", "connected", "same_as", "resize", "section_plane", "section_edit", "section_off", "set_axes", "finish", "options", "report", "classify", "bevel", "divide", "slice", "material", "subd", "cage_edit", "subdivide", "timeline", "timeline_frames", "weld", "explode_curve", "make_unique", "orient_faces", "text_3d", "text3d", "opacity", "environment", "sun", "volume", "wall", "stairs", "roof", "column", "insert", "assets", "raise_walls", "project_photo", "photo_solve", "purge",
 ];
 
 /// Commands that read or write files (or run converters on them): agents get
@@ -160,6 +160,13 @@ const MODEL: &[&str] = &[
 const FILES: &[&str] = &[
     "save", "open", "new", "export_obj", "export_glb", "export_stl", "export_dae", "export_dxf", "export_pdf", "export_ifc", "export_dwg", "import_obj", "import_skp", "import_cloud", "import_ifc", "import_dxf", "import_dwg", "import_fbx", "animate", "sheets", "blueprint", "photoreal", "thumbnail", "insert_file", "save_to_library", "library_add", "library", "save_image", "add_location",
 ];
+
+/// Commands only an agent may add to `MODEL`. `undo`/`redo` are not a plugin's: a plugin run is already one undo step
+/// (and the app takes its own forced backup), and a plugin that is no longer inside its batch (cut off by the clock
+/// or by the person's own edit) would be stepping back through the *person's* history. An agent's undo is its own
+/// process's history of its own steps (a separate engine, per-client undo: it is value-checked against the file, so it
+/// can't take back the person's or another program's work), and an agent that makes a mistake has no other way back.
+const AGENT_EXTRA: &[&str] = &["undo", "redo"];
 
 // Everything else (plugins, plugin_enable, install_plugin, remove_plugin,
 // save_text, reveal, skins, save_skin, video_frame, video_finish) is for the
@@ -170,7 +177,7 @@ pub fn permits(caller: &Caller, cmd: &str) -> bool {
     match caller {
         Caller::Ui => true,
         Caller::Plugin => MODEL.contains(&cmd),
-        Caller::Mcp(_) => MODEL.contains(&cmd) || FILES.contains(&cmd),
+        Caller::Mcp(_) => MODEL.contains(&cmd) || FILES.contains(&cmd) || AGENT_EXTRA.contains(&cmd),
     }
 }
 
@@ -391,6 +398,12 @@ pub fn vet(caller: &Caller, cmd: &mut Value) -> Result<(), String> {
                     ok.map_err(|e| format!("\"{name}\" {key}: {e}"))?;
                 }
             }
+            // the file it makes is judged like any other file an agent writes: never one that looks like work SketchCraft set aside
+            if name == "save_to_library" {
+                if let Some(n) = cmd.get("name").and_then(Value::as_str) {
+                    reject_side_name(Path::new(&format!("{n}.sketchcraft")))?;
+                }
+            }
         }
         // library_add copies files: what it would create is judged like any other file an agent writes
         if name == "library_add" {
@@ -461,10 +474,13 @@ mod tests {
         for ok in ["rect", "pushpull", "move", "info", "render"] {
             assert!(permits(&c, ok), "{ok}");
         }
-        for no in ["save_text", "install_plugin", "plugin_enable", "remove_plugin", "reveal", "skins", "save_skin", "add_location", "photoreal", "video_finish", "save", "open", "import_obj", "export_obj", "new", "animate", "plugins", "made_up"] {
+        for no in ["undo", "redo", "save_text", "install_plugin", "plugin_enable", "remove_plugin", "reveal", "skins", "save_skin", "add_location", "photoreal", "video_finish", "save", "open", "import_obj", "export_obj", "new", "animate", "plugins", "made_up"] {
             assert!(!permits(&c, no), "{no}");
         }
         assert!(vet(&c, &mut json!({"cmd": "render", "out": "/tmp/x.png"})).is_err());
+        // an agent keeps undo (its own steps), a plugin doesn't
+        let agent = Caller::Mcp(Workspace::anywhere());
+        assert!(permits(&agent, "undo") && permits(&agent, "redo"));
         assert!(vet(&c, &mut json!({"cmd": "rect", "from": [0, 0, 0], "to": [1, 1, 0]})).is_ok());
     }
 

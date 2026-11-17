@@ -36,7 +36,7 @@ const DESTRUCTIVE: [&str; 8] = ["new", "open", "delete", "purge", "explode", "un
 const FORCE_EVERY_UI: Duration = Duration::from_secs(15);
 const FORCE_EVERY_OTHER: Duration = Duration::from_secs(60);
 /// The biggest file a restore will read.
-const MAX_RESTORE_BYTES: u64 = 1 << 30;
+const MAX_RESTORE_BYTES: u64 = crate::commands::MAX_OPEN_BYTES;
 
 /// A forced ("pre") backup of the outgoing file: who asked, what kind of step, and whether it is
 /// exempt from pacing (only a restore the person asked for, or an explicit save, is).
@@ -150,7 +150,14 @@ impl Live {
         // program's save takes back the person's step and never the other program's work
         let history = if at_start { None } else { self.engine.history_for_reload() };
         let r = self.engine.exec_json(&json!({"cmd": "open", "path": self.doc}).to_string());
-        if r["ok"] == true {
+        if r["ok"] != true {
+            // the file wasn't taken: the steps (set aside above, not yet worked out) stay as they were
+            if let Some(h) = history {
+                self.engine.install_history(h);
+            }
+            return self.load_failed(r, at_start);
+        }
+        {
             if let Some(d) = ctx.filter(|d| self.engine.model.definitions.contains_key(d)) {
                 self.engine.ctx = Some(d);
             }
@@ -173,6 +180,10 @@ impl Live {
             }
             return true;
         }
+    }
+
+    /// The model file couldn't be read: set it aside, keep what memory holds.
+    fn load_failed(&mut self, r: Value, at_start: bool) -> bool {
         let why = r["error"].as_str().unwrap_or("unknown error").to_string();
         let aside = self.unique_damaged_path();
         match std::fs::copy(&self.doc, &aside) {
@@ -221,8 +232,10 @@ impl Live {
     /// Keep the side files of one kind within `KEEP_SIDE` files and `KEEP_SIDE_BYTES`: the oldest of the ones this
     /// program wrote go first, the newest never, and whatever goes is named in a notice.
     fn prune_side(&mut self, kind: Side) {
-        let indexed = backups::read_index(&self.doc);
-        let all: Vec<(Side, u64, PathBuf, u64)> = backups::side_files(&self.doc).into_iter().filter(|(k, ..)| *k == kind).collect();
+        // an index that exists but can't be read: nothing is known about which files are ours, so nothing is removed
+        let Some(indexed) = backups::read_index_checked(&self.doc) else { return };
+        // only the files this program wrote count toward the limits; others (older builds, the person's own) are not ours to count or remove
+        let all: Vec<(Side, u64, PathBuf, u64)> = backups::side_files(&self.doc).into_iter().filter(|(k, _, p, _)| *k == kind && p.file_name().is_some_and(|n| indexed.contains(&n.to_string_lossy().into_owned()))).collect();
         let mut total: u64 = all.iter().map(|x| x.3).sum();
         let mut count = all.len();
         let mut removed: Vec<String> = vec![];
@@ -231,8 +244,7 @@ impl Live {
                 break;
             }
             let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            // only what we wrote; a file with such a name that we didn't make is left alone
-            if indexed.contains(&name) && std::fs::remove_file(p).is_ok() {
+            if std::fs::remove_file(p).is_ok() {
                 count -= 1;
                 total -= size;
                 removed.push(name);
@@ -469,7 +481,9 @@ impl Live {
             let pace = if f.origin == Origin::Ui { FORCE_EVERY_UI } else { FORCE_EVERY_OTHER };
             match self.last_forced.get(&f.origin) {
                 None => true,
-                Some((t, sz)) => f.big || now.duration_since(*t).unwrap_or(pace) >= pace || size > sz.saturating_mul(2) || size.saturating_mul(2) < *sz,
+                // the person's own steps may beat the clock when the model changed a lot; an agent's or a plugin's may not
+                // (a loop alternating two sizes would otherwise push the person's last good copy out of its slots)
+                Some((t, sz)) => f.big || now.duration_since(*t).unwrap_or(pace) >= pace || (f.origin == Origin::Ui && (size > sz.saturating_mul(2) || size.saturating_mul(2) < *sz)),
             }
         });
         if force.is_none() && !timed_due {
@@ -534,7 +548,9 @@ impl Live {
     }
 
     pub fn scene(&self) -> Value {
-        let mut s = crate::scene::build(&self.engine.model, self.engine.ctx);
+        // a model that is damaged in some way nobody thought of must not take the bridge or the app down on every poll
+        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::scene::build(&self.engine.model, self.engine.ctx)));
+        let mut s = built.unwrap_or_else(|_| json!({"faces": [], "edges": [], "error": "SketchCraft couldn't draw this model (it holds something inconsistent). Restore from a backup (File > Restore from backup...) or open another file."}));
         s["doc"] = json!(self.doc);
         if let (Some(n), Some(at)) = (&self.notice, self.notice_at) {
             if SystemTime::now().duration_since(at).unwrap_or_default() < NOTICE_FOR || self.blocked || self.dirty || self.engine.oversize || self.sticky.as_ref().is_some_and(|p| p.exists()) {
@@ -563,7 +579,9 @@ impl Live {
             let by = if b.pre && b.origin != Origin::Ui { format!(" by {}", b.origin.name()) } else { String::new() };
             items.push(json!({"kind": "backup", "name": b.name(), "secs": b.secs, "size": b.size, "label": format!("{what}{by}")}));
         }
-        let mut side = backups::side_files(&self.doc);
+        // only what this program wrote and noted in its hidden index: a file that merely has such a name is not offered
+        let indexed = backups::read_index(&self.doc);
+        let mut side: Vec<_> = backups::side_files(&self.doc).into_iter().filter(|(_, _, p, _)| p.file_name().is_some_and(|n| indexed.contains(&n.to_string_lossy().into_owned()))).collect();
         side.reverse();
         for (kind, secs, path, size) in side {
             items.push(json!({"kind": kind.word(), "name": path.file_name().map(|n| n.to_string_lossy().into_owned()), "secs": secs, "size": size, "label": kind.label()}));
@@ -580,7 +598,7 @@ impl Live {
         let stem = self.stem();
         let path = match kind {
             "backup" if backups::parse(&stem, name).is_some() => self.doc.parent().map(|d| d.join("Backups").join(name)),
-            "unsaved" | "damaged" if backups::parse_side(&stem, name).is_some_and(|(s, _)| s.word() == kind) => self.doc.parent().filter(|d| !d.as_os_str().is_empty()).map(|d| d.join(name)).or_else(|| Some(PathBuf::from(name))),
+            "unsaved" | "damaged" if backups::parse_side(&stem, name).is_some_and(|(s, _)| s.word() == kind) && backups::read_index(&self.doc).iter().any(|n| n == name) => self.doc.parent().filter(|d| !d.as_os_str().is_empty()).map(|d| d.join(name)).or_else(|| Some(PathBuf::from(name))),
             _ => None,
         };
         let path = path.ok_or_else(|| "that isn't one of the model's backups".to_string())?;

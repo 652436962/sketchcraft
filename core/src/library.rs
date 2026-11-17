@@ -391,5 +391,7 @@ fn copy_into(src: &Path, dest: &Path, to_real: &Path) -> Result<()> {
 pub fn safe(s: &str) -> String {
     let t: String = s.chars().map(|c| if c.is_alphanumeric() || " -_.()".contains(c) { c } else { ' ' }).collect();
     let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
+    // never a name that could be taken for a file SketchCraft sets aside beside a model (`x.unsaved-<time>`, `x.damaged-<time>`)
+    let t = t.replace(".unsaved-", "_unsaved-").replace(".damaged-", "_damaged-");
     if t.is_empty() || t.starts_with('.') { "Untitled".into() } else { t }
 }

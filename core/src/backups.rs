@@ -157,26 +157,38 @@ pub fn list(dir: &Path, stem: &str, now: u64) -> Vec<Backup> {
 struct Quota {
     max: usize,
     bytes: u64,
-    /// "pre" backups newer than this are never thinned
+    /// "pre" backups newer than this are protected (they go only after the plain ones)
     pre_secs: u64,
+    /// the byte limit never takes the number of backups below this (the newest and the biggest-last-day excepted from nothing:
+    /// a few huge files can't push every good backup out)
+    min_keep: usize,
 }
 
-const PERSON: Quota = Quota { max: 60, bytes: 2 << 30, pre_secs: 3600 };
-const OTHER: Quota = Quota { max: 10, bytes: 256 << 20, pre_secs: 86_400 };
+const PERSON: Quota = Quota { max: 80, bytes: 2 << 30, pre_secs: 3600, min_keep: 6 };
+const OTHER: Quota = Quota { max: 10, bytes: 256 << 20, pre_secs: 7 * 86_400, min_keep: 3 };
 /// The newest few are always kept.
 const KEEP_NEWEST: usize = 8;
 /// What the person's own backups are limited to, for the notice and tests.
 pub const MAX_PERSON: usize = PERSON.max;
 pub const MAX_OTHER: usize = OTHER.max;
 
+/// Who goes first when there are too many or too big: the lowest tier, oldest first (by bytes: biggest first).
+const T_PLAIN: u8 = 0;
+const T_PROTECTED: u8 = 1;
+/// one survivor per hour for a day and per day for a month: the person's way back, however many deletes there were
+const T_SPREAD: u8 = 2;
+const T_NEWEST: u8 = 3;
+
 /// Which backups (given in any order) to delete. Each origin is judged on its own, so one origin's
 /// flood never costs another its backups.
 ///
 /// The person's: the newest 8; of the older ones the newest of each 30 s (last 10 min), 5 min (last
 /// hour), hour (two days) and day; every "pre" backup for an hour; and the biggest of the last day;
-/// at most 60 files and 2 GB (the oldest unprotected go first, never the newest).
-/// An agent's or a plugin's (always "pre"): the newest 9 and the oldest of the last day, at most 10
-/// files and 256 MB, nothing older than a day (but the newest).
+/// at most 80 files and 2 GB. When there are too many, the plain ones go first, then the "pre" ones,
+/// and the hourly (last day) and daily (last month) survivors only after those, so a long run of deletes
+/// can't push out the older history; when too big, the biggest go first and never below 6 files.
+/// An agent's or a plugin's (always "pre"): the newest 9 and the oldest of the last week, at most 10
+/// files and 256 MB, nothing older than a week (but the newest).
 pub fn to_delete(all: &[Backup], now: u64) -> Vec<PathBuf> {
     let mut out = vec![];
     for (origin, quota) in [(Origin::Ui, &PERSON), (Origin::Agent, &OTHER), (Origin::Plugin, &OTHER)] {
@@ -186,17 +198,33 @@ pub fn to_delete(all: &[Backup], now: u64) -> Vec<PathBuf> {
     out
 }
 
-fn enforce_bytes(all: &[Backup], keep: &mut [bool], protected: &[bool], limit: u64) {
+/// Drop what is over the count (lowest tier, oldest first), then what is over the bytes (lowest tier, biggest
+/// first, never below `min_keep` files); the newest is never dropped.
+fn evict(all: &[Backup], keep: &mut [bool], tier: &[u8], q: &Quota) {
+    let n = all.len();
+    let mut kept = keep.iter().filter(|k| **k).count();
+    for t in [T_PLAIN, T_PROTECTED, T_SPREAD] {
+        for i in 0..n.saturating_sub(1) {
+            if kept <= q.max {
+                break;
+            }
+            if keep[i] && tier[i] == t {
+                keep[i] = false;
+                kept -= 1;
+            }
+        }
+    }
     let mut total: u64 = all.iter().zip(keep.iter()).filter(|(_, k)| **k).map(|(b, _)| b.size).sum();
-    for pass in [false, true] {
-        for i in 0..all.len().saturating_sub(1) {
-            if total <= limit {
+    for t in [T_PLAIN, T_PROTECTED, T_SPREAD] {
+        let mut idx: Vec<usize> = (0..n.saturating_sub(1)).filter(|&i| keep[i] && tier[i] == t).collect();
+        idx.sort_by(|&a, &b| all[b].size.cmp(&all[a].size).then(a.cmp(&b)));
+        for i in idx {
+            if total <= q.bytes || kept <= q.min_keep {
                 return;
             }
-            if keep[i] && (pass || !protected[i]) {
-                keep[i] = false;
-                total -= all[i].size;
-            }
+            keep[i] = false;
+            kept -= 1;
+            total -= all[i].size;
         }
     }
 }
@@ -204,8 +232,10 @@ fn enforce_bytes(all: &[Backup], keep: &mut [bool], protected: &[bool], limit: u
 fn thin_person(all: &[Backup], now: u64, q: &Quota) -> Vec<PathBuf> {
     let mut all = all.to_vec();
     all.sort_by(|a, b| (a.secs, a.n, a.pre).cmp(&(b.secs, b.n, b.pre)));
-    let mut keep = vec![false; all.len()];
-    let cut = all.len().saturating_sub(KEEP_NEWEST);
+    let n = all.len();
+    let mut keep = vec![false; n];
+    let mut tier = vec![T_PLAIN; n];
+    let cut = n.saturating_sub(KEEP_NEWEST);
     let mut seen = std::collections::HashSet::new();
     // newest first, so the first seen in a bucket is the newest in it
     for (i, b) in all.iter().enumerate().rev() {
@@ -223,36 +253,38 @@ fn thin_person(all: &[Backup], now: u64, q: &Quota) -> Vec<PathBuf> {
         };
         keep[i] = seen.insert(bucket);
     }
+    // the way back over time: the newest of each hour for a day, of each day for a month
+    let mut spread_seen = std::collections::HashSet::new();
+    for (i, b) in all.iter().enumerate().rev() {
+        let age = now.saturating_sub(b.secs);
+        let bucket = match age {
+            600..86_400 => Some((0u8, b.secs / 3600)),
+            86_400..2_592_000 => Some((1, b.secs / 86_400)),
+            _ => None,
+        };
+        if let Some(bk) = bucket {
+            if spread_seen.insert(bk) {
+                keep[i] = true;
+                tier[i] = T_SPREAD;
+            }
+        }
+    }
     let day = |b: &Backup| now.saturating_sub(b.secs) < 86_400;
-    let mut protected = vec![false; all.len()];
     for (i, b) in all.iter().enumerate() {
         if b.pre && now.saturating_sub(b.secs) < q.pre_secs {
-            protected[i] = true;
+            keep[i] = true;
+            tier[i] = tier[i].max(T_PROTECTED);
         }
     }
     if let Some((i, _)) = all.iter().enumerate().filter(|(_, b)| day(b)).max_by_key(|(_, b)| b.size) {
-        protected[i] = true;
+        keep[i] = true;
+        tier[i] = tier[i].max(T_PROTECTED);
     }
-    if let Some(last) = protected.last_mut() {
-        *last = true; // the newest is never dropped
+    if let Some(last) = tier.last_mut() {
+        *last = T_NEWEST; // the newest is never dropped
+        keep[n - 1] = true;
     }
-    for i in 0..all.len() {
-        keep[i] |= protected[i];
-    }
-    // over the count: the oldest unprotected go first, then the oldest protected (never the newest)
-    let mut kept = keep.iter().filter(|k| **k).count();
-    for pass in [false, true] {
-        for i in 0..all.len().saturating_sub(1) {
-            if kept <= q.max {
-                break;
-            }
-            if keep[i] && (pass || !protected[i]) {
-                keep[i] = false;
-                kept -= 1;
-            }
-        }
-    }
-    enforce_bytes(&all, &mut keep, &protected, q.bytes);
+    evict(&all, &mut keep, &tier, q);
     all.iter().zip(keep).filter(|(_, k)| !*k).map(|(b, _)| b.path.clone()).collect()
 }
 
@@ -261,33 +293,21 @@ fn thin_other(all: &[Backup], now: u64, q: &Quota) -> Vec<PathBuf> {
     all.sort_by(|a, b| (a.secs, a.n, a.pre).cmp(&(b.secs, b.n, b.pre)));
     let n = all.len();
     let mut keep = vec![true; n];
-    let mut protected = vec![false; n];
-    // nothing older than a day, except the newest
+    let mut tier = vec![T_PLAIN; n];
+    // nothing older than the window, except the newest
     for (i, b) in all.iter().enumerate() {
         if i + 1 < n && now.saturating_sub(b.secs) >= q.pre_secs {
             keep[i] = false;
         }
     }
-    // the oldest still in its day is the state closest to before the run started: it is kept through a flood
+    // the oldest still in its window is the state closest to before the run started: it is kept through a flood
     if let Some(i) = (0..n).find(|&i| keep[i]) {
-        protected[i] = true;
+        tier[i] = T_SPREAD;
     }
     if n > 0 {
-        protected[n - 1] = true;
+        tier[n - 1] = T_NEWEST;
     }
-    let mut kept = keep.iter().filter(|k| **k).count();
-    for pass in [false, true] {
-        for i in 0..n.saturating_sub(1) {
-            if kept <= q.max {
-                break;
-            }
-            if keep[i] && (pass || !protected[i]) {
-                keep[i] = false;
-                kept -= 1;
-            }
-        }
-    }
-    enforce_bytes(&all, &mut keep, &protected, q.bytes);
+    evict(&all, &mut keep, &tier, q);
     all.iter().zip(keep).filter(|(_, k)| !*k).map(|(b, _)| b.path.clone()).collect()
 }
 
@@ -347,7 +367,16 @@ pub fn index_path(doc: &Path) -> PathBuf {
 }
 
 pub fn read_index(doc: &Path) -> Vec<String> {
-    std::fs::read_to_string(index_path(doc)).ok().and_then(|t| serde_json::from_str::<Vec<String>>(&t).ok()).unwrap_or_default()
+    read_index_checked(doc).unwrap_or_default()
+}
+
+/// The index, or None when there is one that can't be read (deleted: an empty list, nothing is ours yet).
+pub fn read_index_checked(doc: &Path) -> Option<Vec<String>> {
+    match std::fs::read_to_string(index_path(doc)) {
+        Ok(t) => serde_json::from_str::<Vec<String>>(&t).ok(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(vec![]),
+        Err(_) => None,
+    }
 }
 
 pub fn write_index(doc: &Path, names: &[String]) {
