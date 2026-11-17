@@ -1619,6 +1619,16 @@ fn subdivision_rounds_a_cage_like_blender() {
     let b = box_group(&mut e, [3.0, 0.0, 0.0], [5.0, 2.0, 2.0], "Box") as u32;
     let r = run(&mut e, json!({"cmd":"subdivide","id":b,"levels":1}));
     assert!(r["faces"].as_u64().unwrap() >= 48);
+    // ...and it can be shaped afterwards: subdivide keeps the box as an editable cage (#56)
+    let s = r["group"].as_u64().unwrap() as u32;
+    let ed = e.model.cages.get(&s).expect("subdivide keeps an editable cage");
+    assert_eq!((ed.points.len(), ed.faces.len(), ed.levels), (8, 6, 1));
+    let r = run(&mut e, json!({"cmd":"cage_edit","id":s,"moves":[[0, 3.0, 0.0, -0.5]]}));
+    assert_eq!(r["cage_points"], 8, "{r}");
+    // one Undo takes back the edit; another takes back the subdivide (group and cage)
+    run(&mut e, json!({"cmd":"undo"}));
+    run(&mut e, json!({"cmd":"undo"}));
+    assert!(!e.model.cages.contains_key(&s) && !e.model.groups.contains_key(&s), "undo removes the smooth group and its cage");
 }
 
 #[test]

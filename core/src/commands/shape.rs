@@ -86,6 +86,20 @@ impl Engine {
                 let Some(old) = m.groups.get(&id).cloned() else { bail!("{id} is not a group") };
                 m.check_unlocked(&[id])?;
                 let cage = crate::subd::cage_of(m, id, keep_sharp)?;
+                // keep the cage, so the result opens in SubD mode (Tab) like one made with `subd`
+                let mut ed = crate::subd::Editable {
+                    points: cage.points.iter().map(|p| p.to_array()).collect(),
+                    faces: cage.faces.clone(),
+                    materials: cage.materials.clone(),
+                    creases: {
+                        let mut c: Vec<[usize; 2]> = cage.creases.iter().map(|&(a, b)| [a, b]).collect();
+                        c.sort();
+                        c
+                    },
+                    levels: (levels as usize).clamp(0, 5),
+                    symmetry: None,
+                };
+                ed.detect_symmetry();
                 m.delete(&[id])?;
                 let prev = m.active_group;
                 m.active_group = old.parent;
@@ -95,6 +109,7 @@ impl Engine {
                     x.parent = old.parent;
                     x.tag = old.tag;
                 }
+                m.cages.insert(g, ed);
                 json!({"group": g, "faces": m.faces.values().filter(|f| f.group == Some(g)).count()})
             }
             Command::FlipEdge { edge } => {
