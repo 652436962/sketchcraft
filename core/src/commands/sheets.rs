@@ -740,7 +740,7 @@ impl Engine {
                 if !specs.is_empty() || (m.sheets.is_empty() && saved.is_empty()) {
                     // the one-shot set: nothing saved
                     let paper = sheet.unwrap_or_else(|| "a3".into());
-                    let (n, warnings) = crate::layout::write_sheets_notes(m, &path, &paper, &project.unwrap_or_else(stem), specs.into_iter().cloned().collect(), blueprint.unwrap_or(false), &notes.unwrap_or_default(), true, page)?;
+                    let (n, warnings) = crate::layout::write_sheets_kept(m, &path, &paper, &project.unwrap_or_else(stem), specs.into_iter().cloned().collect(), blueprint.unwrap_or(false), &notes.unwrap_or_default(), true, page, Some(&self.drawings))?;
                     return Ok(json!({"path": path, "pages": n, "warnings": warnings}));
                 }
                 // from the saved sheets, in their order (or the ids given, in the order given)
@@ -777,7 +777,7 @@ impl Engine {
                 let blueprint = blueprint.unwrap_or_else(|| first.fields.get("blueprint").is_some_and(|b| b == "true"));
                 let pages: Vec<PageSpec> = chosen.iter().map(|id| page_of(m, *id)).collect();
                 // saved sheets are drawn as they are: an empty one stays empty
-                let (n, warnings) = crate::layout::write_sheets_notes(m, &path, &paper, &project, pages, blueprint, &notes, false, page)?;
+                let (n, warnings) = crate::layout::write_sheets_kept(m, &path, &paper, &project, pages, blueprint, &notes, false, page, Some(&self.drawings))?;
                 json!({"path": path, "pages": n, "paper": paper, "warnings": warnings})
             }
             other => unreachable!("command routed to the wrong group: {other:?}"),
@@ -1066,7 +1066,8 @@ impl Engine {
         vps.sort_by_key(|(z, id, _)| (*z, *id));
         let sh = m.sheets.get(&sheet).map_or(297.0, |s| s.paper.h_mm);
         let bm = crate::environment::without(m);
-        let pens = crate::draft::ir::Pens::new(false);
+        let mut pens = crate::draft::ir::Pens::new(false);
+        pens.world = Some(self.drawings.world());
         for (_, id, v) in vps {
             if v.rect_mm[2] <= 0.0 || v.rect_mm[3] <= 0.0 {
                 continue;
@@ -1078,7 +1079,7 @@ impl Engine {
                 continue;
             }
             let spec = viewport_to_spec(v);
-            match crate::draft::sheet::viewport(m, &bm, &spec, &pens, sh) {
+            match crate::draft::sheet::draw_viewports(m, &bm, std::slice::from_ref(&spec), &pens, sh, Some(&self.drawings), None).pop().unwrap_or_else(|| Err(anyhow::anyhow!("not drawn"))) {
                 Ok(prims) => {
                     let mut flat: Vec<linework::Curve> = Vec::new();
                     fn walk(items: &[crate::draft::ir::Prim], inside: bool, out: &mut Vec<linework::Curve>) {
