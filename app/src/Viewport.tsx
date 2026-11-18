@@ -1084,8 +1084,9 @@ export default function Viewport(props: Props) {
     let best: { id: number; d: number } | null = null;
     for (const ed of s.edgeList) {
       if (ed.soft && !live.current.styles.xray && live.current.tool !== "flipedge") continue;
-      // edges inside a closed group belong to the group: the click takes the group
-      if (selectableGroup(ed.group) != null) continue;
+      // edges inside a closed group belong to the group: the click takes the group.
+      // Flip edge is the exception: it works on terrain, which is always a group (like the other Sandbox tools)
+      if (live.current.tool !== "flipedge" && selectableGroup(ed.group) != null) continue;
       const a = sc(V(ed.a));
       const b = sc(V(ed.b));
       const ab = b.clone().sub(a);

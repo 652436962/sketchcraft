@@ -979,11 +979,10 @@ await scenario('drape', ['drape'], async () => {
 });
 
 await scenario('flipedge', ['flipedge'], async () => {
-  // The terrain is a group, and a click on an edge inside a closed group takes the group (see the note in the report:
-  // Flip edge finds nothing until the Terrain group is opened for editing), so the group is opened first.
+  // The terrain is a closed group: Flip edge reaches inside it, as the other Sandbox tools do (it used to find nothing
+  // until the group was opened for editing)
   await fresh(async (X) => {
-    const { g } = await terrain(X);
-    await X({ cmd: 'edit', id: g });
+    await terrain(X);
   });
   const s0 = await scene();
   // a diagonal between two triangles: an edge that is neither along x nor along y (the grid's diagonals are soft edges)
