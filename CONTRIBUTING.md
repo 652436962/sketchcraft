@@ -113,15 +113,27 @@ A failed comparison leaves `<name>.actual.png` and `<name>.diff.png` (changed pi
 If your platform has no references yet, the suite does not fail: it saves what it saw (CI uploads them as the
 `visual-candidates` artifact), and committing those, after looking at them, makes the references.
 
+## How changes flow
+
+```
+feature/*  --PR-->  develop  --PR-->  staging  --PR-->  main  --tag v*-->  release
+```
+
+- **Open your pull request against `develop`** (the default branch), from a short-lived branch such as `feature/hatch-patterns` or `fix/flip-edge`. It's squash-merged when CI is green, and the branch is deleted.
+- **`staging`** is the release candidate: `develop` is merged into it when a release is close, and the full browser suite has to pass there.
+- **`main`** holds released code only. It takes pull requests from `staging`, and releases are tagged from it.
+- The `flow` check refuses a pull request into `staging` that doesn't come from `develop`, and one into `main` that doesn't come from `staging`.
+
 ## What CI checks on a pull request
 
-`.github/workflows/ci.yml` runs on every pull request and every push to `main`. A change is ready when all of it is green:
+`.github/workflows/ci.yml` runs on every pull request and every push to `develop`, `staging` and `main`. A change is ready when all of it is green:
 
 | Job | What it runs |
 | --- | ------------ |
 | `test` | the Rust engine tests (including the SketchUp corpus and the importer fuzzing), `tsc`, `npm run check`, the Vitest unit tests; that every action is pinned to a commit SHA; that CI and `rust-toolchain.toml` name the same Rust |
-| `ui-tests` | builds the release engine, installs a pinned Playwright and Chromium, starts a scratch bridge and the dev page, and runs all the browser suites above, visual regression included. A failure uploads screenshots and traces |
+| `ui-tests` | **on `staging`, `main` and release tags** (and pull requests into them): builds the release engine, installs a pinned Playwright and Chromium, starts a scratch bridge and the dev page, and runs all the browser suites above, visual regression included. A failure uploads screenshots and traces |
 | `audit` | no high advisory in the shipped npm packages; lockfiles name only the public registries |
+| `flow` | pull requests into `staging` and `main` come from the branch before them |
 
 CI has read-only access to the repository and no secrets. Every third-party action is pinned to a full commit SHA.
 The only dependency added for testing is Vitest, at an exact version.

@@ -1,8 +1,9 @@
 name: CI
 
 on:
+  # Branch flow (CONTRIBUTING.md): feature/* -> develop -> staging -> main, then a v* tag on main.
   push:
-    branches: [main]
+    branches: [develop, staging, main]
   pull_request:
   # The release workflow runs these same checks before building anything.
   workflow_call:
@@ -68,7 +69,14 @@ jobs:
   # Playwright is not an app dependency: it is installed here, at a pinned version, into a folder outside the
   # repository (SKETCHCRAFT_PLAYWRIGHT; tools/demos/lib.mjs looks there). Its browser download is not cached:
   # a cache entry is writable by any workflow run on the repository, and the download is about a minute.
+  #
+  # The full browser suite gates release candidates: it runs on staging and main (pushes and PRs into them)
+  # and on release tags (release.yml calls this workflow). develop and feature PRs get the fast jobs only.
   ui-tests:
+    if: >-
+      github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/tags/') ||
+      github.base_ref == 'staging' || github.base_ref == 'main'
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     permissions:
@@ -147,3 +155,26 @@ jobs:
       - name: No high advisory in the packages the app ships
         working-directory: app
         run: npm audit --omit=dev --audit-level=high
+
+  # Release candidates move one way: develop -> staging -> main. A PR into staging must come from develop,
+  # and a PR into main from staging, both in this repository. (Rulesets require this check on those branches.)
+  flow:
+    if: github.event_name == 'pull_request' && (github.base_ref == 'staging' || github.base_ref == 'main')
+    runs-on: ubuntu-22.04
+    permissions: {}
+    steps:
+      - name: The PR comes from the branch before this one
+        env:
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          case "$BASE" in
+            staging) want=develop ;;
+            main) want=staging ;;
+          esac
+          if [ "$HEAD" != "$want" ] || [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::A PR into $BASE has to come from $want in this repository (this one is from $HEAD_REPO:$HEAD). Open feature PRs against develop."
+            exit 1
+          fi
+          echo "ok: $HEAD -> $BASE"

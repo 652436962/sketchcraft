@@ -1,7 +1,9 @@
 # Proposes updates to the pinned GitHub Actions (each is a full commit SHA).
+# Its PRs go to develop, like every other change (CONTRIBUTING.md, "How changes flow").
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
+    target-branch: develop
     schedule:
       interval: weekly
