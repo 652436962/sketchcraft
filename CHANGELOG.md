@@ -6,7 +6,17 @@ What changed in each SketchCraft release, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-11-17
+
 ### Added
+- **Subdivide from the app.** Right-click a group or component (or Shift+S, or the
+  Library's Smooth shapes) › **Subdivide…** turns it into a smooth surface and opens
+  SubD mode to shape its cage (Tab to shape, Enter when done). **SubD box** starts from
+  a cube cage. There's a Learn lesson for it. Before, a subdivided object couldn't be
+  shaped at all. (#56)
+- **A Vertical tools layout** (Themes › Layout): tools down the left in two columns,
+  the Outliner and properties on the right. Classic and Floating stay. Contributed by
+  Kad26. (#46)
 - **Files from a newer SketchCraft open read-only, so an older copy can never damage
   them.** Model files now carry a format number. If a file has a higher one, asks for
   features this version doesn't have, or holds data this version doesn't know, it opens
@@ -15,6 +25,24 @@ What changed in each SketchCraft release, newest first. The format follows
   or plugin that tries to change it gets an error saying why. Restoring from a backup
   and placing library parts follow the same rule. Files from before this check open
   as always. (#57)
+
+### Fixed
+- **Trim keeps nested hardware.** Trimming a door leaf with a handle no longer deletes
+  the handle, and a solid with reversed faces is refused instead of giving a wrong
+  result. Contributed by Kad26. (#45)
+- **The axis gizmo is fully visible in every layout.** In the Vertical layout it sat
+  under the view bar; the tool hint, the SubD bar and the Value box no longer collide
+  either. (#55)
+- **Typed lengths like `10' 6 1/2"` stay one length.** Feet, a space and inches used to
+  be read as two lengths (a width and a height).
+- **Flip edge works on terrain** without opening its group first, like the other
+  Sandbox tools.
+
+### For contributors
+- **A test suite that grows with the app**, run in CI on every pull request: browser
+  tests that drive every tool with a real mouse and keyboard, frontend unit tests,
+  screenshot comparisons in each layout and theme, and SketchUp's own test files
+  (versions 6 to 22) with a corruption run. See CONTRIBUTING.md. (#49–#54)
 
 ## [0.3.6] - 2026-11-17
 
@@ -402,7 +430,8 @@ The first build with installers (never published as a release).
   import and export, and PNG renders with dimensions and labels.
 - Installers for macOS, Windows and Linux, and the CLI for each.
 
-[Unreleased]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.6...HEAD
+[Unreleased]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.7...HEAD
+[0.3.7]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.3...v0.3.4
