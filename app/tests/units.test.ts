@@ -60,10 +60,17 @@ describe("parseLengths", () => {
     close(c, 126 * INCH);
     close(d, 144 * INCH);
   });
-  // BUG (found by this test, recorded in the Sprint 0 report): the comment in splitSpaces says "10' 6 1/2\"" is kept
-  // together, but it comes back as two lengths (10' and 6 1/2"), so typing it into a Rectangle reads width and height.
-  it.fails("keeps feet, a space and inches together as one length", () => {
-    expect(parseLengths("10' 6 1/2\"", "m")).toHaveLength(1);
+  // found by the Sprint 0 tests: "10' 6 1/2\"" used to come back as two lengths (10' and 6 1/2")
+  it("keeps feet, a space and inches together as one length", () => {
+    const [a, ...rest] = parseLengths("10' 6 1/2\"", "m");
+    expect(rest).toHaveLength(0);
+    close(a, (10 * 12 + 6.5) * INCH);
+    // two such lengths, and plain feet pairs, still split into two
+    const two = parseLengths("10' 6 1/2\" 12' 3\"", "m");
+    expect(two).toHaveLength(2);
+    close(two[1], (12 * 12 + 3) * INCH);
+    expect(parseLengths("8' 12'", "m")).toHaveLength(2);
+    expect(parseLengths("2m 3m", "m")).toEqual([2, 3]);
   });
   it("drops what does not parse", () => {
     expect(parseLengths("8, x, 12", "m")).toEqual([8, 12]);

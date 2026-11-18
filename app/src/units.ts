@@ -86,6 +86,14 @@ export function parseLengths(text: string, units: Units | string): number[] {
 }
 
 function splitSpaces(text: string): string[] {
-  // keep "10' 6 1/2\"" together: split only where a new number follows a unit mark
-  return text.trim().split(/(?<=['"a-z])\s+(?=-?\d)/i);
+  // split where a new number follows a unit mark ("8' 12'", "2m 3m")...
+  const parts = text.trim().split(/(?<=['"a-z])\s+(?=-?\d)/i);
+  // ...but keep feet and the inches after them as one length: "10' 6 1/2\"" (as SketchUp reads it)
+  const out: string[] = [];
+  for (const p of parts) {
+    const prev = out[out.length - 1];
+    if (prev !== undefined && /'\s*$/.test(prev) && p.includes('"') && !p.includes("'")) out[out.length - 1] = `${prev} ${p}`;
+    else out.push(p);
+  }
+  return out;
 }
