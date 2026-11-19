@@ -36,6 +36,23 @@ impl Engine {
                 let pts: Vec<DVec3> = points.into_iter().map(v3).collect();
                 json!({"group": m.wall(&pts, thickness, height, closed)?})
             }
+            Command::WallPull { face, by } => {
+                let p = m.wall_pull(face, by)?;
+                json!({"moved": p.moves.len(), "faces": p.faces, "instances": p.instances})
+            }
+            Command::WallInfo { face, at } => {
+                let face = match at {
+                    Some(at) if m.faces.contains_key(&face) && m.normal(face).z.abs() > 0.9999 => m.wall_side_from_top(face, v3(at))?,
+                    _ => face,
+                };
+                let p = m.wall_plan(face)?;
+                let a = |v: DVec3| json!([v.x, v.y, v.z]);
+                json!({
+                    "face": p.a, "other": p.b, "normal": a(p.n), "thickness": p.thickness, "faces": p.faces, "instances": p.instances,
+                    "strips": p.strips.iter().map(|q| q.iter().map(|v| a(*v)).collect::<Vec<_>>()).collect::<Vec<_>>(),
+                    "moves": p.moves.iter().map(|(v, k)| json!({"v": v, "at": a(m.p(*v)), "per_m": a(*k)})).collect::<Vec<_>>(),
+                })
+            }
             Command::Stairs { at, rise, direction, width, tread } => {
                 let (g, risers) = m.stairs(v3(at), direction, width, rise, tread)?;
                 json!({"group": g, "risers": risers, "riser_height": rise / risers as f64})
