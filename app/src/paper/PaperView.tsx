@@ -10,8 +10,15 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { drawPage, IrCache, PAPER_FONT, type Ir } from "./draw";
 import { scaleText, viewName, type ViewportItem } from "./pages";
 import { fit, hitRect, panBy, tilesFor, toPaper, toScreen, zoomAt, zoomPercent, zoomStepUp, type PaperCam } from "./view";
+import { focusNext, useEditor, type EditorProps } from "./editor";
 
 const TILE = 512;
+/** the sheet tools' bar down the left: a fitted page starts clear of it */
+const TOOLS_W = 56;
+const fitBeside = (w: number, h: number, bw: number, bh: number) => {
+  const c = fit(w, h, Math.max(1, bw - TOOLS_W), bh);
+  return { ...c, ox: c.ox + TOOLS_W };
+};
 const MAX_TILES = 40;
 /** most tiles drawn in one frame (the rest come on the next frames, so the view never stalls) */
 const TILES_PER_FRAME = 6;
@@ -27,9 +34,11 @@ interface Props {
   error: string;
   /** names the sheet for screen readers */
   title: string;
+  /** the sheet editor (#9): the page, its items, the tool and what it sends */
+  edit: Omit<EditorProps, "cam" | "size" | "viewports" | "picked" | "onPick">;
 }
 
-export function PaperView({ ir, paper, viewports, picked, onPick, drawing, error, title }: Props) {
+export function PaperView({ ir, paper, viewports, picked, onPick, drawing, error, title, edit }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -71,7 +80,7 @@ export function PaperView({ ir, paper, viewports, picked, onPick, drawing, error
   const pw = paper.w;
   const ph = paper.h;
   useEffect(() => {
-    if (size.w > 0 && size.h > 0) setCam(fit(pw, ph, size.w, size.h));
+    if (size.w > 0 && size.h > 0) setCam(fitBeside(pw, ph, size.w, size.h));
     // only when the page's size or the box changes (not on every redraw)
   }, [pw, ph, size.w > 0 && size.h > 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -170,8 +179,9 @@ export function PaperView({ ir, paper, viewports, picked, onPick, drawing, error
     const i = hitRect(rects, toPaper(cam, s));
     return i < 0 ? null : viewports[i].id;
   };
+  const E = useEditor({ ...edit, cam, size, viewports, picked, onPick });
   const zoomBy = (f: number, at?: [number, number]) => setCam((c) => (c ? zoomAt(c, at ?? [size.w / 2, size.h / 2], f) : c));
-  const fitPage = () => size.w && setCam(fit(pw, ph, size.w, size.h));
+  const fitPage = () => size.w && setCam(fitBeside(pw, ph, size.w, size.h));
 
   useEffect(() => {
     const el = host.current;
@@ -188,8 +198,9 @@ export function PaperView({ ir, paper, viewports, picked, onPick, drawing, error
     return () => el.removeEventListener("wheel", wheel);
   });
 
-  const cursor = panning ? "grabbing" : space ? "grab" : hover != null ? "pointer" : "grab";
-  const hint = space ? "Drag to pan" : hover != null ? "Click to select this viewport" : "Click the paper to select the page · drag to pan · scroll to zoom";
+  const selectTool = edit.tool === "select";
+  const cursor = panning ? "grabbing" : space ? "grab" : E.cursor ?? (hover != null ? "pointer" : "grab");
+  const hint = space ? "Drag to pan" : !selectTool || E.busy ? E.hint : hover != null ? "Click to select this viewport · drag to move it" : E.hoverItem != null ? "Click to select · drag to move · double-click text to edit" : "Click the paper to select the page · drag to pan · scroll to zoom · double-click the title block to edit it";
 
   return (
     <div
@@ -202,12 +213,23 @@ export function PaperView({ ir, paper, viewports, picked, onPick, drawing, error
       style={{ cursor }}
       onPointerDown={(e) => {
         host.current?.focus({ preventScroll: true });
-        drag.current = { ...{ x: e.clientX, y: e.clientY }, moved: false, button: e.button };
         (e.target as Element).setPointerCapture?.(e.pointerId);
+        // the editor's tools first (a left press, not panning with Space)
+        if (!space && E.down(e, local(e))) {
+          // the paper keeps the keys (Enter, Escape, arrows), not the frame or item that was clicked
+          e.preventDefault();
+          return;
+        }
+        drag.current = { ...{ x: e.clientX, y: e.clientY }, moved: false, button: e.button };
         if (e.button === 1 || space) setPanning(true);
       }}
+      onDoubleClick={(e) => E.dbl(e, local(e))}
       onPointerMove={(e) => {
         const d = drag.current;
+        if (!d && !space && E.move(e, local(e))) {
+          setHover(selectTool ? vpAt(local(e)) : null);
+          return;
+        }
         if (d) {
           const dx = e.clientX - d.x;
           const dy = e.clientY - d.y;
@@ -225,6 +247,7 @@ export function PaperView({ ir, paper, viewports, picked, onPick, drawing, error
         setHover(vpAt(local(e)));
       }}
       onPointerUp={(e) => {
+        if (!drag.current && E.up(e, local(e))) return;
         const d = drag.current;
         drag.current = null;
         setPanning(false);
@@ -235,6 +258,11 @@ export function PaperView({ ir, paper, viewports, picked, onPick, drawing, error
         const step = 60;
         const k = e.key;
         let used = true;
+        if (k !== " " && E.key(e)) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
         if (k === "+" || k === "=") zoomBy(1.25);
         else if (k === "-" || k === "_") zoomBy(0.8);
         else if (k === "0") fitPage();
@@ -255,7 +283,7 @@ export function PaperView({ ir, paper, viewports, picked, onPick, drawing, error
     >
       <canvas ref={canvas} className="paper-canvas" aria-hidden="true" />
       {cam && (
-        <svg className="paper-overlay" width={size.w} height={size.h} aria-label="Viewports on this page">
+        <svg className={`paper-overlay tool-${edit.tool}`} width={size.w} height={size.h} aria-label="What's on this page: Tab or the arrow keys go through it">
           {/* the page's edge */}
           <rect className="paper-edge" x={cam.ox} y={cam.oy} width={pw * cam.k} height={ph * cam.k} />
           {viewports.map((v) => {
@@ -274,8 +302,9 @@ export function PaperView({ ir, paper, viewports, picked, onPick, drawing, error
                   height={h}
                   role="button"
                   tabIndex={0}
+                  data-focus=""
                   aria-pressed={on}
-                  aria-label={`Viewport: ${name}`}
+                  aria-label={`Viewport: ${name}${on ? ". Arrows move it (Shift: further), Delete deletes it" : ""}`}
                   onFocus={() => setHover(v.id)}
                   onBlur={() => setHover(null)}
                   onKeyDown={(e) => {
@@ -283,12 +312,17 @@ export function PaperView({ ir, paper, viewports, picked, onPick, drawing, error
                       e.preventDefault();
                       e.stopPropagation();
                       onPick(on ? null : v.id);
+                    } else if (!on && e.key.startsWith("Arrow")) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      focusNext(e.currentTarget, e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : -1);
                     }
                   }}
                 >
-                  <title>{`${name}. Click to select it.`}</title>
+                  <title>{`${name}. Click to select it, drag to move it.`}</title>
                 </rect>
                 {on &&
+                  !selectTool &&
                   [
                     [x, y],
                     [x + w / 2, y],
@@ -307,8 +341,10 @@ export function PaperView({ ir, paper, viewports, picked, onPick, drawing, error
               </g>
             );
           })}
+          {E.overlay}
         </svg>
       )}
+      {E.html}
       <div className="paper-bar" role="toolbar" aria-label="Paper view" onPointerDown={(e) => e.stopPropagation()}>
         <button title="Zoom out (−)" aria-label="Zoom out" onClick={() => zoomBy(0.8)}>
           −
@@ -322,7 +358,9 @@ export function PaperView({ ir, paper, viewports, picked, onPick, drawing, error
         <button title="Fit the page in the window (0)" onClick={fitPage}>
           Fit
         </button>
-        <span className="paper-hint">{hint}</span>
+        <span className="paper-hint" role="status" aria-live="polite">
+          {hint}
+        </span>
       </div>
       {(drawing || error || ir?.truncated) && (
         <div className={`paper-status ${error ? "bad" : ""}`} role="status">
