@@ -194,6 +194,62 @@ pub enum Command {
     TagVisible { tag: String, visible: bool },
     /// A tag's color (for Color by tag); null clears it.
     TagColor { tag: String, color: Option<[f32; 3]> },
+    /// A tag's line weight (paper mm, 0.05 to 2; 0 clears it), line style (solid, dashed, hidden, center, or a line
+    /// type name; "" clears it) and colour ("#rrggbb"; "" clears it) on drawing sheets and in the model view. Only
+    /// what is given changes; `clear: true` removes the tag's whole style.
+    TagStyle {
+        tag: String,
+        #[serde(default)]
+        weight_mm: Option<f64>,
+        #[serde(default)]
+        line: Option<String>,
+        #[serde(default)]
+        color: Option<String>,
+        /// the hatch the tag's cut surfaces get in plans and sections: `{pattern, color?, weight_mm?, scale?, angle?,
+        /// scale_mode?: paper|model}`; only what is given changes; `{"pattern": ""}` removes it
+        #[serde(default)]
+        hatch: Option<HatchArgs>,
+        /// how the tag's cut surfaces are filled and outlined in plans and sections (sheets and the on-screen
+        /// section): `{fill?: auto|solid|hatch|none, color? ("#rrggbb" for solid; "" clears), outline_mm? (0.05 to 2;
+        /// 0 clears), priority? (0 to 999: the higher tag wins where cuts overlap)}`; only what is given changes
+        #[serde(default)]
+        cut: Option<CutArgs>,
+        #[serde(default)]
+        clear: bool,
+    },
+    /// Keep a hatch pattern in the model (`.pat` text, AutoCAD format) under `name`, so tag hatches can use it.
+    /// `text` may hold several patterns: the one called `name` is taken (or the only one). `units` is what a file
+    /// that doesn't say means (`mm` or `inch`; AutoCAD's own set is in inches). `delete: true` removes it.
+    HatchPattern {
+        name: String,
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        units: Option<String>,
+        #[serde(default)]
+        delete: bool,
+    },
+    /// Read-only: every hatch pattern a tag can use (built-in and in the model), with its lines; with `text`, the
+    /// patterns in that `.pat` text instead (nothing is kept), and what in it couldn't be read.
+    HatchPatterns {
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        units: Option<String>,
+    },
+    /// The same for single edges (`ids`: edges, or faces for all their edges); an edge's own style beats its tag's.
+    /// `clear: true` removes the edges' own style.
+    EdgeStyle {
+        ids: Vec<Id>,
+        #[serde(default)]
+        weight_mm: Option<f64>,
+        #[serde(default)]
+        line: Option<String>,
+        #[serde(default)]
+        color: Option<String>,
+        #[serde(default)]
+        clear: bool,
+    },
     /// Rename a tag everywhere it's used.
     RenameTag { tag: String, to: String },
     /// Put groups and components inside a group (`parent`), or at the top (null).
@@ -290,11 +346,13 @@ pub enum Command {
         #[serde(flatten)]
         opts: RenderOpts,
     },
-    /// Drawing sheets as a PDF: pages of viewports (saved views or iso / top /
-    /// front / ..., optionally at a scale like "1:100"), labels, scale bars
-    /// and a title block. No pages: your saved views on one sheet.
+    /// CREATE saved drawing sheets from a description of pages: each page becomes a sheet in the model
+    /// (undoable, kept in the file) with its viewports (saved views or iso / top / front / ..., optionally at a
+    /// scale like "1:100") and table. No pages: one sheet of your saved views. To write a PDF, use `export_sheets`.
     Sheets {
-        path: String,
+        /// no longer accepted here (it used to write a PDF): `export_sheets` does that
+        #[serde(default)]
+        path: Option<String>,
         #[serde(default = "sheet_a3")]
         sheet: String,
         #[serde(default)]
@@ -308,6 +366,337 @@ pub enum Command {
         #[serde(default)]
         notes: Vec<String>,
     },
+    /// Write drawing sheets as a PDF (or, for a `.svg` or `.dxf` path, one page of them). With `pages` as numbers (sheet ids), or none: the saved sheets (all, or those).
+    /// With `pages` as descriptions (what `sheets` takes): a one-shot set that saves nothing. No saved sheets and no
+    /// pages: your saved views on one sheet.
+    ExportSheets {
+        path: String,
+        #[serde(default)]
+        format: Option<String>,
+        #[serde(default)]
+        sheet: Option<String>,
+        #[serde(default)]
+        project: Option<String>,
+        #[serde(default)]
+        pages: Vec<ExportPage>,
+        #[serde(default)]
+        blueprint: Option<bool>,
+        #[serde(default)]
+        notes: Option<Vec<String>>,
+        /// a `.svg` or `.dxf` path writes one page of the set: which one, from 1 (default 1)
+        #[serde(default)]
+        page: Option<usize>,
+    },
+    /// A new empty drawing sheet in the model.
+    SheetAdd {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        number: Option<String>,
+        /// "a4", "a3", "a2", "letter" or "tabloid", or {w_mm, h_mm, name?} (default a3)
+        #[serde(default)]
+        paper: Option<PaperArg>,
+        /// position in the set (default: last)
+        #[serde(default)]
+        order: Option<i32>,
+        #[serde(default)]
+        fields: std::collections::BTreeMap<String, String>,
+        #[serde(default)]
+        title_block: Option<Id>,
+    },
+    /// Change a sheet's name, number, paper, order, title block (0 clears it) or fields (null removes one).
+    SheetEdit {
+        sheet: Id,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        number: Option<String>,
+        #[serde(default)]
+        paper: Option<PaperArg>,
+        #[serde(default)]
+        order: Option<i32>,
+        #[serde(default)]
+        fields: std::collections::BTreeMap<String, Option<String>>,
+        #[serde(default)]
+        title_block: Option<Id>,
+    },
+    /// Delete a sheet and everything on it.
+    SheetDelete { sheet: Id },
+    /// Put a viewport (a window on the model, with its own scale, anchor and crop) on a sheet. `viewports` adds
+    /// several at once (one undo step).
+    ViewportAdd {
+        #[serde(flatten)]
+        args: ViewportArgs,
+        #[serde(default)]
+        viewports: Vec<ViewportArgs>,
+    },
+    /// Change a viewport. Only what is given changes: its anchor, scale and crop are never re-fitted.
+    ViewportEdit {
+        id: Id,
+        #[serde(flatten)]
+        args: ViewportArgs,
+        /// remove the crop
+        #[serde(default)]
+        clear_crop: bool,
+    },
+    /// Delete things on sheets (viewports, dimensions, text, lines...) by id.
+    SheetItemDelete { ids: Vec<Id> },
+    /// A dimension on a sheet, attached to the model: two anchors make one, more make a chain. Each anchor is
+    /// `{"point": [x, y, z]}` (the nearest vertex within `tol`, else a point along the nearest edge), or exactly:
+    /// `{"vertex": id}`, `{"between": [a, b], "t": 0.5}`, `{"curve": id}` or `{"guide": id}`, with an optional
+    /// `"path": [instance ids]` for geometry inside components. The value is never stored: it is measured from the
+    /// live model each time. Moving the model moves the dimension; deleting its geometry breaks it (see `sheets_info`).
+    SheetDim {
+        sheet: Id,
+        anchors: Vec<AnchorArg>,
+        /// aligned (default), horizontal, vertical or baseline (every segment from the first anchor)
+        #[serde(default)]
+        mode: Option<crate::drafting::DimMode>,
+        /// millimetres from the measured line on paper (default 8)
+        #[serde(default)]
+        offset_mm: Option<f64>,
+        /// the viewport whose drawing plane it is measured in (default: the topmost on the sheet that frames it)
+        #[serde(default)]
+        viewport: Option<Id>,
+        #[serde(default)]
+        style: Option<String>,
+        #[serde(default)]
+        text_override: Option<String>,
+        /// how close a `point` anchor must be to geometry, in metres (default 0.001)
+        #[serde(default)]
+        tol: Option<f64>,
+    },
+    /// Paper line work on a sheet (drawn in the PDF, SVG and DXF). `kind` is `line` (2 points), `polyline` (2 or more),
+    /// `arc` (3 points: start, a point on it, end) or `rect` (2 opposite corners); default: a line for 2 points, else a
+    /// polyline. Points are paper millimetres from the sheet's top left. `w_mm` (0.05 to 2, default 0.25), `color`
+    /// ("#rrggbb"; default the sheet's ink) and `dash_mm` (on, off, ...) make the pen. `lines: [..]` adds several as
+    /// one step. With `id`, changes that item instead (only what is given; its kind stays). Delete with `sheet_item_delete`.
+    SheetLine {
+        #[serde(flatten)]
+        args: LineArgs,
+        #[serde(default)]
+        lines: Vec<LineArgs>,
+    },
+    /// Paper text on a sheet: `text` (lines split on newlines) with its first line's baseline starting at `at_mm`
+    /// (paper mm from the sheet's top left), `height_mm` tall (1 to 50, default 3.5). `width_mm` makes it a text
+    /// block: each line of `text` is a paragraph, wrapped to that width (0 makes it plain text again). `align`:
+    /// left, center or right (across the block, or about `at_mm` for plain text). With `id`, changes that text
+    /// instead (only what is given). Delete with `sheet_item_delete`.
+    SheetText {
+        #[serde(default)]
+        id: Option<Id>,
+        #[serde(default)]
+        sheet: Option<Id>,
+        #[serde(default)]
+        at_mm: Option<[f64; 2]>,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        height_mm: Option<f64>,
+        #[serde(default)]
+        width_mm: Option<f64>,
+        #[serde(default)]
+        align: Option<crate::drafting::Align>,
+        #[serde(default)]
+        z: Option<i32>,
+    },
+    /// A table on a sheet (a door schedule, a drawing index). New: `sheet`, `at_mm` (its top left, paper mm) and
+    /// `rows` (cell text; a newline in a cell starts a new line in it) or `size: [rows, cols]` (an empty grid). With
+    /// `id`, changes that table (only what is given), in this order: `insert_rows`/`delete_rows`/`insert_cols`/
+    /// `delete_cols` (`{at, n}`), then `rows` (all of it), then `cells` (`[{row, col, text}]`; the table grows to
+    /// hold them). `cols_mm`: each column's width (0: fit its text). `header_rows` (default 1), `header_cols`
+    /// (default 0), `title`, `text_mm` (letter height, default 2.5), `border` (grid, rules, outer or none),
+    /// `align` (per column: left, center, right), `source: "sheets"` (a drawing index: filled from the document's
+    /// sheets, kept up to date; `""` unlinks it), `z`. One undo step.
+    SheetTable {
+        #[serde(default)]
+        id: Option<Id>,
+        #[serde(default)]
+        sheet: Option<Id>,
+        #[serde(default)]
+        at_mm: Option<[f64; 2]>,
+        #[serde(default)]
+        rows: Option<Vec<Vec<String>>>,
+        #[serde(default)]
+        size: Option<[usize; 2]>,
+        #[serde(default)]
+        cells: Vec<CellArg>,
+        #[serde(default)]
+        insert_rows: Option<SpanArg>,
+        #[serde(default)]
+        delete_rows: Option<SpanArg>,
+        #[serde(default)]
+        insert_cols: Option<SpanArg>,
+        #[serde(default)]
+        delete_cols: Option<SpanArg>,
+        #[serde(default)]
+        cols_mm: Option<Vec<f64>>,
+        #[serde(default)]
+        header_rows: Option<u32>,
+        #[serde(default)]
+        header_cols: Option<u32>,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        text_mm: Option<f64>,
+        #[serde(default)]
+        border: Option<crate::drafting::Border>,
+        #[serde(default)]
+        align: Option<Vec<crate::drafting::Align>>,
+        #[serde(default)]
+        source: Option<String>,
+        #[serde(default)]
+        z: Option<i32>,
+    },
+    /// Paste a grid copied from a spreadsheet: `text` is tab-separated (what spreadsheets copy) or comma-separated
+    /// (CSV, quotes allowed); `format`: auto (default), tsv, csv or ssv (semicolons). With `id`, writes into that
+    /// table from the cell `at: [row, col]` (default [0, 0]), growing it as needed; else a new table on `sheet` at
+    /// `at_mm`, its first `header_rows` (default 1) the header. One undo step.
+    SheetTablePaste {
+        #[serde(default)]
+        id: Option<Id>,
+        #[serde(default)]
+        sheet: Option<Id>,
+        #[serde(default)]
+        at_mm: Option<[f64; 2]>,
+        text: String,
+        #[serde(default)]
+        format: Option<String>,
+        #[serde(default)]
+        at: Option<[usize; 2]>,
+        #[serde(default)]
+        header_rows: Option<u32>,
+    },
+    /// Trim paper line work: cut away the span of `item` that holds `at_mm` (the point you pick on it), between the
+    /// nearest places other things cross it. Boundaries are the other paper line work on the sheet, the lines the
+    /// sheet's viewports draw of the model (never trimmed themselves), and viewport frames. A span in the middle
+    /// leaves two pieces (the second is a new item); one at the end leaves one. With no crossing the command refuses.
+    /// `pick_tol_mm` (default 2) is how far `at_mm` may be from the line work. `use_model: false` ignores the model's lines.
+    SheetTrim {
+        item: Id,
+        at_mm: [f64; 2],
+        #[serde(default)]
+        pick_tol_mm: Option<f64>,
+        #[serde(default)]
+        use_model: Option<bool>,
+        /// work out what it would do (the reply's `cut` / `to`) and change nothing: a hover preview, read-only
+        #[serde(default)]
+        preview: bool,
+    },
+    /// Extend paper line work: the end of `item` nearest `at_mm` runs on, along its own direction (an arc along its
+    /// circle), to the nearest boundary ahead of it: other line work, a model line a viewport draws, or a viewport
+    /// frame. Refuses when nothing lies ahead, and for closed shapes.
+    SheetExtend {
+        item: Id,
+        at_mm: [f64; 2],
+        #[serde(default)]
+        pick_tol_mm: Option<f64>,
+        #[serde(default)]
+        use_model: Option<bool>,
+        /// work out what it would do (the reply's `cut` / `to`) and change nothing: a hover preview, read-only
+        #[serde(default)]
+        preview: bool,
+    },
+    /// Offset paper line work: a parallel copy `distance_mm` away (a new item with the same pen). Say which side
+    /// with `at_mm` (the side that point is on), or `side`: `left` or `right` of the way the line runs from its first
+    /// point (as the sheet looks), or `inside` / `outside` for a rect or a closed polyline. Lines move over,
+    /// polylines get mitred corners, arcs get a bigger or smaller radius, rects grow or shrink.
+    SheetOffset {
+        item: Id,
+        distance_mm: f64,
+        #[serde(default)]
+        at_mm: Option<[f64; 2]>,
+        #[serde(default)]
+        side: Option<String>,
+    },
+    /// Attach broken anchors again. `{"item": id, "anchor": 1, "to": {..an anchor..}}` attaches one where you say.
+    /// `{"all_exact": true}` (optionally with `item` or `sheet`) attaches every broken anchor that has exactly one
+    /// vertex within 1 micrometre of where it last was, and leaves the rest. Nothing reattaches by itself.
+    SheetReattach {
+        #[serde(default)]
+        item: Option<Id>,
+        #[serde(default)]
+        sheet: Option<Id>,
+        #[serde(default)]
+        anchor: Option<usize>,
+        #[serde(default)]
+        to: Option<AnchorArg>,
+        #[serde(default)]
+        all_exact: bool,
+        /// with `all_exact`: how far from where it last was a vertex may be, in metres (default 0.000001)
+        #[serde(default)]
+        tol: Option<f64>,
+    },
+    /// Read-only: every sheet with what is on it (and the kinds of item this version doesn't know).
+    SheetsInfo {
+        #[serde(default)]
+        sheet: Option<Id>,
+    },
+    /// Read-only: the points of a viewport's drawing a dimension can attach to, where each is on the paper (mm from the
+    /// sheet's top left) and the anchor to give `sheet_dim` for it. `kinds`: `vertex` (default: the model's corners
+    /// the drawing shows), `midpoint` (the middle of each edge), `opening` (the sides of doors and windows, plans
+    /// only). `limit` (default 500, at most 5,000) caps the list; `total` says how many there were.
+    ViewportPoints {
+        viewport: Id,
+        #[serde(default)]
+        kinds: Vec<String>,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    /// Attached dimension strings worked out from a plan viewport's floor (`callouts::auto_dims`): `exterior` (the
+    /// overall width on the south and depth on the east), `openings` (a chain through both sides of every door and
+    /// window on each face), `interior` (every wall face along the building, drawn on the north and the west), `grids`
+    /// (column centres and guide points). `scope` is one of these or a list (default exterior and openings). Adds
+    /// only: dimensions it made before (marked `source: "auto"`) are skipped, never doubled, and nobody else's is
+    /// touched; `refresh: true` replaces its own for those scopes. One undo step.
+    DimensionAuto {
+        viewport: Id,
+        #[serde(default)]
+        scope: Option<ScopeArg>,
+        #[serde(default)]
+        refresh: bool,
+    },
+    /// Lay out a set of saved, editable sheets from the building in one undo step. `preset: "permit"`: a cover with
+    /// the sheet index, a plan per floor, the four elevations, a section through the stairs (when there are stairs)
+    /// and the door and window schedule. `paper` (default a3), `scale` (one scale for every drawing; default the
+    /// largest that fits), `project`.
+    LayoutPreset {
+        #[serde(default = "preset_permit")]
+        preset: String,
+        #[serde(default)]
+        paper: Option<String>,
+        #[serde(default)]
+        scale: Option<ScaleArg>,
+        #[serde(default)]
+        project: Option<String>,
+    },
+    /// Read-only: a saved sheet's drawing as its display list, in light JSON (paper mm, y down; paths as SVG path
+    /// strings, joined per pen): what the app's paper view draws. `limit_kb` caps the answer (default and most
+    /// 16384); past it the rest is left out and `truncated` is true.
+    SheetIr {
+        sheet: Id,
+        #[serde(default)]
+        limit_kb: Option<usize>,
+    },
+    /// Put the sheets in this order (every sheet's id once, first first): orders 0, 10, 20... One undo step.
+    SheetOrder { sheets: Vec<Id> },
+    /// A copy of a sheet with everything on it (viewports, dimensions, line work, text), placed right after it in
+    /// the set. One undo step.
+    SheetDuplicate {
+        sheet: Id,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// A saved sheet as a PNG picture (`path`), `px` wide (default 1600, 200 to 4000), to look at and check.
+    SheetRender {
+        sheet: Id,
+        path: String,
+        #[serde(default)]
+        px: Option<u32>,
+    },
+    /// Read-only: how the kept drawings of sheet viewports stand (`revision` moves when a change drops some;
+    /// `drawing`: the background worker is redrawing), with counters.
+    DraftingStatus,
     /// A blueprint set in one go: every floor's plan and the four
     /// elevations, white on blue, at a true scale that fits the sheet.
     Blueprint {
@@ -995,6 +1384,105 @@ fn sheet_a3() -> String {
     "a3".into()
 }
 
+fn preset_permit() -> String {
+    "permit".into()
+}
+
+/// `dimension_auto`'s scope: one name or a list of them.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum ScopeArg {
+    One(String),
+    Many(Vec<String>),
+}
+
+/// A paper size as a command gives it: a name, or millimetres.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum PaperArg {
+    Name(String),
+    Custom {
+        w_mm: f64,
+        h_mm: f64,
+        #[serde(default)]
+        name: String,
+    },
+}
+
+/// A scale as a command gives it: 100 or "1:100".
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum ScaleArg {
+    N(f64),
+    Text(String),
+}
+
+/// Where a dimension's anchor goes: a point to snap to geometry, or the ids themselves.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AnchorArg {
+    /// a world point: attaches to the nearest vertex (else edge) within the tolerance
+    pub point: Option<[f64; 3]>,
+    pub vertex: Option<Id>,
+    pub between: Option<[Id; 2]>,
+    pub t: Option<f64>,
+    pub curve: Option<Id>,
+    pub guide: Option<Id>,
+    /// component placements from the root down, for geometry inside components
+    pub path: Vec<Id>,
+}
+
+/// What a paper line work command may set. All optional on an edit; a new item needs `sheet` and `pts_mm`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct LineArgs {
+    /// the item to change (leave out to add one)
+    pub id: Option<Id>,
+    pub sheet: Option<Id>,
+    /// line, polyline, arc or rect
+    pub kind: Option<String>,
+    pub pts_mm: Option<Vec<[f64; 2]>>,
+    pub w_mm: Option<f64>,
+    pub color: Option<String>,
+    pub dash_mm: Option<Vec<f64>>,
+    pub z: Option<i32>,
+}
+
+/// What a viewport command may set. All optional: a new viewport gets sensible defaults (see `sheets.rs`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ViewportArgs {
+    pub sheet: Option<Id>,
+    /// x, y, width, height on the sheet, millimetres from its top left
+    pub rect_mm: Option<[f64; 4]>,
+    /// the N of 1:N, or "1:N"
+    pub scale: Option<ScaleArg>,
+    /// the model point pinned to the middle of the rect (default: the middle of the model, once; never re-fitted)
+    pub anchor: Option<[f64; 3]>,
+    /// degrees
+    pub rotation: Option<f64>,
+    /// an outline in paper mm from the rect's top left
+    pub crop: Option<Vec<[f64; 2]>>,
+    /// {"type":"plan","cut_z":1.2,"floor_z":0}, {"type":"elevation","dir":[0,-1,0]}, {"type":"section","origin":[..],"normal":[..]} or {"type":"view3d","eye":[..],"target":[..],"fov":40}
+    pub view: Option<crate::drafting::ViewKind>,
+    /// a saved view's name, or iso / top / front / back / left / right: a 3D view from there (parallel, when a scale is given)
+    pub from_view: Option<String>,
+    pub z: Option<i32>,
+    pub opacity: Option<f64>,
+    pub render: Option<crate::drafting::RenderMode>,
+    pub scene: Option<String>,
+    pub label: Option<String>,
+    pub tags: Option<std::collections::BTreeMap<String, crate::drafting::TagOverride>>,
+}
+
+/// One entry of `export_sheets`' `pages`: a saved sheet's id, or a page description.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum ExportPage {
+    Saved(Id),
+    Spec(crate::layout::PageSpec),
+}
+
 fn photo_distance() -> f64 {
     15.0
 }
@@ -1121,4 +1609,55 @@ fn x_axis() -> [f64; 3] {
 
 fn z_axis() -> [f64; 3] {
     [0.0, 0.0, 1.0]
+}
+
+/// The cut fields `tag_style` takes; each optional (only what is given changes).
+#[derive(Debug, Default, Deserialize)]
+pub struct CutArgs {
+    #[serde(default)]
+    pub fill: Option<String>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub outline_mm: Option<f64>,
+    /// intersection priority, a whole number 0 to 999 (higher wins where cuts of different tags overlap)
+    #[serde(default)]
+    pub priority: Option<i64>,
+}
+
+/// The hatch fields `tag_style` takes; each optional (only what is given changes).
+#[derive(Debug, Default, Deserialize)]
+pub struct HatchArgs {
+    #[serde(default)]
+    pub pattern: Option<String>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub weight_mm: Option<f64>,
+    #[serde(default)]
+    pub scale: Option<f64>,
+    #[serde(default)]
+    pub angle: Option<f64>,
+    #[serde(default)]
+    pub scale_mode: Option<String>,
+}
+
+/// One cell's new text (`sheet_table`).
+#[derive(Debug, Deserialize)]
+pub struct CellArg {
+    pub row: usize,
+    pub col: usize,
+    pub text: String,
+}
+
+/// Rows or columns from `at`, `n` of them (default 1).
+#[derive(Debug, Deserialize)]
+pub struct SpanArg {
+    pub at: usize,
+    #[serde(default = "one_usize")]
+    pub n: usize,
+}
+
+fn one_usize() -> usize {
+    1
 }

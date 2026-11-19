@@ -9,6 +9,7 @@ import { exec } from "./engine";
 import { Icons } from "./icons";
 import { iconOk, isDark, readSkin, SKINS, TOKEN_LABELS, TOKENS, type Skin, type SkinToken } from "./skins";
 import type { Tool } from "./Viewport";
+import { toolTitle } from "./keymapstore";
 import { TOOL_INFO, WORKSPACES, type Layout, type Workspace, type WorkspaceEdits } from "./workspace";
 import { Sheet, useEscapeToClose } from "./sheet";
 
@@ -320,7 +321,7 @@ export function WorkspaceDialog({ ws, onChange, onReset, onClose }: { ws: Worksp
       {ORDER.map((g, i) => (
         <div key={i} className="ws-tools">
           {g.map((t) => (
-            <button key={t} className={on.has(t) ? "on" : ""} title={`${TOOL_INFO[t as keyof typeof TOOL_INFO].name}${TOOL_INFO[t as keyof typeof TOOL_INFO].key ? ` (${TOOL_INFO[t as keyof typeof TOOL_INFO].key})` : ""}`} onClick={() => toggle(t)}>
+            <button key={t} className={on.has(t) ? "on" : ""} title={toolTitle(TOOL_INFO[t as keyof typeof TOOL_INFO].name, t)} onClick={() => toggle(t)}>
               {Icons[t as keyof typeof Icons]?.()}
             </button>
           ))}
@@ -336,8 +337,9 @@ export function WorkspaceDialog({ ws, onChange, onReset, onClose }: { ws: Worksp
         </select>
         <span>Navigation panel</span>
         <select className="units-select" value={ws.showLeft ? ws.leftTab : "off"} onChange={(e) => (e.target.value === "off" ? onChange({ showLeft: false }) : onChange({ showLeft: true, leftTab: e.target.value as Workspace["leftTab"] }))}>
+          {ws.id === "layout" && <option value="pages">Shown, on Pages</option>}
           <option value="outliner">Shown, on Outliner</option>
-          <option value="library">Shown, on Library</option>
+          {ws.id !== "layout" && <option value="library">Shown, on Library</option>}
           <option value="views">Shown, on Views</option>
           <option value="off">Hidden</option>
         </select>

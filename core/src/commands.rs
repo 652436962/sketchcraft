@@ -34,6 +34,7 @@ mod annotate;
 mod build;
 mod command;
 mod draw;
+mod drawings;
 mod files;
 mod groups;
 mod library;
@@ -43,6 +44,9 @@ mod rendering;
 mod sections;
 mod session;
 mod shape;
+mod sheets;
+mod tables;
+mod autodraft;
 mod tags;
 
 pub use command::{Command, Factor};
@@ -140,7 +144,15 @@ impl Command {
                 | Command::ExportStl { .. }
                 | Command::ExportDae { .. }
                 | Command::ExportIfc { .. }
-                | Command::Sheets { .. }
+                | Command::ExportSheets { .. }
+                | Command::SheetsInfo { .. }
+                | Command::SheetTrim { preview: true, .. }
+                | Command::SheetExtend { preview: true, .. }
+                | Command::ViewportPoints { .. }
+                | Command::SheetRender { .. }
+                | Command::SheetIr { .. }
+                | Command::DraftingStatus
+                | Command::HatchPatterns { .. }
                 | Command::Blueprint { .. }
                 | Command::Levels
                 | Command::Animate { .. }
@@ -173,6 +185,10 @@ pub struct Engine {
     pub undo_budget: usize,
     /// an open batch: the model before it began, the revision then, and when
     batch: Option<(Model, u64, std::time::Instant)>,
+    /// whose the open batch is (see `BatchKind`)
+    batch_kind: BatchKind,
+    /// when a command last joined the open batch (an app-made batch that goes quiet is closed, see `BATCH_IDLE_APP`)
+    batch_last: Option<std::time::Instant>,
     /// counts batches, so an `end_batch` can say which one it means
     batch_seq: u64,
     /// the model was opened with more geometry than the limit allows: it can be looked at and
@@ -198,7 +214,29 @@ pub struct Engine {
     batch_origin: Option<String>,
     /// what the last batch that a plugin made changed: who, and how many things (read by `end_batch`'s reply)
     last_batch: Option<(String, usize)>,
+    /// drawings of sheet viewports and hatches kept between page views and exports (never saved; see `draft::cache`)
+    pub drawings: crate::draft::cache::Drawings,
 }
+
+/// Whose an open batch is. A batch groups ONE client's commands into one undo step; another client's commands never join it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BatchKind {
+    /// no batch is open
+    #[default]
+    None,
+    /// the app opened it and nothing has joined yet: the first command decides whose it is (the app's own, or a plugin's run)
+    Fresh,
+    /// the app's own commands (a reorder, a multi-part edit); a plugin or agent command is refused until it ends
+    App,
+    /// a plugin run the app opened; the person's own edit closes it (saving what it did first)
+    Plugin,
+    /// an agent's (an AI answer's commands); the person's own edit closes it the same way
+    Agent,
+}
+
+/// A batch the app opened for its own commands that has gone quiet this long is closed (the page that opened it went
+/// away). A plugin run or an agent may think for longer, so those only have `BATCH_MAX`.
+pub const BATCH_IDLE_APP: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// A batch nobody closed (the app went away mid-run) is closed after this (a plugin run is
 /// limited to 60 s, a Ruby replay to the same).
@@ -318,8 +356,11 @@ impl Engine {
     }
 
     fn exec_value_inner(&mut self, caller: &Caller, mut v: Value) -> Value {
-        if self.batch.as_ref().is_some_and(|b| b.2.elapsed() > BATCH_MAX) {
+        if self.batch_expired() {
             self.end_batch();
+        }
+        if let Err(e) = self.batch_gate(caller, &v) {
+            return json!({"ok": false, "error": e});
         }
         let name = v.as_object_mut().and_then(|o| o.remove("as")).and_then(|n| n.as_str().map(String::from));
         if let Err(e) = crate::policy::vet(caller, &mut v) {
@@ -339,7 +380,7 @@ impl Engine {
         };
         crate::policy::settle(caller, r["ok"] == true);
         if let (Some(n), true) = (name, r["ok"] == true) {
-            if let Some(id) = ["face", "group", "instance", "guide", "dimension", "text"]
+            if let Some(id) = ["face", "group", "instance", "guide", "dimension", "text", "sheet", "viewport"]
                 .iter()
                 .find_map(|k| r[*k].as_u64())
                 .or_else(|| r["ids"][0].as_u64())
@@ -349,6 +390,51 @@ impl Engine {
             }
         }
         r
+    }
+
+    /// Is the open batch past its limit: too long since it began, or (an app-made one) too long since it was last used?
+    fn batch_expired(&self) -> bool {
+        let Some(b) = &self.batch else { return false };
+        b.2.elapsed() > BATCH_MAX || (matches!(self.batch_kind, BatchKind::Fresh | BatchKind::App) && self.batch_last.is_some_and(|t| t.elapsed() > BATCH_IDLE_APP))
+    }
+
+    /// Whose batch is open, if one is.
+    pub fn batch_kind(&self) -> BatchKind {
+        if self.batch.is_some() { self.batch_kind } else { BatchKind::None }
+    }
+
+    /// Would the person's own edit close the open batch (a plugin's or an agent's)? An app-made batch is the person's
+    /// own, so their edits join it.
+    pub fn person_edit_ends_batch(&self) -> bool {
+        matches!(self.batch_kind(), BatchKind::Plugin | BatchKind::Agent)
+    }
+
+    /// Batches belong to one client: decide whether this command may run while a batch is open, and note who it joins.
+    /// `begin_batch` and `end_batch` are checked in `session.rs`.
+    fn batch_gate(&mut self, caller: &Caller, v: &Value) -> Result<(), String> {
+        if self.batch.is_none() {
+            return Ok(());
+        }
+        let name = v.get("cmd").and_then(Value::as_str).unwrap_or("");
+        if matches!(name, "begin_batch" | "end_batch" | "undo" | "redo") || !serde_json::from_value::<Command>(v.clone()).is_ok_and(|c| c.mutates()) {
+            return Ok(());
+        }
+        let mine = match caller {
+            Caller::Ui => BatchKind::App,
+            Caller::Plugin => BatchKind::Plugin,
+            Caller::Mcp(_) => BatchKind::Agent,
+        };
+        match (self.batch_kind, mine) {
+            // the first command decides whose a fresh batch is
+            (BatchKind::Fresh, _) => self.batch_kind = mine,
+            (k, m) if k == m => {}
+            // the person's edit into a plugin's or an agent's batch: the host closes that batch first (see `Live`)
+            (BatchKind::Plugin | BatchKind::Agent, BatchKind::App) => {}
+            (BatchKind::App, _) => return Err("The app is in the middle of its own change; try again in a moment.".into()),
+            _ => return Err("Another client's batch is open (a plugin run or an agent's changes); try again when it has finished.".into()),
+        }
+        self.batch_last = Some(std::time::Instant::now());
+        Ok(())
     }
 
     /// Is a batch (see `BeginBatch`) open?
@@ -363,9 +449,14 @@ impl Engine {
         }
     }
 
+    #[doc(hidden)]
+    pub fn idle_batch_for_test(&mut self) {
+        self.batch_last = Some(std::time::Instant::now() - BATCH_IDLE_APP - std::time::Duration::from_secs(1));
+    }
+
     /// Close a batch nobody closed in time (the page went away mid-run). True if one was closed.
     pub fn close_expired_batch(&mut self) -> bool {
-        if self.batch.as_ref().is_some_and(|b| b.2.elapsed() > BATCH_MAX) {
+        if self.batch_expired() {
             self.end_batch();
             return true;
         }
@@ -406,6 +497,7 @@ impl Engine {
             let next = self.model.next_id;
             self.model = m;
             self.model.next_id = self.model.next_id.max(next);
+            self.drawings.clear();
         }
     }
 
@@ -597,6 +689,8 @@ impl Engine {
         }
         // everything needed to put things back as they were
         let saved = mutates.then(|| (self.model.clone(), self.ctx, self.names.clone(), self.undo.len()));
+        // Undo and Redo replace the model too: what kept drawings it reaches is worked out from the model before
+        let pre_step = (matches!(cmd, Command::Undo | Command::Redo) && !self.drawings.is_empty()).then(|| self.model.clone());
         let count_before = self.model.entity_count();
         let bytes_before = if mutates { self.model.size_estimate() } else { 0 };
         let text_before = if mutates { self.model.text_bytes() } else { 0 };
@@ -623,6 +717,10 @@ impl Engine {
             self.run(cmd).map(|mut v| {
                 if is_new {
                     self.read_only = None;
+                }
+                // dimensions on sheets follow what the command did, in the same undo step (see `anchors`)
+                if mutates && !is_new && !is_open {
+                    self.settle_anchors();
                 }
                 v["ok"] = json!(true);
                 // pictures left out of a render, an import or a projection are said, never dropped silently
@@ -678,15 +776,24 @@ impl Engine {
                         self.oversize = oversize_before;
                         return json!({"ok": false, "error": e.to_string()});
                     }
+                    // kept drawings this change reached are dropped (and the pages looked at last redrawn in the background)
+                    if let Some((before, ..)) = &saved {
+                        self.drawings_changed(before);
+                    }
                     if is_open {
                         self.undo.clear();
-                    } else if push_undo && self.batch.is_none() {
+                    } else if push_undo && self.batch.is_none() && v.get("unchanged") != Some(&json!(true)) {
+                        // (a command that says it changed nothing, such as a `dimension_auto` with everything already
+                        // there, takes no undo step)
                         if let Some((before, ..)) = saved {
                             self.undo.push(Step::Snap(Box::new(before)));
                         }
                     }
                     self.redo.clear();
                     self.trim_undo();
+                }
+                if let Some(before) = &pre_step {
+                    self.drawings_changed(before);
                 }
                 v
             }
@@ -861,6 +968,7 @@ impl Engine {
             c @ (
                 Command::Hide { .. } | Command::Unhide { .. } | Command::Tag { .. } | Command::TagVisible { .. } |
                 Command::TagColor { .. } | Command::RenameTag { .. } | Command::SetParent { .. } |
+                Command::TagStyle { .. } | Command::EdgeStyle { .. } | Command::HatchPattern { .. } | Command::HatchPatterns { .. } |
                 Command::Lock { .. } | Command::Soften { .. } | Command::Rename { .. } | Command::Opacity { .. } |
                 Command::SetAttrs { .. } | Command::Classify { .. } | Command::Reveal { .. }
             ) => self.run_tags(c),
@@ -901,11 +1009,20 @@ impl Engine {
             c @ (
                 Command::Animate { .. } | Command::Blueprint { .. } | Command::Levels { .. } |
                 Command::Timeline { .. } | Command::TimelineFrames { .. } | Command::VideoFrame { .. } |
-                Command::VideoFinish { .. } | Command::Sheets { .. }
+                Command::VideoFinish { .. }
             ) => self.run_media(c),
+            c @ (
+                Command::Sheets { .. } | Command::ExportSheets { .. } | Command::SheetAdd { .. } | Command::SheetEdit { .. } |
+                Command::SheetDelete { .. } | Command::ViewportAdd { .. } | Command::ViewportEdit { .. } |
+                Command::SheetItemDelete { .. } | Command::SheetsInfo { .. } | Command::SheetDim { .. } | Command::SheetReattach { .. } |
+                Command::SheetLine { .. } | Command::SheetText { .. } | Command::SheetTable { .. } | Command::SheetTablePaste { .. } | Command::SheetTrim { .. } | Command::SheetExtend { .. } | Command::SheetOffset { .. } |
+                Command::SheetDuplicate { .. } | Command::SheetOrder { .. }
+            ) => self.run_sheets(c),
+            c @ (Command::ViewportPoints { .. } | Command::DimensionAuto { .. } | Command::LayoutPreset { .. } | Command::SheetRender { .. } | Command::SheetIr { .. }) => self.run_autodraft(c),
             c @ (
                 Command::BeginBatch { .. } | Command::EndBatch { .. } | Command::Undo { .. } | Command::Redo { .. }
             ) => self.run_session(c),
+            Command::DraftingStatus => Ok(self.drafting_status()),
         }
     }
 }

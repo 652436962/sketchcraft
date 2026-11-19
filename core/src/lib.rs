@@ -4,6 +4,7 @@
 //! [`commands::Engine`], so the desktop app, scripts, the CLI and AI agents
 //! all drive exactly the same thing.
 
+pub mod anchors;
 pub mod animate;
 pub mod backups;
 pub mod assets;
@@ -13,6 +14,8 @@ pub mod cloud;
 pub mod commands;
 pub mod components;
 pub mod csg;
+pub mod drafting;
+pub mod draft;
 pub mod dynamic;
 pub mod dwg;
 pub mod dxf;
