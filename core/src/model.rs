@@ -41,6 +41,9 @@ pub struct Edge {
     pub curve: Option<Id>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub hidden: bool,
+    /// this edge's own line weight and style on drawing sheets; beats its tag's style. Boxed to keep `Edge` small.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft: Option<Box<crate::drafting::EdgeDraft>>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -140,17 +143,43 @@ pub struct Guide {
 
 /// A note on the model: a dimension between two points (drawn `offset`
 /// away from them), or a text label (with an optional leader to a point).
+///
+/// A dimension may be attached to geometry: `anchors[0]` holds `a` and `anchors[1]` holds `b` (#59). An attached end
+/// follows the geometry (`Model::settle_anchors` moves `a`/`b` after every edit, in the same undo step), so moving a
+/// wall moves the dimension and its value; a free end (None) keeps its point. Files without `anchors` (every file
+/// before 0.3.8) read as two free ends, and a dimension with none is written exactly as before.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Annotation {
-    Dimension { id: Id, a: DVec3, b: DVec3, offset: DVec3 },
+    Dimension {
+        id: Id,
+        a: DVec3,
+        b: DVec3,
+        offset: DVec3,
+        #[serde(default, skip_serializing_if = "both_free")]
+        anchors: Box<[Option<crate::drafting::Anchor>; 2]>,
+    },
     Text { id: Id, at: DVec3, text: String, #[serde(default)] leader: Option<DVec3> },
     /// A door's swing on plan: the leaf turns about `hinge` from closed
     /// (reaching `from`, across the opening) to open (reaching `to`).
     Swing { id: Id, hinge: DVec3, from: DVec3, to: DVec3 },
 }
 
+fn both_free(a: &[Option<crate::drafting::Anchor>; 2]) -> bool {
+    a.iter().all(Option::is_none)
+}
+
 impl Annotation {
+    /// A dimension between two fixed points (no anchors).
+    pub fn dimension(id: Id, a: DVec3, b: DVec3, offset: DVec3) -> Annotation {
+        Annotation::Dimension { id, a, b, offset, anchors: Box::new([None, None]) }
+    }
+
+    /// Is this a dimension with at least one end attached to geometry?
+    pub fn is_attached(&self) -> bool {
+        matches!(self, Annotation::Dimension { anchors, .. } if anchors.iter().any(Option::is_some))
+    }
+
     pub fn id(&self) -> Id {
         match self {
             Annotation::Dimension { id, .. } | Annotation::Text { id, .. } | Annotation::Swing { id, .. } => *id,
@@ -311,10 +340,24 @@ pub struct Model {
     /// (blue is red × green). None: the model's own axes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub axes: Option<[[f64; 3]; 3]>,
+    /// Drafting styles (tag line weights, hatches, dimension and text styles): see `drafting`
+    #[serde(default, skip_serializing_if = "crate::drafting::Drafting::is_empty")]
+    pub drafting: crate::drafting::Drafting,
+    /// Drawing sheets (page records), by id. What is on them is in `sheet_items`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sheets: BTreeMap<Id, crate::drafting::Sheet>,
+    /// Everything on paper, flat and keyed by its own id so undo works per item. `Arc`: a step's copy of the model shares them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sheet_items: BTreeMap<Id, std::sync::Arc<crate::drafting::SheetItem>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub title_blocks: BTreeMap<Id, std::sync::Arc<crate::drafting::TitleBlock>>,
     /// A time limit for the work in progress (never saved): set by a command that can be slow on a big model,
     /// checked inside the expensive loops (`over_deadline`), so the limit holds end to end.
     #[serde(skip)]
     pub deadline: Option<std::time::Instant>,
+    /// Ids an operation moved or split, for anchors on sheets to follow (never saved; `Engine::exec` settles and clears it)
+    #[serde(skip)]
+    pub remaps: Vec<crate::anchors::Remap>,
 }
 
 /// A named section plane: cuts away the side its normal points from.
@@ -989,6 +1032,7 @@ impl Model {
         // faces become its own geometry
         let (nest, loose): (Vec<Id>, Vec<Id>) = ids.iter().partition(|id| self.groups.contains_key(id) || self.instances.contains_key(id));
         let faces = self.faces_of(&loose)?;
+        let nested = nest.clone();
         let gid = self.new_id();
         self.groups.insert(gid, Group { name, parent: self.active_group, ..Default::default() });
         for id in nest {
@@ -1052,6 +1096,10 @@ impl Model {
         for v in &verts {
             self.vertices.get_mut(v).unwrap().group = Some(gid);
         }
+        if !remap.is_empty() {
+            // dimensions whose geometry all went into the group follow the copies (see `Model::group_follow`)
+            self.note_remap(false, || crate::anchors::Remap::Group { copies: remap.iter().map(|(a, b)| (*a, *b)).collect(), inside: verts.clone(), nested });
+        }
         let originals: BTreeSet<Id> = remap.keys().copied().collect();
         for e in self.edges.values_mut() {
             if verts.contains(&e.a) && verts.contains(&e.b) && !originals.contains(&e.a) && !originals.contains(&e.b) {
@@ -1109,7 +1157,7 @@ impl Model {
             // a copy's curves are its own
             let curve = e.curve.map(|c| *curves.entry(c).or_insert_with(|| self.new_id()));
             let id = self.new_id();
-            self.edges.insert(id, Edge { a: map[&e.a], b: map[&e.b], group: Some(new), soft: e.soft, hidden: e.hidden, curve });
+            self.edges.insert(id, Edge { a: map[&e.a], b: map[&e.b], group: Some(new), soft: e.soft, hidden: e.hidden, curve, draft: e.draft.clone() });
         }
         let faces: Vec<Face> = self.faces.values().filter(|f| f.group == Some(gid)).cloned().collect();
         for f in faces {
@@ -1483,6 +1531,9 @@ impl Model {
         if !self.cages.values().all(|c| c.points.iter().flatten().all(|&x| sane(x))) {
             return bad("a cage");
         }
+        if !self.sheets.values().all(|s| s.sane()) || !self.sheet_items.values().all(|i| i.sane()) || !self.title_blocks.values().all(|t| t.sane()) || !self.drafting.sane() {
+            return bad("a number on a drawing sheet");
+        }
         for c in self.clouds.values() {
             if !c.points.iter().all(|&x| sane(x as f64)) {
                 return bad("a point cloud");
@@ -1514,6 +1565,19 @@ impl Model {
         for what in self.drop_oversize_pictures() {
             crate::safety::note_skipped(&what, "over the picture limits, so the picture was left out of the model (the rest is as it was)");
         }
+    }
+
+    /// Bring the drawing sheets a file holds (paper sizes, tables, paper texts, hatch scales, hatch patterns) within
+    /// what the commands make (see `drafting::clamp_to_limits`); a file within the limits is not touched. Sheets are
+    /// the root model's, so components' models are not looked at. Returns what was changed (at most 20), for a notice.
+    pub fn vet_sheets(&mut self) -> Vec<String> {
+        let mut out = crate::drafting::clamp_to_limits(&mut self.sheets, &mut self.sheet_items, &mut self.drafting);
+        if out.len() > 20 {
+            let more = out.len() - 20;
+            out.truncate(20);
+            out.push(format!("and {more} more"));
+        }
+        out
     }
 
     fn drop_oversize_pictures(&mut self) -> Vec<String> {
@@ -1587,6 +1651,10 @@ impl Model {
             + self.timeline.clips.iter().map(|c| c.name.as_ref().map_or(0, String::len)).sum::<usize>()
             + self.environment.as_ref().map_or(0, String::len)
             + self.units.len()
+            + self.sheets.values().map(|s| s.text_bytes()).sum::<usize>()
+            + self.sheet_items.values().map(|i| i.text_bytes()).sum::<usize>()
+            + self.title_blocks.values().map(|t| t.text_bytes()).sum::<usize>()
+            + self.drafting.text_bytes()
             + self.photo_points.iter().map(|p| p.name.len() + p.marks.keys().map(|k| k.len() + 8).sum::<usize>()).sum::<usize>()
             + notes
             + views
@@ -1618,6 +1686,10 @@ impl Model {
             + self.sections.iter().map(|s| 280 + jl(&s.name)).sum::<usize>()
             + self.environment.as_ref().map_or(0, |e| jl(e) + 20)
             + jl(&self.units)
+            + self.sheets.values().map(|s| 400 + 2 * s.text_bytes()).sum::<usize>()
+            + self.sheet_items.values().map(|i| i.size_estimate()).sum::<usize>()
+            + self.title_blocks.values().map(|t| 300 + 2 * t.text_bytes() + 60 * t.lines_mm.len() + 80 * t.fields.len()).sum::<usize>()
+            + if self.drafting.is_empty() { 0 } else { 2 * self.drafting.text_bytes() + 400 * (self.drafting.tag_styles.len() + self.drafting.dim_styles.len() + self.drafting.text_styles.len() + self.drafting.line_types.len()) + 64 }
     }
 
     /// Things in the model that refer to something that isn't there, as short phrases ("edge 7", "material #ff0000"),
@@ -1700,6 +1772,20 @@ impl Model {
                     add(format!("subdivision cage {id}"));
                 }
             }
+            for (id, s) in &self.sheets {
+                if s.title_block.is_some_and(|t| !self.title_blocks.contains_key(&t)) {
+                    add(format!("sheet {id} (title block)"));
+                }
+            }
+            for (id, i) in &self.sheet_items {
+                match i.sheet() {
+                    Some(s) if self.sheets.contains_key(&s) => {}
+                    _ => add(format!("sheet item {id}")),
+                }
+                if i.title_block().is_some_and(|t| !self.title_blocks.contains_key(&t)) {
+                    add(format!("sheet item {id} (title block)"));
+                }
+            }
             for id in self.classes.keys() {
                 if !self.groups.contains_key(id) && !self.instances.contains_key(id) {
                     add(format!("class of {id}"));
@@ -1724,10 +1810,31 @@ impl Model {
     /// The highest id used anywhere in this model (not inside components: each has its own counter).
     fn max_own_id(&self) -> Id {
         let top = |m: Option<&Id>| m.copied().unwrap_or(0);
-        let mut hi = top(self.vertices.keys().next_back()).max(top(self.edges.keys().next_back())).max(top(self.faces.keys().next_back())).max(top(self.groups.keys().next_back())).max(top(self.instances.keys().next_back())).max(top(self.definitions.keys().next_back())).max(top(self.clouds.keys().next_back())).max(top(self.cages.keys().next_back())).max(top(self.classes.keys().next_back()));
+        let mut hi = top(self.vertices.keys().next_back()).max(top(self.edges.keys().next_back())).max(top(self.faces.keys().next_back())).max(top(self.groups.keys().next_back())).max(top(self.instances.keys().next_back())).max(top(self.definitions.keys().next_back())).max(top(self.clouds.keys().next_back())).max(top(self.cages.keys().next_back())).max(top(self.classes.keys().next_back())).max(top(self.sheets.keys().next_back())).max(top(self.sheet_items.keys().next_back())).max(top(self.title_blocks.keys().next_back()));
+        hi = hi.max(self.sheets.values().filter_map(|s| s.title_block).max().unwrap_or(0)).max(self.sheet_items.values().map(|i| i.max_id()).max().unwrap_or(0));
         hi = hi.max(self.guides.iter().map(|g| g.id).max().unwrap_or(0)).max(self.annotations.iter().map(Annotation::id).max().unwrap_or(0)).max(self.sections.iter().map(|s| s.id).max().unwrap_or(0)).max(self.photo_guides.iter().copied().max().unwrap_or(0));
         hi = hi.max(self.edges.values().filter_map(|e| e.curve).max().unwrap_or(0)).max(self.active_group.unwrap_or(0)).max(self.active_section.unwrap_or(0));
         hi
+    }
+
+    /// Is there any paper (sheets, items, title blocks, drafting styles) in this model or the models of its components?
+    pub fn has_paper(&self) -> bool {
+        !(self.sheets.is_empty() && self.sheet_items.is_empty() && self.title_blocks.is_empty() && self.drafting.is_empty()) || self.definitions.values().any(|d| d.model.has_paper())
+    }
+
+    /// Drop the drawing sheets, what is on them, the title blocks and the drafting styles (this model, and the models of its
+    /// components): a model used as a part has no paper of its own.
+    pub fn clear_paper(&mut self) {
+        self.sheets.clear();
+        self.sheet_items.clear();
+        self.title_blocks.clear();
+        self.drafting = Default::default();
+        for d in self.definitions.values_mut() {
+            // look first: a shared component model is only copied if it has paper to drop
+            if d.model.has_paper() {
+                std::sync::Arc::make_mut(&mut d.model).clear_paper();
+            }
+        }
     }
 
     /// Make every id counter in this model (and in every component) higher than any id in use, so that the next
@@ -1791,7 +1898,7 @@ impl Model {
 
     /// Nothing drawn yet (a fresh model): not worth a backup.
     pub fn is_blank(&self) -> bool {
-        self.vertices.is_empty() && self.edges.is_empty() && self.faces.is_empty() && self.groups.is_empty() && self.instances.is_empty() && self.definitions.is_empty() && self.clouds.is_empty() && self.annotations.is_empty() && self.guides.is_empty() && self.views.is_empty() && self.materials.is_empty()
+        self.vertices.is_empty() && self.edges.is_empty() && self.faces.is_empty() && self.groups.is_empty() && self.instances.is_empty() && self.definitions.is_empty() && self.clouds.is_empty() && self.annotations.is_empty() && self.guides.is_empty() && self.views.is_empty() && self.materials.is_empty() && self.sheets.is_empty()
     }
 
     /// A rough size in bytes, for budgeting undo history (not exact; shared
@@ -1801,6 +1908,6 @@ impl Model {
         let faces: usize = self.faces.values().map(|f| 96 + 4 * (f.outer.len() + f.holes.iter().map(Vec::len).sum::<usize>())).sum();
         let photos: usize = self.views.iter().map(|v| 160 + v.photo.as_ref().map_or(0, String::len)).sum();
         let clouds: usize = self.clouds.values().map(|c| 64 + 4 * c.points.len() + c.colors.len()).sum();
-        self.text_bytes() + clouds + self.vertices.len() * 64 + self.edges.len() * 72 + faces + self.groups.len() * 96 + self.instances.len() * 200 + self.definitions.len() * 128 + tex + photos + self.annotations.len() * 120 + self.guides.len() * 80
+        self.text_bytes() + clouds + self.vertices.len() * 64 + self.edges.len() * 72 + faces + self.groups.len() * 96 + self.instances.len() * 200 + self.definitions.len() * 128 + tex + photos + self.annotations.len() * 120 + self.guides.len() * 80 + self.sheets.len() * 160 + self.sheet_items.len() * 160
     }
 }

@@ -4,7 +4,7 @@ import { exec, type Scene } from "./engine";
 import { Sheet, SheetHead } from "./sheet";
 
 /** LayOut-lite: pick views (and scales) for a PDF set of drawing sheets. */
-export function SheetsDialog({ scene, onMake, onClose }: { scene: Scene; onMake: (spec: { sheet: string; project: string; blueprint: boolean; pages: { title: string; viewports: { view: string; scale?: string; label?: string; cut?: number }[] }[] }) => void; onClose: () => void }) {
+export function SheetsDialog({ scene, onMake, onClose, onLayout }: { scene: Scene; onMake: (spec: { sheet: string; project: string; blueprint: boolean; pages: { title: string; viewports: { view: string; scale?: string; label?: string; cut?: number }[] }[] }) => void; onClose: () => void; /** go to the Layout workspace (saved, editable pages) */ onLayout?: () => void }) {
   const standard = ["iso", "top", "front", "right", "back", "left"];
   // floor plans, one per floor the engine finds
   const [levels, setLevels] = useState<number[]>([]);
@@ -51,8 +51,13 @@ export function SheetsDialog({ scene, onMake, onClose }: { scene: Scene; onMake:
           <option value="a4">A4</option>
           <option value="a3">A3</option>
           <option value="a2">A2</option>
+          <option value="a1">A1</option>
+          <option value="a0">A0</option>
           <option value="letter">Letter</option>
           <option value="tabloid">Tabloid (11×17)</option>
+          <option value="arch c">ARCH C (18×24 in)</option>
+          <option value="arch d">ARCH D (24×36 in)</option>
+          <option value="arch e">ARCH E (36×48 in)</option>
         </select>
       </label>
       <label className="field check">
@@ -64,13 +69,13 @@ export function SheetsDialog({ scene, onMake, onClose }: { scene: Scene; onMake:
         <span>Blueprint (white lines on blue)</span>
       </label>
       <div className="section-title" style={{ marginTop: 10 }}>
-        Views <span className="muted">(scale like 1:100 for a true-scale drawing; blank to fit)</span>
+        Views <span className="muted" id="sheet-scale-hint">(scale like 1:100 or 1/4in=1ft for a true-scale drawing; blank to fit)</span>
       </div>
       {all.map((n) => (
         <div key={n} className="sheet-row">
-          <input type="checkbox" checked={!!picked[n]?.on} onChange={(e) => setPicked((p) => ({ ...p, [n]: { ...p[n], on: e.target.checked } }))} />
-          <span>{label(n)}</span>
-          <input className="num" style={{ width: 70 }} placeholder="fit" value={picked[n]?.scale ?? ""} onChange={(e) => setPicked((p) => ({ ...p, [n]: { ...p[n], scale: e.target.value } }))} />
+          <input type="checkbox" id={`sheet-pick-${n}`} checked={!!picked[n]?.on} onChange={(e) => setPicked((p) => ({ ...p, [n]: { ...p[n], on: e.target.checked } }))} />
+          <label htmlFor={`sheet-pick-${n}`}>{label(n)}</label>
+          <input className="num" aria-label={`Scale of ${label(n)}`} aria-describedby="sheet-scale-hint" style={{ width: 70 }} placeholder="fit" value={picked[n]?.scale ?? ""} onChange={(e) => setPicked((p) => ({ ...p, [n]: { ...p[n], scale: e.target.value } }))} />
         </div>
       ))}
       <div className="row gap" style={{ marginTop: 12 }}>
@@ -80,6 +85,11 @@ export function SheetsDialog({ scene, onMake, onClose }: { scene: Scene; onMake:
         <button className="btn small ghost" onClick={onClose}>
           Cancel
         </button>
+        {onLayout && (
+          <button className="btn small ghost" onClick={onLayout} title="Saved pages you can come back to, reorder and change: the Layout workspace">
+            Open in Layout
+          </button>
+        )}
       </div>
     </Sheet>
   );

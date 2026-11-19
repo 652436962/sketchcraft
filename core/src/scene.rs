@@ -70,6 +70,11 @@ pub fn build(root: &Model, ctx: Option<u32>) -> Value {
         }
     }
     let (mut edges, mut edge_ids, mut soft_edges) = (Vec::<f32>::new(), Vec::<u32>::new(), Vec::<f32>::new());
+    // line weights and styles (tag and edge): one entry per segment in `edges`, 0 for the default line; the table
+    // lists each distinct pen once. Weights are paper millimetres; the viewer turns them into pixels.
+    let pens = crate::draft::ir::Pens::new(false);
+    let base = pens.ink(pens.medium);
+    let (mut edge_style, mut style_table) = (Vec::<u16>::new(), Vec::<crate::draft::ir::Pen>::new());
     for e in root.world_edges() {
         if let Some((pivot, _)) = figs.get(&e.owner) {
             if !e.soft {
@@ -84,6 +89,25 @@ pub fn build(root: &Model, ctx: Option<u32>) -> Value {
         } else {
             edges.extend(seg);
             edge_ids.push(e.owner);
+            let at = if e.tag.is_some() || e.draft.is_some() {
+                let pen = pens.for_tag(&root.drafting, e.tag.as_deref(), e.draft.as_deref(), base.clone(), false);
+                if pen == base {
+                    0
+                } else {
+                    // a model with very many distinct pens draws the rest with the default
+                    match style_table.iter().position(|p| *p == pen) {
+                        Some(i) => i + 1,
+                        None if style_table.len() < 200 => {
+                            style_table.push(pen);
+                            style_table.len()
+                        }
+                        None => 0,
+                    }
+                }
+            } else {
+                0
+            };
+            edge_style.push(at as u16);
         }
     }
 
@@ -95,11 +119,12 @@ pub fn build(root: &Model, ctx: Option<u32>) -> Value {
         }
         None => (root, glam::DMat4::IDENTITY),
     };
+    let mirrored = t.determinant() < 0.0;
     let faces: Vec<Value> = m
         .faces
         .iter()
         .map(|(&id, f)| {
-            let outer: Vec<_> = m.pts(&f.outer).into_iter().map(|p| t.transform_point3(p)).collect();
+            let outer = m.placed_loop(&f.outer, t, mirrored);
             json!({
                 "id": id,
                 "normal": geom::newell(&outer).to_array(),
@@ -115,7 +140,7 @@ pub fn build(root: &Model, ctx: Option<u32>) -> Value {
     let (mut edit_pos, mut edit_tri) = (Vec::<f32>::new(), Vec::<u32>::new());
     if ctx.is_some() {
         for (&id, f) in &m.faces {
-            let tp = |l: &[u32]| -> Vec<glam::DVec3> { m.pts(l).into_iter().map(|p| t.transform_point3(p)).collect() };
+            let tp = |vertices: &[u32]| m.placed_loop(vertices, t, mirrored);
             let outer = tp(&f.outer);
             let holes: Vec<_> = f.holes.iter().map(|h| tp(h)).collect();
             for tri in geom::triangulate(&outer, &holes, geom::newell(&outer)) {
@@ -130,7 +155,7 @@ pub fn build(root: &Model, ctx: Option<u32>) -> Value {
         .edges
         .iter()
         .map(|(&id, e)| {
-            json!({"id": id, "a": t.transform_point3(m.p(e.a)).to_array(), "b": t.transform_point3(m.p(e.b)).to_array(), "va": e.a, "vb": e.b, "soft": e.soft, "group": e.group, "curve": e.curve})
+            json!({"draft": e.draft, "id": id, "a": t.transform_point3(m.p(e.a)).to_array(), "b": t.transform_point3(m.p(e.b)).to_array(), "va": e.a, "vb": e.b, "soft": e.soft, "group": e.group, "curve": e.curve})
         })
         .collect();
     let groups: Vec<Value> = root
@@ -166,7 +191,7 @@ pub fn build(root: &Model, ctx: Option<u32>) -> Value {
             json!({"id": id, "name": c.name, "count": c.len(), "colored": !c.colors.is_empty(), "hidden": c.hidden, "version": c.version, "lo": lo.to_array(), "hi": hi.to_array()})
         })
         .collect();
-    json!({
+    let mut out = json!({
         "sections": root.sections,
         "activeSection": root.active_section,
         "axes": root.axes,
@@ -222,5 +247,10 @@ pub fn build(root: &Model, ctx: Option<u32>) -> Value {
         "photoEdges": root.photo_edges,
         "annotations": root.annotations,
         "units": root.units,
-    })
+    });
+    // (set apart from the big literal above: json! stops expanding past a recursion limit)
+    out["tagStyles"] = json!(root.drafting.tag_styles);
+    out["edgeStyle"] = json!(if style_table.is_empty() { vec![] } else { edge_style });
+    out["edgeStyles"] = json!(style_table.iter().map(|p| json!({"w": p.w, "dash": p.dash, "color": p.rgb})).collect::<Vec<_>>());
+    out
 }

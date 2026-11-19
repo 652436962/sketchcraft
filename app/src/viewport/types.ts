@@ -59,6 +59,8 @@ export interface Styles {
   background?: Backdrop;
   /** hidden edges shown dashed (SketchUp's Back Edges, K) */
   backEdges: boolean;
+  /** draw tag and edge line weights and styles (default on) */
+  lineWeights?: boolean;
   shadows: boolean;
   edges: boolean;
   parallel: boolean;
@@ -123,6 +125,8 @@ export interface Props {
   onSection: (on: boolean) => void;
   /** the coach's × */
   onHideHelp?: () => void;
+  /** the view is put away (the Layout workspace covers it): it keeps everything but draws nothing and takes no keys */
+  paused?: boolean;
   api: React.MutableRefObject<ViewportApi | null>;
   /** a plugin's tool in use (tool "plugin"): where its moves and clicks go,
    * what it draws, its hint, and the point its rubber band starts from */
