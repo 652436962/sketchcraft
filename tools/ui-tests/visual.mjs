@@ -46,7 +46,7 @@ const b = await launch();
 const problems = [];
 
 // ---- comparing pictures (decoded and compared inside the browser: no image library needed) ----------------------------
-const cmpPage = await (await b.newContext()).newPage();
+const cmpPage = await (await b.newContext({ locale: 'en-US' })).newPage();
 await cmpPage.goto('about:blank');
 const compare = (a, c) =>
   cmpPage.evaluate(
@@ -103,7 +103,7 @@ const FIXED_CSS = `
 `;
 /** a new browser page with these settings saved, a small fixed model, and the camera where it starts */
 const open = async ({ layout, skin }) => {
-  const ctx = await b.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1, reducedMotion: 'reduce' });
+  const ctx = await b.newContext({ locale: 'en-US', viewport: VIEWPORT, deviceScaleFactor: 1, reducedMotion: 'reduce' });
   await ctx.addInitScript(
     ([layout, skin]) => {
       try {
@@ -150,17 +150,23 @@ const SKINS = [['classic', 'light'], ['midnight', 'dark'], ['contrast', 'high-co
 const shots = [];
 for (const [layout] of LAYOUTS) for (const [skin, label] of SKINS) shots.push({ name: `main-${layout}-${label}`, layout, skin, run: async () => {} });
 const dialogs = [
-  ['file-menu', async (p) => p.locator('.file-btn').click()],
+  ['file-menu', async (p) => p.getByRole('menuitem', { name: 'File', exact: true }).click()],
+  ['view-menu', async (p) => p.getByRole('menuitem', { name: 'View', exact: true }).click()],
+  ['about', async (p) => {
+    await p.getByRole('menuitem', { name: 'Help', exact: true }).click();
+    await p.getByRole('menuitem', { name: 'About SketchCraft' }).click();
+    await p.getByRole('dialog', { name: 'About SketchCraft' }).waitFor();
+  }],
   ['themes', async (p) => p.locator('.skin-btn').click()],
   ['learn', async (p) => p.locator('.learn-btn').click()],
   ['plugins', async (p) => {
-    await p.locator('.file-btn').click();
-    await p.getByRole('button', { name: /^Plugins/ }).click();
-    await p.getByRole('button', { name: /Manage plugins/ }).click();
+    await p.getByRole('menuitem', { name: 'File', exact: true }).click();
+    await p.getByRole('menuitem', { name: /^Plugins/ }).click();
+    await p.getByRole('menuitem', { name: /Manage plugins/ }).click();
   }],
   ['restore', async (p) => {
-    await p.locator('.file-btn').click();
-    await p.getByRole('button', { name: /Restore from backup/ }).click();
+    await p.getByRole('menuitem', { name: 'File', exact: true }).click();
+    await p.getByRole('menuitem', { name: /Restore from backup/ }).click();
     await p.waitForSelector('[role=dialog][aria-label="Restore from backup"]');
   }],
   ['command-palette', async (p) => {

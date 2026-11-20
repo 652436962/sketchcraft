@@ -1,3 +1,6 @@
+import { translate, useLocale } from "./locale";
+import { TEXTURING_SET } from "./texturing-set";
+import { fixtureOf, wallSnap } from "./fixtures";
 // The 3D view. Draws the engine's scene with three.js and turns mouse and
 // keyboard input into engine commands. Z is up, units are meters.
 import { useEffect, useRef, useState } from "react";
@@ -27,11 +30,15 @@ import { combine, EMPTY, selIds, selMode, toggle, type Sel } from "./selection";
 import { formatLength, parseLengths } from "./units";
 import { autoTagColor, ACCENT, BACKGROUNDS } from "./viewport/colors";
 import { styledEdges, averagedNormals, smoothNormals } from "./viewport/edges";
-import { profileMaterial, textureFor } from "./viewport/materials";
+import { adoptPainted, checkerTexture, forgetPainted, profileMaterial, textureFor } from "./viewport/materials";
+import { DEFAULT_TPAINT, decodePixels, Painter, sampleRgba, stroke3DCommand, trisOf, uvAt } from "./texturepaint";
 import { UP, r4, arr, circleThrough, bulgeThrough, basis, arcPoints, offsetOutline } from "./viewport/geometry";
 import { selectMarquee } from "./viewport/marquee";
-import { isTypingTarget } from "./keymap";
-import type { Tool, BuildSettings, FaceStyle, Backdrop, Styles, Cam, ViewportApi, PluginPoint, Props, Op, LabelSpec, Last } from "./viewport/types";
+import { isMac, isTypingTarget } from "./keymap";
+import { paintCommand, paintReach } from "./paintmods";
+import { DEFAULT_VPAINT, effectiveRadius, extendStroke, ringPoints, sceneDiagonal, stepRadius, strokeCommand } from "./vertexpaint";
+import type { Tool, BuildSettings, FaceStyle, Backdrop, Styles, Cam, ViewportApi, PluginPoint, Props, Op, LabelSpec, Last, WallPlan, RoomPreview, RoomRow, TPaintRun } from "./viewport/types";
+import { areaText, dragLabel, fillRects, gridStep, modeLabel, roomLabel, roomMode, roomModeKey, snapGrid, type Rect, type RoomMode } from "./viewport/rooms";
 export { autoTagColor };
 export type { Tool, BuildSettings, FaceStyle, Backdrop, Styles, Cam, ViewportApi, PluginPoint };
 
@@ -70,6 +77,9 @@ interface MoveArgs<K extends Op["t"]> {
 }
 
 export default function Viewport(props: Props) {
+  const { language } = useLocale();
+  const localeRef = useRef(language);
+  localeRef.current = language;
   const { scene, tool, styles, placeAsset } = props;
   const host = useRef<HTMLDivElement>(null);
   const labelLayer = useRef<HTMLDivElement>(null);
@@ -140,6 +150,11 @@ export default function Viewport(props: Props) {
     lock: Axis | null;
     hover: number | null;
     hoverEdge: number | null;
+    /** Wall pull: the wall under the cursor (plan null: asking the engine, or it isn't a wall that can be pulled) */
+    wall: { face: number; plan: WallPlan | null; scene: Scene; at: THREE.Vector3 } | null;
+    /** Room mode: the rooms (for their labels), and the low-walls clip, a view setting that never reaches the model */
+    rooms: RoomRow[];
+    cutaway: THREE.Plane | null;
     /** last inference shown (Shift locks to it) */
     snap: Snap | null;
     /** the lock came from holding Shift (released with it) */
@@ -158,7 +173,7 @@ export default function Viewport(props: Props) {
     labels: LabelSpec[];
     liveLabels: LabelSpec[];
     labelEls: Map<string, HTMLDivElement>;
-  }>({ press: null, labels: [], liveLabels: [], labelEls: new Map(), op: null, last: null, lock: null, hover: null, hoverEdge: null, snap: null, shiftLock: false, zoomY: null, space: false, spaceUsed: false, fitted: false, fitNext: false, section: null, segs: { circle: 24, polygon: 6 }, rightDown: null, selOverride: null });
+  }>({ press: null, labels: [], liveLabels: [], labelEls: new Map(), op: null, last: null, lock: null, hover: null, hoverEdge: null, wall: null, rooms: [], cutaway: null, snap: null, shiftLock: false, zoomY: null, space: false, spaceUsed: false, fitted: false, fitNext: false, section: null, segs: { circle: 24, polygon: 6 }, rightDown: null, selOverride: null });
 
   // dev builds: inspect the tool state from the console (window.__sketchcraft)
   if (import.meta.env.DEV) Object.assign(window as unknown as Record<string, unknown>, { __sketchcraft: st, __sketchcraftView: t });
@@ -376,7 +391,7 @@ export default function Viewport(props: Props) {
     T.catcher.visible = styles.shadows;
     buildModel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [styles.xray, styles.shadows, styles.edges, styles.parallel, styles.backEdges, styles.face, styles.profiles, styles.sketchy, styles.extensions, styles.background, styles.byTag, styles.notes, styles.hideRest, styles.lineWeights]);
+  }, [styles.xray, styles.shadows, styles.edges, styles.parallel, styles.backEdges, styles.face, styles.profiles, styles.vertexColors, styles.checker, styles.sketchy, styles.extensions, styles.background, styles.byTag, styles.notes, styles.hideRest, styles.lineWeights]);
 
   // ---------------------------------------------------------------- labels
   /** Keep one DOM label per spec; positions are updated every frame. */
@@ -482,6 +497,12 @@ export default function Viewport(props: Props) {
           ? [{ key: `a${an.id}`, id: an.id, p: V(an.at), text: an.text }]
           : [] // door swings are drawn, not labeled
     );
+  }
+
+  /** Room mode: each room's name and area, standing on its floor. */
+  function roomSpecs(): LabelSpec[] {
+    if (live.current.tool !== "room") return [];
+    return st.current.rooms.map((r) => ({ key: `room${r.id}`, p: V(r.center).add(new THREE.Vector3(0, 0, 0.02)), text: roomLabel(r.name, r.area, units) }));
   }
 
   /** Per-triangle colors from each thing's tag (its own, or the nearest
@@ -673,7 +694,7 @@ export default function Viewport(props: Props) {
     T.model.children.forEach((c) => (c as THREE.Mesh).geometry?.dispose());
     T.model.clear();
     const xray = live.current.styles.xray;
-    const clip = st.current.section ? [st.current.section] : [];
+    const clip = st.current.section ? [st.current.section] : st.current.cutaway ? [st.current.cutaway] : [];
 
     // in SubD mode the object being shaped is drawn by its cage editor instead
     const shaping = cageEd.current?.o.group ?? null;
@@ -719,10 +740,17 @@ export default function Viewport(props: Props) {
       for (let t = 0; t < c.length / 3; t++) for (let k = 0; k < 3; k++) out.set([c[t * 3], c[t * 3 + 1], c[t * 3 + 2]], t * 9 + k * 3);
       return new THREE.BufferAttribute(out, 3);
     };
-    geo.setAttribute("color", corners(live.current.styles.byTag ? tagColors(s) : s.colors));
+    // vertex colours (an rgb tint per vertex) multiply the face colour, so a white material shows them pure
+    const vc = live.current.styles.vertexColors !== false && s.vcolors?.length === s.positions.length ? s.vcolors : null;
+    const tinted = (c: number[]) => {
+      const a = corners(c);
+      if (vc) for (let i = 0; i < a.array.length; i++) (a.array as Float32Array)[i] *= vc[i];
+      return a;
+    };
+    geo.setAttribute("color", tinted(live.current.styles.byTag ? tagColors(s) : s.colors));
     geo.setAttribute("normal", new THREE.BufferAttribute(smoothNormals(s.positions), 3));
     const bgeo = geo.clone();
-    bgeo.setAttribute("color", corners(s.backColors));
+    bgeo.setAttribute("color", tinted(s.backColors));
     const sty = live.current.styles;
     const faceStyle: FaceStyle = sty.face ?? "textured";
     const bg = BACKGROUNDS[sty.background ?? "default"];
@@ -781,11 +809,12 @@ export default function Viewport(props: Props) {
 
     // textured faces: drawn over the base mesh with their images
     if (faceStyle === "textured" && s.triTex?.some((i) => i >= 0)) {
-      const byTex = new Map<number, { pos: number[]; uv: number[] }>();
+      const byTex = new Map<number, { pos: number[]; uv: number[]; col: number[] }>();
       s.triTex.forEach((ti, tri) => {
         if (ti < 0) return;
-        const g = byTex.get(ti) ?? { pos: [], uv: [] };
+        const g = byTex.get(ti) ?? { pos: [], uv: [], col: [] };
         for (let k = 0; k < 9; k++) g.pos.push(s.positions[tri * 9 + k]);
+        for (let k = 0; k < 9; k++) g.col.push(vc ? vc[tri * 9 + k] : 1);
         for (let k = 0; k < 6; k++) g.uv.push(s.uvs[tri * 6 + k]);
         byTex.set(ti, g);
       });
@@ -795,14 +824,45 @@ export default function Viewport(props: Props) {
         const geo2 = new THREE.BufferGeometry();
         geo2.setAttribute("position", new THREE.Float32BufferAttribute(g.pos, 3));
         geo2.setAttribute("uv", new THREE.Float32BufferAttribute(g.uv, 2));
+        if (vc) geo2.setAttribute("color", new THREE.Float32BufferAttribute(g.col, 3));
         geo2.setAttribute("normal", new THREE.BufferAttribute(smoothNormals(g.pos), 3));
         const mesh = new THREE.Mesh(
           geo2,
-          new THREE.MeshLambertMaterial({ map: textureFor(mat.name, mat.texture.data), side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: 0, transparent: xray || (mat.opacity ?? 1) < 1, opacity: Math.min(xray ? 0.42 : 1, mat.opacity ?? 1), depthWrite: !xray && (mat.opacity ?? 1) >= 1, clippingPlanes: clip })
+          new THREE.MeshLambertMaterial({ map: textureFor(mat.name, mat.texture.data), vertexColors: !!vc, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: 0, transparent: xray || (mat.opacity ?? 1) < 1, opacity: Math.min(xray ? 0.42 : 1, mat.opacity ?? 1), depthWrite: !xray && (mat.opacity ?? 1) >= 1, clippingPlanes: clip })
         );
         mesh.receiveShadow = live.current.styles.shadows;
+        mesh.userData.texName = mat.name;
         T.model.add(mesh);
       }
+    }
+
+    // the UV editor's checker: faces with their own UVs wear a checker, so stretching shows in the model (never saved)
+    if (sty.checker && faceStyle !== "wireframe" && s.triUv?.some((u) => u === 1)) {
+      const pos: number[] = [];
+      const uv: number[] = [];
+      s.triUv.forEach((u, tri) => {
+        if (u !== 1) return;
+        for (let k = 0; k < 9; k++) pos.push(s.positions[tri * 9 + k]);
+        for (let k = 0; k < 6; k++) uv.push(s.uvs[tri * 6 + k]);
+      });
+      const cg = new THREE.BufferGeometry();
+      cg.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      cg.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+      cg.setAttribute("normal", new THREE.BufferAttribute(smoothNormals(pos), 3));
+      const cm = new THREE.Mesh(cg, new THREE.MeshLambertMaterial({ map: checkerTexture(), side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1, clippingPlanes: clip }));
+      cm.name = "uv-checker";
+      T.model.add(cm);
+    }
+
+    // marked UV seams, in red
+    if (s.seams?.length && faceStyle !== "hiddenline") {
+      const sg = new THREE.BufferGeometry();
+      sg.setAttribute("position", new THREE.Float32BufferAttribute(s.seams, 3));
+      const seamLines = new THREE.LineSegments(sg, new THREE.LineBasicMaterial({ color: 0xe5383b, clippingPlanes: clip, depthTest: false }));
+      seamLines.name = "uv-seams";
+      seamLines.renderOrder = 5;
+      seamLines.raycast = () => {};
+      T.model.add(seamLines);
     }
 
     if (sty.edges || faceStyle === "wireframe" || faceStyle === "hiddenline") {
@@ -938,11 +998,14 @@ export default function Viewport(props: Props) {
     }
     addGuides(T, s);
     addAnnotationLines(T, s);
-    st.current.labels = annotationSpecs();
+    st.current.labels = [...annotationSpecs(), ...roomSpecs()];
     syncLabels();
     T.pickMesh = front;
 
     addFigures(T, s, clip);
+    // turn them to the camera now, not after the next frame is drawn (a new figure flashed its
+    // default side for a frame, which made it look like it was spinning)
+    turnFigures();
 
     addEditMesh(T, s);
 
@@ -984,6 +1047,40 @@ export default function Viewport(props: Props) {
     drawOverlay();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.sel]);
+
+  // Room mode: the rooms' labels follow the model (a pulled wall changes an area), and the walls can be shown low
+  useEffect(() => {
+    if (!t.current || !scene) return;
+    if (tool !== "room") {
+      if (st.current.rooms.length) {
+        st.current.rooms = [];
+        st.current.labels = annotationSpecs();
+        syncLabels();
+      }
+      return;
+    }
+    let current = true;
+    void exec({ cmd: "rooms" }).then((r) => {
+      if (!current || !r.ok) return;
+      st.current.rooms = ((r as unknown as { rooms: RoomRow[] }).rooms ?? []).map((x) => ({ id: x.id, name: x.name, area: x.area, center: x.center }));
+      st.current.labels = [...annotationSpecs(), ...roomSpecs()];
+      syncLabels();
+      placeLabels();
+    });
+    return () => {
+      current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scene, tool]);
+
+  useEffect(() => {
+    if (!t.current) return;
+    const want = tool === "room" && !!props.build.wallsDown;
+    if (want === (st.current.cutaway != null)) return;
+    st.current.cutaway = want ? new THREE.Plane(new THREE.Vector3(0, 0, -1), 1.0) : null;
+    if (live.current.scene) buildModel();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool, props.build.wallsDown]);
 
   useEffect(() => {
     if (!t.current) return;
@@ -1121,10 +1218,11 @@ export default function Viewport(props: Props) {
     mat.side = side;
     // ignore what the section plane cut away
     if (st.current.section) hits = hits.filter((h) => st.current.section!.distanceToPoint(h.point) >= -1e-4);
+    else if (st.current.cutaway) hits = hits.filter((h) => st.current.cutaway!.distanceToPoint(h.point) >= -1e-4);
     const hit = hits[0];
     if (!hit || hit.faceIndex == null) return null;
     const owner = hit.object.userData.owner != null ? (hit.object.userData.owner as number) : hit.object === T.editMesh ? s.editTriFace[hit.faceIndex] : s.triFace[hit.faceIndex];
-    return { face: faceById(owner), owner, point: hit.point.clone(), distance: hit.distance };
+    return { face: faceById(owner), owner, point: hit.point.clone(), distance: hit.distance, tri: hit.object === T.pickMesh ? hit.faceIndex : undefined };
   }
 
   /** A corner of loose geometry (or of the open group) under the cursor, for
@@ -1330,6 +1428,9 @@ export default function Viewport(props: Props) {
         else T.overlay.add(overlayMesh(hp, 0.1));
       }
     }
+    // Wall pull: the whole wall under the cursor, both sides, caps, top and bottom
+    const wl = st.current.wall;
+    if ((tool === "wallpull" || tool === "room") && wl?.plan && wl.scene === s && !st.current.op) T.overlay.add(overlayMesh(wallTriangles(wl.plan), 0.3));
     const he = st.current.hoverEdge;
     if (he != null) {
       const seg: number[] = [];
@@ -1349,12 +1450,49 @@ export default function Viewport(props: Props) {
     const g =
       L.tool === "plugin" && L.pluginTool
         ? { title: L.pluginTool.name, step: L.pluginTool.hint || "Click in the model.", keys: [["Esc", "leave the tool"]] as [string, string][] }
-        : guide(L.tool, { op: op?.t ?? null, stage, selected: selIds(selNow()).length, placing: L.placeAsset });
+        : guide(L.tool, { op: op?.t ?? null, stage, selected: selIds(selNow()).length, placing: L.placeAsset }, localeRef.current);
     const key = `${g.title}|${g.step}|${g.keys.length}`;
     if (key !== coachKey.current) {
       coachKey.current = key;
       setCoach(g);
     }
+  }
+
+  /** The triangles of a wall: its faces, plus the top and bottom strips (a ring's top is one face shared with the other walls). */
+  function wallTriangles(plan: WallPlan, offset?: THREE.Vector3): number[] {
+    const out = trianglesOf(new Set(plan.faces));
+    for (const q of plan.strips) for (const k of [0, 1, 2, 0, 2, 3]) out.push(...q[k]);
+    if (offset) {
+      for (let i = 0; i < out.length; i += 3) {
+        out[i] += offset.x;
+        out[i + 1] += offset.y;
+        out[i + 2] += offset.z;
+      }
+    }
+    return out;
+  }
+
+  /** Ask the engine what the wall under the cursor is (once per face; the answer is dropped when the model changes).
+   *  Over a wall's top (a plan view) the answer depends on where on it the cursor is, so it is asked again as the cursor moves. */
+  function lookAtWall(face: number | null, at?: THREE.Vector3) {
+    const cur = st.current.wall;
+    if (face == null || !at) {
+      if (cur) {
+        st.current.wall = null;
+        drawOverlay();
+      }
+      return;
+    }
+    const scene = sceneNow();
+    const top = Math.abs(faceById(face)?.normal[2] ?? 0) > 0.9;
+    if (cur?.face === face && cur.scene === scene && (!top || cur.at.distanceTo(at) < 0.15)) return;
+    st.current.wall = { face, plan: null, scene, at: at.clone() };
+    void exec({ cmd: "wall_info", face, at: arr(at) }).then((r) => {
+      const now = st.current.wall;
+      if (!now || now.face !== face || now.scene !== scene || now.at.distanceTo(at) > 1e-9) return;
+      st.current.wall = { ...now, plan: r.ok ? (r as unknown as WallPlan) : null };
+      drawOverlay();
+    });
   }
 
   /** What hovering this owner would select (a whole group, unless it's open). */
@@ -1403,6 +1541,8 @@ export default function Viewport(props: Props) {
   }
 
   function cancel() {
+    const was = st.current.op;
+    if (was?.t === "tpaint") void was.run.ready.then(() => tpRestore(was.run));
     st.current.op = null;
     st.current.lock = null;
     clearPreview();
@@ -1449,6 +1589,24 @@ export default function Viewport(props: Props) {
     const r = rect();
     const q = sn.p.clone().project(t.current!.camera);
     setHint({ x: (q.x * 0.5 + 0.5) * r.width, y: (-q.y * 0.5 + 0.5) * r.height, label: sn.label, kind: sn.kind });
+  }
+
+  /**
+   * Where a fixture or piece of furniture goes for this cursor: against a wall when one is within reach (turned to face
+   * away from it, back flush), else where the cursor is. Shift places it freely. Null: not a fixture.
+   */
+  function fixtureSpot(key: string | null, sn: Snap, free: boolean): { at: THREE.Vector3; rot: number; wall: boolean } | null {
+    const f = fixtureOf(key);
+    if (!f) return null;
+    const n = sn.face ? V(sn.face.normal) : UP;
+    const at = sn.p.clone();
+    // pointing at a wall itself: the floor at the foot of it, not up the wall
+    if (sn.face && Math.abs(n.z) < 0.5) at.z = Math.min(...sn.face.outer.map((q) => q[2]));
+    if (!free) {
+      const w = wallSnap(arr(at) as Vec3, sceneNow().faces, f.w / 2);
+      if (w) return { at: V(w.at), rot: w.rotate, wall: true };
+    }
+    return { at, rot: 0, wall: false };
   }
 
   function axisColor(sn: Snap): number {
@@ -1873,6 +2031,10 @@ export default function Viewport(props: Props) {
         if (!lens.length) return;
         op.d = lens[0];
         return void (await commitOffset());
+      case "wallpull":
+        if (!lens.length) return;
+        op.d = lens[0];
+        return void (await commitWallPull());
       case "tape": {
         const dir = op.cur.clone().sub(op.p0);
         if (dir.length() > 1e-9 && lens.length) await commitTape(op.p0.clone().addScaledVector(dir.normalize(), lens[0]));
@@ -1937,6 +2099,21 @@ export default function Viewport(props: Props) {
       return { origin: [o.x, o.y, o.z], normal: [p.normal.x, p.normal.y, p.normal.z] };
     },
     editCage: (id: number) => enterCage(id),
+    toClient: (p: Vec3) => {
+      const T = t.current!;
+      const r = T.renderer.domElement.getBoundingClientRect();
+      const q = V(p).project(T.camera);
+      return q.z > 1 || !Number.isFinite(q.x) ? null : ([r.left + ((q.x + 1) / 2) * r.width, r.top + ((1 - q.y) / 2) * r.height] as [number, number]);
+    },
+    rayAt: (clientX: number, clientY: number) => {
+      const o = ray({ clientX, clientY });
+      return { origin: [o.origin.x, o.origin.y, o.origin.z] as Vec3, dir: [o.direction.x, o.direction.y, o.direction.z] as Vec3 };
+    },
+    watchCamera: (cb: () => void) => {
+      const c = t.current!.controls;
+      c.addEventListener("change", cb);
+      return () => c.removeEventListener("change", cb);
+    },
     previousView: () => stepView(-1),
     setCamera,
     setSun,
@@ -2036,6 +2213,101 @@ export default function Viewport(props: Props) {
     await run({ cmd: "polygon", points: [op.a, op.b, op.b.clone().add(op.h), op.a.clone().add(op.h)].map(arr) });
   }
 
+  /** The brush radius in use: the setting, or one worked out from the size of the model. */
+  function brushRadius(): number {
+    const L = live.current;
+    return effectiveRadius(L.vpaint ?? DEFAULT_VPAINT, L.scene ? sceneDiagonal(L.scene) : 0);
+  }
+
+  /** Vertex Paint: the whole stroke goes as one command, so it is one undo step. */
+  async function commitVPaint() {
+    const op = st.current.op;
+    if (op?.t !== "vpaint") return;
+    st.current.op = null;
+    clearPreview();
+    const L = live.current;
+    const cmd = strokeCommand({ targets: op.targets, points: op.pts, color: L.color, radius: op.radius, settings: L.vpaint ?? DEFAULT_VPAINT, erase: op.erase });
+    if (cmd) await run(cmd);
+  }
+
+  /** The brush radius for Texture Paint (metres on the model). */
+  function tpRadius(): number {
+    const L = live.current;
+    return effectiveRadius({ radius: (L.tpaint ?? DEFAULT_TPAINT).radius, strength: 1, falloff: "smooth" }, L.scene ? sceneDiagonal(L.scene) : 0);
+  }
+
+  /** The material a picked triangle wears, if it has a picture. */
+  function tpMaterial(h: Pick): { name: string; tri: number } | null {
+    const s = live.current.scene;
+    if (!s?.triTex) return null;
+    const tri = h.tri != null && h.tri < s.triTex.length ? h.tri : s.triFace.indexOf(h.owner);
+    if (tri < 0 || s.triTex[tri] < 0) return null;
+    return { name: s.textures[s.triTex[tri]], tri };
+  }
+
+  /** Put the preview picture on the meshes that wear the material, and remember what they wore. */
+  function tpShow(run: TPaintRun, name: string) {
+    const T = t.current;
+    if (!T || !run.tex) return;
+    T.model.traverse((o) => {
+      if (o.userData.texName !== name) return;
+      const m = (o as THREE.Mesh).material as THREE.MeshLambertMaterial;
+      run.swapped.push({ m, map: m.map });
+      m.map = run.tex;
+      m.needsUpdate = true;
+    });
+  }
+
+  /** Give the meshes their own pictures back (a cancelled stroke). */
+  function tpRestore(run: TPaintRun) {
+    cancelAnimationFrame(run.frame);
+    for (const s of run.swapped) {
+      s.m.map = s.map;
+      s.m.needsUpdate = true;
+    }
+    run.swapped = [];
+    run.tex?.dispose();
+  }
+
+  /** Draw what the stroke has added since the last frame (at most once a frame). */
+  function tpFlush(run: TPaintRun) {
+    if (run.frame) return;
+    run.frame = requestAnimationFrame(() => {
+      run.frame = 0;
+      const p = run.painter;
+      const d = p?.takeDirty();
+      if (!p || !d || !run.canvas || !run.tex) return;
+      run.canvas.getContext("2d")!.putImageData(new ImageData(p.cur, p.w, p.h), 0, 0, d[0], d[1], d[2], d[3]);
+      run.tex.needsUpdate = true;
+    });
+  }
+
+  /** Texture Paint: the stroke goes as one command, so it is one undo step. */
+  async function commitTPaint() {
+    const op = st.current.op;
+    if (op?.t !== "tpaint") return;
+    st.current.op = null;
+    clearPreview();
+    const L = live.current;
+    const ok = await op.run.ready;
+    const cmd = ok ? stroke3DCommand({ material: op.mat, points: op.pts, radius: op.radius, color: L.color, settings: L.tpaint ?? DEFAULT_TPAINT, erase: op.erase }) : null;
+    if (!cmd) return void tpRestore(op.run);
+    const m = L.scene?.materials.find((x) => x.name === op.mat);
+    cancelAnimationFrame(op.run.frame);
+    op.run.frame = 0;
+    if (op.run.painter && op.run.canvas && op.run.tex) {
+      const p = op.run.painter;
+      op.run.canvas.getContext("2d")!.putImageData(new ImageData(p.cur, p.w, p.h), 0, 0);
+      op.run.tex.needsUpdate = true;
+      if (m?.texture) adoptPainted(op.mat, m.texture.data, op.run.tex);
+    }
+    const r = await run(cmd);
+    if (!r.ok || r.texels === 0) {
+      forgetPainted(op.mat);
+      tpRestore(op.run);
+    }
+  }
+
   async function commitFree() {
     const op = st.current.op;
     if (op?.t !== "free") return;
@@ -2069,6 +2341,94 @@ export default function Viewport(props: Props) {
     const d = r4(op.d);
     const r = await run({ cmd: "pushpull", face: op.face.id, distance: d });
     if (r.ok) st.current.last = { t: "push", face: op.face.id, d };
+  }
+
+  async function commitWallPull() {
+    const op = st.current.op;
+    if (op?.t !== "wallpull") return;
+    st.current.op = null;
+    st.current.wall = null;
+    clearPreview();
+    live.current.onMeasure("", "");
+    if (Math.abs(op.d) < 1e-3) return;
+    await run({ cmd: "wall_pull", face: op.face, by: r4(op.d) });
+  }
+
+  /** The dragged room: its wall lines, its inside, and its size and area (or why it can't go there). */
+  function drawRoomPreview(op: Extract<Op, { t: "room" }>) {
+    const T = t.current;
+    if (!T) return;
+    T.preview.children.forEach((c) => (c as THREE.Mesh).geometry?.dispose());
+    T.preview.clear();
+    const th = live.current.build.wallThickness;
+    const p = op.preview;
+    const bad = !!p && !p.ok;
+    const r = p?.ok && p.rect ? p.rect : [Math.min(op.a.x, op.b.x), Math.min(op.a.y, op.b.y), Math.max(op.a.x, op.b.x), Math.max(op.a.y, op.b.y)];
+    const ins = p?.ok && p.inside ? p.inside : [r[0] + th / 2, r[1] + th / 2, r[2] - th / 2, r[3] - th / 2];
+    const z = 0.01;
+    const color = bad ? 0xd64545 : ACCENT;
+    const rectLoop: [number, number][] = [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]];
+    // a combine / subtract shows its result: the new outline and its floor (an L, a notch...), not the dragged box
+    const result = p?.ok && p.target && p.mode && p.mode !== "new";
+    const loop = p?.ok && p.centre_outline ? p.centre_outline : rectLoop;
+    T.preview.add(polyline(loop.map(([x, y]) => new THREE.Vector3(x, y, z)), color, true));
+    if (result) T.preview.add(polyline(rectLoop.map(([x, y]) => new THREE.Vector3(x, y, z + 0.005)), color, true, true));
+    const q = (x: number, y: number) => [x, y, z];
+    const fill: Rect[] = p?.ok && p.outline ? fillRects(p.outline) : ins[2] > ins[0] && ins[3] > ins[1] ? [[ins[0], ins[1], ins[2], ins[3]]] : [];
+    for (const c of fill) T.preview.add(overlayMesh([...q(c[0], c[1]), ...q(c[2], c[1]), ...q(c[2], c[3]), ...q(c[0], c[1]), ...q(c[2], c[3]), ...q(c[0], c[3])], bad ? 0.35 : 0.25, color));
+    const w = Math.max(0, ins[2] - ins[0]);
+    const d = Math.max(0, ins[3] - ins[1]);
+    const lp = p?.ok && p.label ? p.label : [(r[0] + r[2]) / 2, (r[1] + r[3]) / 2];
+    const mid = new THREE.Vector3(lp[0], lp[1], z);
+    const loc = localeRef.current;
+    if (result && p?.target) {
+      const text = `${modeLabel(p.mode as RoomMode, p.target.name, translate(loc, roomModeKey(p.mode as RoomMode)))} · ${areaText(p.area ?? 0, units)}`;
+      setLive([{ p: mid, text }]);
+      live.current.onMeasure("Room", `${text}. ${translate(loc, p.mode === "subtract" ? "room.hint.subtract" : "room.hint.combine")}`);
+      return;
+    }
+    setLive([{ p: mid, text: dragLabel(w, d, units) }]);
+    if (bad) live.current.onMeasure("Can't draw a room here", p?.error ?? "");
+    else if (p?.shared?.length) live.current.onMeasure("Room", `${dragLabel(w, d, units)}, shares a wall with ${p.shared.map((s) => s.name ?? "a room").filter((x, i, a) => a.indexOf(x) === i).join(", ")}`);
+    else live.current.onMeasure("Room", `${dragLabel(w, d, units)}. ${translate(loc, "room.hint.over")}`);
+  }
+
+  /** The ground point under the mouse, snapped to the room grid (0.1 m, or 6 in). */
+  function groundCorner(e: { clientX: number; clientY: number }): THREE.Vector3 | null {
+    const q = ray(e).intersectPlane(new THREE.Plane(UP, 0), new THREE.Vector3());
+    if (!q) return null;
+    const step = gridStep(units);
+    return new THREE.Vector3(snapGrid(q.x, step), snapGrid(q.y, step), 0);
+  }
+
+  async function commitRoom() {
+    const op = st.current.op;
+    if (op?.t !== "room") return;
+    st.current.op = null;
+    clearPreview();
+    live.current.onMeasure("", "");
+    if (Math.abs(op.b.x - op.a.x) < 1e-6 && Math.abs(op.b.y - op.a.y) < 1e-6) return;
+    const b = live.current.build;
+    const r = await run({ cmd: "room_rect", from: arr(op.a), to: arr(op.b), thickness: b.wallThickness, height: b.wallHeight, mode: roomMode(op.alt) });
+    const gone = r.ok ? Number((r as unknown as { removed_openings?: number }).removed_openings ?? 0) : 0;
+    if (gone > 0) live.current.onToast(translate(localeRef.current, "room.openings_removed").replace("{n}", String(gone)), false);
+  }
+
+  /** A click on a wall in Room mode: a door or a window there (the same command the Place tool sends). */
+  async function placeOpening(plan: WallPlan, point: THREE.Vector3) {
+    const f = faceById(plan.face);
+    if (!f) return;
+    const n = V(plan.normal);
+    const base = Math.min(...f.outer.map((q) => q[2]));
+    const w = n.dot(V(f.outer[0]));
+    const kind = live.current.build.roomOpening;
+    const at = point.clone().addScaledVector(n, w - n.dot(point)); // onto the wall's face
+    at.z = kind === "door" ? base : Math.min(Math.max(point.z, base + 0.6), base + 1.6);
+    if (kind === "window" && Math.abs(point.z - base) < 0.05) at.z = base + 1.0;
+    const rot = THREE.MathUtils.radToDeg(Math.atan2(n.y, n.x)) + 90;
+    const r = await run({ cmd: "insert", asset: kind, at: arr(at), rotate: r4(rot), host: plan.face });
+    const op = r.ok ? (r.opening as { error?: string } | null | undefined) : null;
+    if (op?.error) live.current.onToast(`Placed, but no opening: ${op.error}`, true);
   }
 
   async function commitOffset() {
@@ -2324,6 +2684,54 @@ export default function Viewport(props: Props) {
       if (y.length() > 1e-6) T.preview.add(polyline([op.o, op.o.clone().addScaledVector(y.normalize(), len)], AXIS_COLORS[1]));
       return;
     };
+    /** Texture Paint: as Vertex Paint's brush circle, and every new point of the stroke is painted on the preview picture. */
+    const moveTPaint = ({ e, op }: { e: PointerEvent; op: Op | null }) => {
+      if (st.current.hover != null || st.current.hoverEdge != null) {
+        st.current.hover = null;
+        st.current.hoverEdge = null;
+        drawOverlay();
+      }
+      const h = pick(e);
+      const stroke = op?.t === "tpaint" ? op : null;
+      const radius = stroke ? stroke.radius : tpRadius();
+      if (!h) return;
+      if (stroke) {
+        const added = extendStroke(stroke.pts, arr(h.point), radius);
+        const p = stroke.run.painter;
+        if (p) {
+          for (const q of added) p.dab3D(stroke.run.tris, q, radius);
+          tpFlush(stroke.run);
+        }
+      }
+      const erase = stroke ? stroke.erase : e.altKey;
+      const color = erase ? 0xe5484d : new THREE.Color(live.current.color[0], live.current.color[1], live.current.color[2]).getHex();
+      const toCam = t.current!.camera.position.clone().sub(h.point).normalize();
+      T0().preview.add(polyline(ringPoints(arr(h.point), arr(toCam), radius).map((p) => V(p)), color, true));
+    };
+    /** Vertex Paint: the brush circle on the surface under the cursor; while dragging, the stroke grows by its points. */
+    const moveVPaint = ({ e, op }: { e: PointerEvent; op: Op | null }) => {
+      if (st.current.hover != null || st.current.hoverEdge != null) {
+        st.current.hover = null;
+        st.current.hoverEdge = null;
+        drawOverlay();
+      }
+      const h = pick(e);
+      const stroke = op?.t === "vpaint" ? op : null;
+      const radius = stroke ? stroke.radius : brushRadius();
+      if (!h) return;
+      if (stroke) {
+        stroke.erase = e.altKey;
+        const ent = entityOf(h);
+        if (!stroke.targets.includes(ent.id)) stroke.targets.push(ent.id);
+        extendStroke(stroke.pts, arr(h.point), radius);
+      }
+      const erase = stroke ? stroke.erase : e.altKey;
+      const color = erase ? 0xe5484d : new THREE.Color(live.current.color[0], live.current.color[1], live.current.color[2]).getHex();
+      // the ring faces the camera, so it reads as a circle on any surface
+      const toCam = t.current!.camera.position.clone().sub(h.point).normalize();
+      T0().preview.add(polyline(ringPoints(arr(h.point), arr(toCam), radius).map((p) => V(p)), color, true));
+      if (stroke && stroke.pts.length > 1) T0().preview.add(polyline(stroke.pts.map((p) => V(p)), color));
+    };
     const moveFree = ({ e, op }: MoveArgs<"free">) => {
       const q = ray(e).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(op.n, op.o), new THREE.Vector3());
       if (!q) return;
@@ -2406,6 +2814,48 @@ export default function Viewport(props: Props) {
       const mid = top.reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(top.length);
       setLive([{ p: mid, text: fmt(op.d) }]);
       L.onMeasure("Distance", fmt(op.d));
+      return;
+    };
+    const moveWallPull = ({ e, L, op }: MoveArgs<"wallpull">) => {
+      op.d = closestOnLine(ray(e), op.origin, op.n).sub(op.origin).dot(op.n);
+      op.dragged = true;
+      setHint(null);
+      // the wall slides to where it would go, and every joined wall's corner shows where it stretches to
+      const off = op.n.clone().multiplyScalar(op.d);
+      T.preview.add(overlayMesh(wallTriangles(op.plan, off), 0.3));
+      const seg: number[] = [];
+      for (const m of op.plan.moves) {
+        const a = V(m.at);
+        const b = a.clone().add(V(m.per_m).multiplyScalar(op.d));
+        seg.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      }
+      T.preview.add(lines(seg, ACCENT, false));
+      const first = op.plan.strips[0];
+      const mid = first ? first.map(V).reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(first.length).add(off) : op.origin.clone().add(off);
+      setLive([{ p: mid, text: fmt(op.d) }]);
+      L.onMeasure("Distance", fmt(op.d));
+      return;
+    };
+    const moveRoom = ({ e, L, op }: MoveArgs<"room">) => {
+      const c = groundCorner(e);
+      if (!c) return;
+      op.b = c;
+      setHint(null);
+      op.alt = e.altKey;
+      const mode = roomMode(op.alt);
+      const key = `${op.a.x},${op.a.y},${c.x},${c.y},${mode}`;
+      // ask the engine what the room would be here (snapped to a neighbour's wall, or refused), once per grid step
+      if (op.asked !== key && !op.pending) {
+        op.asked = key;
+        op.pending = true;
+        const th = live.current.build.wallThickness;
+        void exec({ cmd: "room_preview", from: arr(op.a), to: arr(c), thickness: th, mode }).then((r) => {
+          op.pending = false;
+          op.preview = r.ok ? (r as unknown as RoomPreview) : { ok: false, error: r.error };
+          if (st.current.op === op) drawRoomPreview(op);
+        });
+      }
+      drawRoomPreview(op);
       return;
     };
     const moveOffset = ({ e, L, op }: MoveArgs<"offset">) => {
@@ -2527,6 +2977,9 @@ export default function Viewport(props: Props) {
         return;
       }
 
+      if (L.tool === "vpaint") return moveVPaint({ e, op });
+      if (L.tool === "tpaint") return moveTPaint({ e, op });
+
       switch (op?.t) {
         case "box":
           return moveBox({ e, L: L as Live, E, op, lock });
@@ -2561,6 +3014,10 @@ export default function Viewport(props: Props) {
           return movePush({ e, L: L as Live, E, op, lock });
         case "offset":
           return moveOffset({ e, L: L as Live, E, op, lock });
+        case "wallpull":
+          return moveWallPull({ e, L: L as Live, E, op, lock });
+        case "room":
+          return moveRoom({ e, L: L as Live, E, op, lock });
         case "move":
           return moveMove({ e, L: L as Live, E, op, lock });
         case "rotate":
@@ -2570,12 +3027,27 @@ export default function Viewport(props: Props) {
       }
 
       // nothing in progress: show what a click would hit
-      if (["axes", "line", "freehand", "arc", "arccenter", "arc3", "pie", "rect", "rrect", "circle", "polygon", "tape", "dimension", "text", "move", "rotate", "scale", "place", "wall", "stairs", "column", "protractor"].includes(L.tool)) showSnap(infer(E, e, {}));
-      else setHint(null);
-      if (["select", "erase", "paint", "push", "offset", "followme", "section", "move", "rotate", "scale", "roof"].includes(L.tool)) {
+      if (["axes", "line", "freehand", "arc", "arccenter", "arc3", "pie", "rect", "rrect", "circle", "polygon", "tape", "dimension", "text", "move", "rotate", "scale", "place", "wall", "stairs", "column", "protractor"].includes(L.tool)) {
+        const sn = infer(E, e, {});
+        showSnap(sn);
+        // placing a fixture near a wall: say it will sit against it
+        const spot = L.tool === "place" ? fixtureSpot(L.placeAsset, sn, e.shiftKey) : null;
+        if (spot?.wall) {
+          const r = rect();
+          const q = spot.at.clone().project(t.current!.camera);
+          setHint({ x: (q.x * 0.5 + 0.5) * r.width, y: (-q.y * 0.5 + 0.5) * r.height, label: translate(localeRef.current, "fixtures.snapHint"), kind: "face" });
+        }
+      } else setHint(null);
+      if (["select", "erase", "paint", "push", "offset", "followme", "section", "move", "rotate", "scale", "roof", "wallpull", "room"].includes(L.tool)) {
         const he = ["select", "erase", "move"].includes(L.tool) ? pickEdge(e) : null;
         const h = he == null ? pick(e) : null;
         const id = h ? h.owner : null;
+        if (L.tool === "wallpull" || L.tool === "room") lookAtWall(h?.face ? h.owner : null, h?.point);
+        if (L.tool === "room") {
+          const c = groundCorner(e);
+          if (c && !h?.face) setHint({ ...toScreen2(c), label: "Corner", kind: "endpoint" });
+          else setHint(null);
+        }
         if (id !== st.current.hover || he !== st.current.hoverEdge) {
           st.current.hover = id;
           st.current.hoverEdge = he;
@@ -2750,6 +3222,39 @@ export default function Viewport(props: Props) {
       el.setPointerCapture(e.pointerId);
       return;
     };
+    const downWallPull = async ({ e, L, op }: DownArgs) => {
+      if (op?.t === "wallpull") return void (await commitWallPull()); // click-move-click
+      const h = pick(e);
+      if (!h?.face) return;
+      const r = await exec({ cmd: "wall_info", face: h.face.id, at: arr(h.point) });
+      if (!r.ok) return L.onToast(r.error ?? "That isn't a wall that can be pulled.", true);
+      const plan = r as unknown as WallPlan;
+      st.current.op = { t: "wallpull", face: plan.face, plan, origin: h.point.clone(), n: V(plan.normal), d: 0, dragged: false };
+      el.setPointerCapture(e.pointerId);
+      return;
+    };
+    const downRoom = async (args: DownArgs) => {
+      const { e, L, op } = args;
+      if (op?.t === "room") return void (await commitRoom()); // click, move, click
+      if (op) return void (await downWallPull(args));
+      // on a wall: drag it (Wall pull), or just click to add a door or window; on the ground: start a room
+      const h = pick(e);
+      if (h?.face) {
+        const r = await exec({ cmd: "wall_info", face: h.face.id, at: arr(h.point) });
+        if (r.ok) {
+          const plan = r as unknown as WallPlan;
+          if (!st.current.press) return void (await placeOpening(plan, h.point)); // already let go: it was a click
+          st.current.op = { t: "wallpull", face: plan.face, plan, origin: h.point.clone(), n: V(plan.normal), d: 0, dragged: false };
+          el.setPointerCapture(e.pointerId);
+          return;
+        }
+      }
+      const c = groundCorner(e);
+      if (!c) return;
+      st.current.op = { t: "room", a: c, b: c.clone(), preview: null, asked: "", pending: false, alt: e.altKey };
+      L.onMeasure("Room", "drag to size it");
+      return;
+    };
     const downOffset = async ({ e, op }: DownArgs) => {
       if (op?.t === "offset") return void (await commitOffset());
       const h = pick(e);
@@ -2920,11 +3425,72 @@ export default function Viewport(props: Props) {
       await run({ cmd: "column", at: arr(sn.p), size: b.columnSize, height: b.columnHeight, round: b.columnRound });
       return;
     };
+    const downVPaint = async ({ e }: DownArgs) => {
+      const h = pick(e);
+      if (!h) return;
+      const radius = brushRadius();
+      const pts: [number, number, number][] = [];
+      extendStroke(pts, arr(h.point), radius);
+      st.current.op = { t: "vpaint", targets: [entityOf(h).id], pts, radius, erase: e.altKey };
+      el.setPointerCapture(e.pointerId);
+    };
+    /** Texture Paint: press on a face that wears a picture; Cmd/Ctrl-click picks up the colour under the cursor. */
+    const downTPaint = async ({ e, L }: DownArgs) => {
+      const h = pick(e);
+      if (!h) return;
+      const hit = tpMaterial(h);
+      const m = hit ? L.scene.materials.find((x) => x.name === hit.name) : null;
+      if (!hit || !m?.texture) return L.onToast(translate(localeRef.current, "tp.noPicture"), true);
+      if (e.metaKey || e.ctrlKey) {
+        // eyedropper: the colour of the picture where the cursor is
+        const uv = uvAt(L.scene, hit.tri, arr(h.point));
+        if (!uv) return;
+        try {
+          const px = await decodePixels(m.texture.data);
+          L.setColor(sampleRgba(px.rgba, px.w, px.h, uv));
+        } catch {
+          L.onToast(translate(localeRef.current, "tp.noPicture"), true);
+        }
+        return;
+      }
+      const radius = tpRadius();
+      const pts: [number, number, number][] = [];
+      extendStroke(pts, arr(h.point), radius);
+      const run: TPaintRun = { painter: null, tris: [], canvas: null, tex: null, swapped: [], ready: Promise.resolve(false), frame: 0 };
+      const op: Extract<Op, { t: "tpaint" }> = { t: "tpaint", mat: hit.name, pts, radius, erase: e.altKey, run };
+      st.current.op = op;
+      el.setPointerCapture(e.pointerId);
+      const set = L.tpaint ?? DEFAULT_TPAINT;
+      const brush = { color: L.color, opacity: set.opacity, hardness: set.hardness, erase: e.altKey, base: m.color as [number, number, number] };
+      run.ready = decodePixels(m.texture.data).then(
+        (px) => {
+          if (st.current.op !== op && !op.pts.length) return false;
+          const painter = new Painter(px.rgba, px.w, px.h, brush);
+          run.painter = painter;
+          run.tris = trisOf(live.current.scene ?? L.scene, hit.name, px.w, px.h);
+          run.canvas = document.createElement("canvas");
+          run.canvas.width = px.w;
+          run.canvas.height = px.h;
+          run.canvas.getContext("2d")!.putImageData(new ImageData(painter.cur, px.w, px.h), 0, 0);
+          run.tex = new THREE.CanvasTexture(run.canvas);
+          run.tex.wrapS = run.tex.wrapT = THREE.RepeatWrapping;
+          run.tex.colorSpace = THREE.SRGBColorSpace;
+          run.tex.anisotropy = 8;
+          tpShow(run, hit.name);
+          // what was dragged while the picture was being read
+          for (const p of op.pts) painter.dab3D(run.tris, p, op.radius);
+          tpFlush(run);
+          return true;
+        },
+        () => false
+      );
+    };
     const downPaint = async ({ e, L }: DownArgs) => {
       const h = pick(e);
       if (!h) return;
-      if (e.altKey || e.metaKey) {
-        // eyedropper (Option on Windows-style keys, Cmd on Mac, as in SketchUp): a texture if the face has one, else its color
+      const reach = paintReach(e, isMac());
+      if (reach === "sample") {
+        // eyedropper (Alt on Windows and Linux, Cmd on Mac, as in SketchUp): a texture if the face has one, else its color
         const s = L.scene;
         const i = s.triFace.indexOf(h.owner);
         if (i >= 0 && s.triTex?.[i] >= 0) return L.setPaintMaterial(s.textures[s.triTex[i]]);
@@ -2936,14 +3502,9 @@ export default function Viewport(props: Props) {
       }
       const ent = entityOf(h);
       if (ent.kind === "instances") return L.onToast("Double-click a component with Select to open it, then paint inside.", true);
-      let targets = [ent.id];
-      if (e.shiftKey && ent.kind === "faces") {
-        // Shift: every face here that has the same material (SketchUp's Replace)
-        const s = L.scene;
-        const f0 = s.faces.find((f) => f.id === ent.id);
-        if (f0) targets = s.faces.filter((f) => f.group === f0.group && f.material === f0.material && !f.hidden).map((f) => f.id);
-      }
-      await run(L.paintMaterial ? { cmd: "paint", ids: targets, material: L.paintMaterial } : { cmd: "paint", ids: targets, color: L.color });
+      // Ctrl/Option: connected faces, the picture running on across edges; Shift: every matching face; Ctrl+Shift: the whole object
+      // (the engine works out the reach; it only applies to faces, a group is painted whole as before)
+      await run(paintCommand(ent.kind === "faces" ? reach : "face", ent.id, { material: L.paintMaterial, color: L.color }));
       return;
     };
     const downErase = async ({ e }: DownArgs) => {
@@ -2980,14 +3541,20 @@ export default function Viewport(props: Props) {
       const n = sn.face ? V(sn.face.normal) : UP;
       // doors and windows face out of the wall they're dropped on
       const wall = Math.abs(n.z) < 0.5;
-      const rot = wall ? THREE.MathUtils.radToDeg(Math.atan2(n.y, n.x)) + 90 : 0;
-      const at = sn.p.clone();
+      let rot = wall ? THREE.MathUtils.radToDeg(Math.atan2(n.y, n.x)) + 90 : 0;
+      let at = sn.p.clone();
       // doors stand on the bottom of the wall they're dropped on
       if (wall && sn.face && (L.placeAsset === "door" || L.placeAsset === "garage_door")) at.z = Math.min(...sn.face.outer.map((q) => q[2]));
       const k = L.placeAsset;
+      // fixtures and furniture: back against the nearest wall, one insert, one undo step
+      const spot = fixtureSpot(k, sn, e.shiftKey);
+      if (spot) {
+        at = spot.at;
+        rot = spot.rot;
+      }
       // a library file, a component already in the model, or a starter asset
       // dropped on a face: doors, windows (and components set to) cut their opening there
-      const host = wall && sn.face ? sn.face.id : undefined;
+      const host = wall && sn.face && !spot ? sn.face.id : undefined;
       let r: Reply;
       if (k.startsWith("file:")) r = await run({ cmd: "insert_file", path: k.slice(5), at: arr(at), rotate: r4(rot) });
       else if (k.startsWith("component:")) r = await run({ cmd: "place", component: Number(k.slice(10)), at: arr(at), rotate: r4(rot), host });
@@ -3061,7 +3628,7 @@ export default function Viewport(props: Props) {
       const sel = selNow();
       // remember the press: dragging and releasing finishes the shape (click-drag drawing)
       st.current.press = { x: e.clientX, y: e.clientY, fresh: !op };
-      if (["line", "rect", "circle", "polygon", "tape", "dimension", "move"].includes(L.tool)) el.setPointerCapture(e.pointerId);
+      if (["line", "rect", "circle", "polygon", "tape", "dimension", "move", "room"].includes(L.tool)) el.setPointerCapture(e.pointerId);
 
       switch (L.tool) {
         case "select":
@@ -3090,6 +3657,10 @@ export default function Viewport(props: Props) {
           return downPush({ e, L: L as Live, E, op, sel });
         case "offset":
           return downOffset({ e, L: L as Live, E, op, sel });
+        case "wallpull":
+          return downWallPull({ e, L: L as Live, E, op, sel });
+        case "room":
+          return downRoom({ e, L: L as Live, E, op, sel });
         case "followme":
           return downFollowme({ e, L: L as Live, E, op, sel });
         case "protractor":
@@ -3120,6 +3691,10 @@ export default function Viewport(props: Props) {
           return downColumn({ e, L: L as Live, E, op, sel });
         case "paint":
           return downPaint({ e, L: L as Live, E, op, sel });
+        case "vpaint":
+          return downVPaint({ e, L: L as Live, E, op, sel });
+        case "tpaint":
+          return downTPaint({ e, L: L as Live, E, op, sel });
         case "erase":
           return downErase({ e, L: L as Live, E, op, sel });
         case "section":
@@ -3188,7 +3763,15 @@ export default function Viewport(props: Props) {
         if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
         return void (await commitFree());
       }
-      if (el.hasPointerCapture(e.pointerId) && op?.t !== "push" && op?.t !== "box") el.releasePointerCapture(e.pointerId);
+      if (op?.t === "vpaint") {
+        if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+        return void (await commitVPaint());
+      }
+      if (op?.t === "tpaint") {
+        if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+        return void (await commitTPaint());
+      }
+      if (el.hasPointerCapture(e.pointerId) && op?.t !== "push" && op?.t !== "wallpull" && op?.t !== "box") el.releasePointerCapture(e.pointerId);
       if (press?.fresh && op && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 6) {
         // a press-drag-release: finish where the mouse let go
         if (op.t === "line") return void (await commitLine(op.cur));
@@ -3196,6 +3779,7 @@ export default function Viewport(props: Props) {
         if (op.t === "circle") return void (await commitCircle());
         if (op.t === "tape") return void (await commitTape(op.cur));
         if (op.t === "move") return void (await commitMove());
+        if (op.t === "room") return void (await commitRoom());
         if (op.t === "dim" && !op.b && op.cur.distanceTo(op.a) > 1e-4) {
           op.b = op.cur;
           return;
@@ -3210,6 +3794,24 @@ export default function Viewport(props: Props) {
         el.releasePointerCapture(e.pointerId);
         if (Math.abs(op.d) > 1e-3) await commitPush();
         else op.dragged = false;
+        return;
+      }
+      if (op?.t === "wallpull" && !op.dragged && press?.fresh && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 6) {
+        op.d = closestOnLine(ray(e), op.origin, op.n).sub(op.origin).dot(op.n);
+        op.dragged = true;
+      }
+      if (op?.t === "wallpull" && op.dragged) {
+        el.releasePointerCapture(e.pointerId);
+        if (Math.abs(op.d) > 1e-3) await commitWallPull();
+        else op.dragged = false;
+        return;
+      }
+      if (op?.t === "wallpull" && L.tool === "room" && !op.dragged) {
+        // in Room mode a click on a wall (no drag) adds a door or window, instead of the click-move-click pull
+        st.current.op = null;
+        st.current.wall = null;
+        clearPreview();
+        await placeOpening(op.plan, op.origin);
         return;
       }
       if (st.current.zoomY != null) {
@@ -3286,6 +3888,19 @@ export default function Viewport(props: Props) {
       if ((e.metaKey || e.ctrlKey) && (e.key === "[" || e.key === "]")) {
         e.preventDefault();
         stepView(e.key === "[" ? -1 : 1);
+        return;
+      }
+      if (live.current.tool === "tpaint" && !e.metaKey && !e.ctrlKey && (e.key === "[" || e.key === "]")) {
+        e.preventDefault();
+        const L = live.current;
+        L.setTPaint?.({ ...(L.tpaint ?? DEFAULT_TPAINT), radius: stepRadius(tpRadius(), e.key === "[" ? -1 : 1) });
+        return;
+      }
+      if (live.current.tool === "vpaint" && !e.metaKey && !e.ctrlKey && (e.key === "[" || e.key === "]")) {
+        // [ and ] make the brush smaller and bigger
+        e.preventDefault();
+        const L = live.current;
+        L.setVPaint?.({ ...(L.vpaint ?? DEFAULT_VPAINT), radius: stepRadius(brushRadius(), e.key === "[" ? -1 : 1) });
         return;
       }
       const ed = cageEd.current;
@@ -3400,7 +4015,7 @@ export default function Viewport(props: Props) {
           style={{ left: Math.min(box.x0, box.x1), top: Math.min(box.y0, box.y1), width: Math.abs(box.x1 - box.x0), height: Math.abs(box.y1 - box.y0) }}
         />
       )}
-      {placeAsset && tool === "place" && <div className="mode-pill">Placing {placeAsset.replace("_", " ")}. Click to drop, Esc when done.</div>}
+      {placeAsset && tool === "place" && <div className="mode-pill">Placing {fixtureOf(placeAsset) ? translate(language, `fixture.${placeAsset}`) : TEXTURING_SET.some((m) => m.key === placeAsset) ? translate(language, `texset.${placeAsset}`) : placeAsset.replace("_", " ")}. Click to drop, Esc when done.</div>}
     </div>
   );
 }

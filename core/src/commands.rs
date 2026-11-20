@@ -40,6 +40,10 @@ mod groups;
 mod library;
 mod media;
 mod paint;
+mod projection;
+mod texpaint;
+mod uv;
+mod vertex_paint;
 mod rendering;
 mod sections;
 mod session;
@@ -141,6 +145,7 @@ impl Command {
                 | Command::Save { .. }
                 | Command::ExportObj { .. }
                 | Command::ExportGlb { .. }
+                | Command::ExportFbx { .. }
                 | Command::ExportStl { .. }
                 | Command::ExportDae { .. }
                 | Command::ExportIfc { .. }
@@ -163,6 +168,15 @@ impl Command {
                 | Command::ExportDxf { .. }
                 | Command::ExportPdf { .. }
                 | Command::Assets
+                | Command::WallInfo { .. }
+                | Command::RoomPreview { .. }
+                | Command::Rooms
+                | Command::TextureUv { .. }
+                | Command::VertexColors { .. }
+                | Command::TextureFrame { .. }
+                | Command::UvInfo { .. }
+                | Command::TexturePaintStatus { .. }
+                | Command::TexturePixels { .. }
         )
     }
 }
@@ -990,7 +1004,9 @@ impl Engine {
                 Command::RaiseWalls { .. } | Command::DoorSwing { .. } | Command::TerrainFromContours { .. } |
                 Command::TerrainGrid { .. } | Command::Smoove { .. } | Command::Stamp { .. } |
                 Command::Drape { .. } | Command::Wall { .. } | Command::Stairs { .. } | Command::Roof { .. } |
-                Command::Column { .. } | Command::Insert { .. } | Command::Assets { .. }
+                Command::Column { .. } | Command::Insert { .. } | Command::Assets { .. } |
+                Command::WallPull { .. } | Command::WallInfo { .. } |
+                Command::RoomRect { .. } | Command::RoomPreview { .. } | Command::Rooms
             ) => self.run_build(c),
             c @ (
                 Command::BeginGroup { .. } | Command::EndGroup { .. } | Command::Group { .. } |
@@ -1012,6 +1028,10 @@ impl Engine {
                 Command::DeleteMaterial { .. } | Command::PurgeMaterials { .. } | Command::Skins { .. } |
                 Command::SaveSkin { .. } | Command::Material { .. }
             ) => self.run_paint(c),
+            c @ (Command::TextureProject { .. } | Command::TextureUv { .. } | Command::TexturePosition { .. } | Command::TextureFrame { .. }) => self.run_projection(c),
+            c @ (Command::UvSeam { .. } | Command::UvUnwrap { .. } | Command::UvPack { .. } | Command::UvLightmap { .. } | Command::UvSet { .. } | Command::UvTransform { .. } | Command::UvInfo { .. }) => self.run_uv(c),
+            c @ (Command::TexturePaintNew { .. } | Command::TexturePaintStroke { .. } | Command::TexturePaintStatus { .. } | Command::TexturePixels { .. }) => self.run_texpaint(c),
+            c @ (Command::VertexPaint { .. } | Command::VertexPaintClear { .. } | Command::VertexColors { .. }) => self.run_vertex_paint(c),
             c @ (
                 Command::Photoreal { .. } | Command::Render { .. } | Command::Environment { .. } |
                 Command::Sun { .. } | Command::AddLocation { .. } | Command::Thumbnail { .. } |
@@ -1029,7 +1049,7 @@ impl Engine {
                 Command::Finish { .. } | Command::Options { .. } | Command::Report { .. }
             ) => self.run_annotate(c),
             c @ (
-                Command::Save { .. } | Command::Open { .. } | Command::ExportGlb { .. } | Command::ExportStl { .. } |
+                Command::Save { .. } | Command::Open { .. } | Command::ExportGlb { .. } | Command::ExportFbx { .. } | Command::ExportStl { .. } |
                 Command::ImportDxf { .. } | Command::ImportDwg { .. } | Command::ExportDwg { .. } |
                 Command::ExportIfc { .. } | Command::ExportDae { .. } | Command::ExportDxf { .. } |
                 Command::ExportPdf { .. } | Command::ImportObj { .. } | Command::ImportSkp { .. } |
