@@ -6,6 +6,9 @@ What changed in each SketchCraft release, newest first. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Help › About links the website,** [trysketchcraft.com](https://trysketchcraft.com/), above the source code, license and changelog.
+
 ## [0.3.9] - 2026-11-20
 
 ### Added
