@@ -152,6 +152,20 @@ What changed in each SketchCraft release, newest first. The format follows
   ellipsis before it can crowd the menus. Wider windows look as before.
 - Security: hardened limits on texture painting, UV editing and texture export (WildLeopard).
 
+### Security
+- **WildLeopard review of 0.3.9.**
+  - Texture coordinates: UV and texture commands refuse numbers that aren't real numbers, so a
+    model you save always opens again.
+  - Texture painting: each stroke has a work budget, and painting keeps to the 4,096-pixel
+    picture limit; starting a paint texture no longer decodes every picture in the model.
+  - Work limits: packing UVs, painting across faces, vertex paint and joining many points in one
+    spot all have limits, so a very big model or a hostile command can't freeze the app.
+  - Size and undo: the texture, UV and vertex colour data on each face counts toward the model's
+    size, growth and undo limits.
+  - Export: texture files written beside an export can't overwrite each other after their names
+    are cleaned.
+  - Soften and edge style on a list of faces no longer slow down sharply on big models.
+
 ## [0.3.8] - 2026-11-18
 
 ### Added
@@ -360,6 +374,17 @@ What changed in each SketchCraft release, newest first. The format follows
   on a short window), each group of tools in rows, and the bar exactly as wide as its columns. The view bar
   and the quick-action strip move over to stay clear of it.
 
+### Security
+- **WildLeopard review of 0.3.8.**
+  - Sheets and tables: a table made by an agent or a plugin keeps to the same size limits as one
+    you draw, sheet data in a model file is checked when the file opens, and the number of
+    viewports on a sheet is limited.
+  - Rendering: picture and drawing sizes are checked before memory is set aside for them.
+  - Agents: text that comes from an opened file, such as names and labels, is marked as data in
+    an agent's replies, so a hostile file can't pass itself off as instructions.
+  - Batches of commands stop cleanly at their limits.
+  - Export: DXF and SVG files keep imported text as plain text.
+
 ## [0.3.7] - 2026-11-17
 
 ### Added
@@ -414,7 +439,7 @@ What changed in each SketchCraft release, newest first. The format follows
   never worked; it does now.
 
 ### Security
-- **Final pre-release pass.**
+- **WildLeopard review of 0.3.6.**
   - Plugins and agents: a plugin run that changes your model now says so
     ("Plugin X changed 3 things", with an Undo button), the Undo and Redo buttons
     say when the step is from a plugin, and when you open SketchCraft after an AI
@@ -438,14 +463,14 @@ What changed in each SketchCraft release, newest first. The format follows
     remembered Save path must end in `.sketchcraft`, the dev bridge deletes its token
     file when it stops, and the committed MCP setup holds no personal folder.
 
-- **Hardening after a red-team review.** Your model is safer: it's saved
+- **WildLeopard review of 0.3.6.** Your model is safer: it's saved
   atomically with rolling backups, a file that can't be read is kept aside
   instead of replaced, and a bad command can no longer corrupt it. Plugins
   (JavaScript and SketchUp Ruby) and AI agents are held to modeling commands, the
   plugin sandbox is tighter, installing a plugin shows what it is first, MCP
   agents work inside one folder, and the dev bridge needs a token. Updates and
   releases are checked more strictly, and releases publish SHA-256 checksums.
-- **A second review closed the gaps in that.** Undo no longer steps back over
+- **WildLeopard review of 0.3.6.** Undo no longer steps back over
   work another client (Claude, a second window) saved, and a burst of New/Open
   can't push your last good backup out (backups are thinned instead of dropped,
   blank ones are skipped). A plugin run is now one Undo step. Opening a huge or
@@ -454,7 +479,7 @@ What changed in each SketchCraft release, newest first. The format follows
   only the right kind of file with a new name (never over yours) and can't be
   steered out of their folder by an OBJ file. Plugin messages say which plugin
   they come from, and saved CSVs can't carry spreadsheet formulas.
-- **A third review.** Backups are safer: only SketchCraft's own backups are
+- **WildLeopard review of 0.3.6.** Backups are safer: only SketchCraft's own backups are
   counted, the newest of each time slot is kept, the copy taken just before a
   New, Open or big delete is kept for a day, and another model in the same folder
   can't thin yours. If another program saves while a plugin runs, or while your
@@ -468,7 +493,7 @@ What changed in each SketchCraft release, newest first. The format follows
   instead of freezing the app. The report CSV can't carry formulas, plugin tool
   previews can't crash the window, and a long Ruby script has a time limit.
 
-- **A fourth review.** Backups can no longer be pushed out: forced backups are paced,
+- **WildLeopard review of 0.3.6.** Backups can no longer be pushed out: forced backups are paced,
   your backups, an agent's and a plugin's each have their own small quota (with a byte
   limit too), a plugin run that wipes the model is backed up first, and the files set
   aside next to your model are only removed with a notice. Folder names such as
@@ -481,7 +506,7 @@ What changed in each SketchCraft release, newest first. The format follows
   own edits during a run are saved at once. The release workflow keeps the Apple
   secrets out of the job that compiles, and checks the file names it signs.
 
-- **A fifth review.** Undo after another program saved now works on ordinary models
+- **WildLeopard review of 0.3.6.** Undo after another program saved now works on ordinary models
   (it used to refuse most of the time once you had rotated, scaled or imported
   anything), carries your history across a save without a pause even on huge models,
   and keeps a step it had to refuse so it can be tried again (press Undo again to skip
@@ -496,7 +521,7 @@ What changed in each SketchCraft release, newest first. The format follows
   Plugins can no longer use Undo and Redo; the release workflow asks the `release`
   reviewer before the Apple signing secrets can be read.
 
-- **A sixth review.** One size limit now counts everything in a model (images, scans,
+- **WildLeopard review of 0.3.6.** One size limit now counts everything in a model (images, scans,
   names, notes, component attributes): about 512 MB of file, of which an AI agent or a
   plugin can take a model up to 160 MB, and no more than 32 MB at a time, so a runaway
   tool can no longer make your model unopenable. Models over the limits (made before
@@ -515,7 +540,7 @@ What changed in each SketchCraft release, newest first. The format follows
   map and terrain download (Add location…); it stays yours. Very large models (over a
   million points, edges and faces) say so: each change takes a second or more.
 
-- **A seventh review.** Models with parts inside parts (most SketchUp imports and
+- **WildLeopard review of 0.3.6.** Models with parts inside parts (most SketchUp imports and
   library parts) open, restore and reload again: the sixth review's consistency check
   wrongly refused them. A model with a very long text pool (hundreds of thousands of
   named placements) opens for cutting down instead of being refused, and an AI agent
@@ -527,7 +552,7 @@ What changed in each SketchCraft release, newest first. The format follows
   itself when the file can be read again or is moved, or when you choose New or Open.
   An agent's `open` and library reads have their own smaller size limits, and a
   large import now shows the big-model notice straight away.
-- **An eighth review.** A SketchUp file (or a saved model, or a library part) whose
+- **WildLeopard review of 0.3.6.** A SketchUp file (or a saved model, or a library part) whose
   components contain themselves, nest more than 64 levels deep or multiply into
   millions of faces (a part placed 10 times inside a part placed 10 times, and so on)
   used to crash the app, and could crash it again on every start. They are now refused
@@ -539,7 +564,7 @@ What changed in each SketchCraft release, newest first. The format follows
   seconds for any file), so a tiny booby-trapped file can't use up the computer's
   memory or freeze the app. A plugin tool that can't start now says so, and one that
   sends too many commands is stopped.
-- **A second look at the eighth review.** Double-click now works everywhere (it did
+- **WildLeopard review of 0.3.6.** Double-click now works everywhere (it did
   nothing in Windows and in browser builds): double-click finishes a wall, opens a
   group or component, selects a face with its edges (triple-click: everything
   connected), and repeats your last Push/Pull distance. Escape closes the Learn,
