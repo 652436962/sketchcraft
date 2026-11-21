@@ -83,6 +83,7 @@ fn open_url(url: &str) -> bool {
 /// The few pages the About and Help menus link to. The address is chosen here by name, never taken from the page.
 fn link_url(which: &str) -> Option<&'static str> {
     Some(match which {
+        "website" => "https://trysketchcraft.com/",
         "repo" => "https://github.com/jasonsutter87/sketchcraft",
         "license" => "https://github.com/jasonsutter87/sketchcraft/blob/main/LICENSE",
         "changelog" => "https://github.com/jasonsutter87/sketchcraft/blob/main/CHANGELOG.md",
@@ -141,6 +142,7 @@ mod tests {
         for k in ["repo", "license", "changelog", "issues"] {
             assert!(link_url(k).is_some_and(|u| u.starts_with("https://github.com/jasonsutter87/sketchcraft")), "{k}");
         }
+        assert_eq!(link_url("website"), Some("https://trysketchcraft.com/"));
         assert_eq!(link_url("https://example.com"), None);
         assert_eq!(link_url(""), None);
     }
