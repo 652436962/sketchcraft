@@ -40,6 +40,10 @@ mod groups;
 mod library;
 mod media;
 mod paint;
+mod projection;
+mod texpaint;
+mod uv;
+mod vertex_paint;
 mod rendering;
 mod sections;
 mod session;
@@ -141,6 +145,7 @@ impl Command {
                 | Command::Save { .. }
                 | Command::ExportObj { .. }
                 | Command::ExportGlb { .. }
+                | Command::ExportFbx { .. }
                 | Command::ExportStl { .. }
                 | Command::ExportDae { .. }
                 | Command::ExportIfc { .. }
@@ -163,6 +168,15 @@ impl Command {
                 | Command::ExportDxf { .. }
                 | Command::ExportPdf { .. }
                 | Command::Assets
+                | Command::WallInfo { .. }
+                | Command::RoomPreview { .. }
+                | Command::Rooms
+                | Command::TextureUv { .. }
+                | Command::VertexColors { .. }
+                | Command::TextureFrame { .. }
+                | Command::UvInfo { .. }
+                | Command::TexturePaintStatus { .. }
+                | Command::TexturePixels { .. }
         )
     }
 }
@@ -191,6 +205,10 @@ pub struct Engine {
     batch_last: Option<std::time::Instant>,
     /// counts batches, so an `end_batch` can say which one it means
     batch_seq: u64,
+    /// another client (the app, a plugin's run) was told to wait for an agent's batch and hasn't had its turn yet
+    turn_waiting: bool,
+    /// when an agent's batch last closed: while someone waits, the agent's next batch waits `BATCH_TURN` after it
+    agent_batch_ended: Option<std::time::Instant>,
     /// the model was opened with more geometry than the limit allows: it can be looked at and
     /// cut down, but nothing that adds geometry runs and it can't be saved until it is under
     pub oversize: bool,
@@ -245,6 +263,10 @@ pub const BATCH_IDLE_AGENT: std::time::Duration = std::time::Duration::from_secs
 /// A batch nobody closed (the app went away mid-run) is closed after this (a plugin run is
 /// limited to 60 s, a Ruby replay to the same).
 pub const BATCH_MAX: std::time::Duration = std::time::Duration::from_secs(150);
+
+/// Turn-taking: when another client was told to wait for an agent's batch, the agent's next batch can begin this long
+/// after its last one closed, so the one waiting gets in first. With nobody waiting, an agent begins batches freely.
+pub const BATCH_TURN: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// The biggest model file `open` and Restore read (a model in memory is several times its file's size).
 /// A model of the biggest size the program writes (`model::MAX_MODEL_BYTES`) is under this, with room: what the app
@@ -437,6 +459,13 @@ impl Engine {
     /// `begin_batch` and `end_batch` are checked in `session.rs`.
     fn batch_gate(&mut self, caller: &Caller, v: &Value) -> Result<(), String> {
         if self.batch.is_none() {
+            // the client that waited for an agent's batch has its turn once it changes something (or begins a batch)
+            if self.turn_waiting && !matches!(caller, Caller::Mcp(_)) {
+                let name = v.get("cmd").and_then(Value::as_str).unwrap_or("");
+                if name == "begin_batch" || serde_json::from_value::<Command>(v.clone()).is_ok_and(|c| c.mutates()) {
+                    self.turn_waiting = false;
+                }
+            }
             return Ok(());
         }
         let name = v.get("cmd").and_then(Value::as_str).unwrap_or("");
@@ -459,7 +488,10 @@ impl Engine {
             // the person's edit into a plugin's or an agent's batch: the host closes that batch first (see `Live`)
             (BatchKind::Plugin | BatchKind::Agent, BatchKind::App) => {}
             (BatchKind::App, _) => return Err("The app is in the middle of its own change; try again in a moment.".into()),
-            _ => return Err(format!("Another client's batch is open (a plugin run or an agent's changes); try again when it has finished (at the latest in {} s).", self.batch_left().as_secs().max(1))),
+            _ => {
+                self.turn_waiting |= self.batch_kind == BatchKind::Agent;
+                return Err(format!("Another client's batch is open (a plugin run or an agent's changes); try again when it has finished (at the latest in {} s).", self.batch_left().as_secs().max(1)));
+            }
         }
         self.batch_last = Some(std::time::Instant::now());
         Ok(())
@@ -499,6 +531,9 @@ impl Engine {
 
     /// Close a batch: everything since it began is ONE undo step.
     fn end_batch(&mut self) {
+        if self.batch.is_some() && self.batch_kind == BatchKind::Agent {
+            self.agent_batch_ended = Some(std::time::Instant::now());
+        }
         let who = self.batch_origin.take();
         if let Some((before, rev, _)) = self.batch.take() {
             if self.revision != rev {
@@ -588,6 +623,7 @@ impl Engine {
         let mut model = model;
         model.repair_ids();
         model.vet_pictures();
+        model.vet_face_data();
         model.vet_sheets();
         // a model over the size limits is restored for viewing and cutting down, like Open: the limits never block getting work back
         model.check_sane_with(false)?;
@@ -990,7 +1026,9 @@ impl Engine {
                 Command::RaiseWalls { .. } | Command::DoorSwing { .. } | Command::TerrainFromContours { .. } |
                 Command::TerrainGrid { .. } | Command::Smoove { .. } | Command::Stamp { .. } |
                 Command::Drape { .. } | Command::Wall { .. } | Command::Stairs { .. } | Command::Roof { .. } |
-                Command::Column { .. } | Command::Insert { .. } | Command::Assets { .. }
+                Command::Column { .. } | Command::Insert { .. } | Command::Assets { .. } |
+                Command::WallPull { .. } | Command::WallInfo { .. } |
+                Command::RoomRect { .. } | Command::RoomPreview { .. } | Command::Rooms
             ) => self.run_build(c),
             c @ (
                 Command::BeginGroup { .. } | Command::EndGroup { .. } | Command::Group { .. } |
@@ -1012,6 +1050,10 @@ impl Engine {
                 Command::DeleteMaterial { .. } | Command::PurgeMaterials { .. } | Command::Skins { .. } |
                 Command::SaveSkin { .. } | Command::Material { .. }
             ) => self.run_paint(c),
+            c @ (Command::TextureProject { .. } | Command::TextureUv { .. } | Command::TexturePosition { .. } | Command::TextureFrame { .. }) => self.run_projection(c),
+            c @ (Command::UvSeam { .. } | Command::UvUnwrap { .. } | Command::UvPack { .. } | Command::UvLightmap { .. } | Command::UvSet { .. } | Command::UvTransform { .. } | Command::UvInfo { .. }) => self.run_uv(c),
+            c @ (Command::TexturePaintNew { .. } | Command::TexturePaintStroke { .. } | Command::TexturePaintStatus { .. } | Command::TexturePixels { .. }) => self.run_texpaint(c),
+            c @ (Command::VertexPaint { .. } | Command::VertexPaintClear { .. } | Command::VertexColors { .. }) => self.run_vertex_paint(c),
             c @ (
                 Command::Photoreal { .. } | Command::Render { .. } | Command::Environment { .. } |
                 Command::Sun { .. } | Command::AddLocation { .. } | Command::Thumbnail { .. } |
@@ -1029,7 +1071,7 @@ impl Engine {
                 Command::Finish { .. } | Command::Options { .. } | Command::Report { .. }
             ) => self.run_annotate(c),
             c @ (
-                Command::Save { .. } | Command::Open { .. } | Command::ExportGlb { .. } | Command::ExportStl { .. } |
+                Command::Save { .. } | Command::Open { .. } | Command::ExportGlb { .. } | Command::ExportFbx { .. } | Command::ExportStl { .. } |
                 Command::ImportDxf { .. } | Command::ImportDwg { .. } | Command::ExportDwg { .. } |
                 Command::ExportIfc { .. } | Command::ExportDae { .. } | Command::ExportDxf { .. } |
                 Command::ExportPdf { .. } | Command::ImportObj { .. } | Command::ImportSkp { .. } |

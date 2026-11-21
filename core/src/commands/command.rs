@@ -89,6 +89,15 @@ pub enum Command {
         /// a material by name (an image material from `texture`)
         #[serde(default)]
         material: Option<String>,
+        /// how far from the given faces the paint spreads: "face" (default), "connected" (touching faces with the
+        /// same material, stopping at any other), "all" (every face in the group with that material) or "object"
+        /// (faces with that material anywhere on the connected mesh)
+        #[serde(default)]
+        scope: Option<String>,
+        /// lay a picture material across touching painted faces as one continuous sheet (always on for
+        /// "connected" and "object")
+        #[serde(default)]
+        through: bool,
     },
     /// Create or update an image material. `data` is a data: URL; `width` and
     /// `height` are meters per tile; `project` [x,y,z] projects it along a
@@ -324,6 +333,8 @@ pub enum Command {
     ExportObj { path: String },
     /// Binary glTF (.glb): Blender, three.js, game engines, Quick Look.
     ExportGlb { path: String },
+    /// FBX (.fbx): binary 7.4 by default (`binary` false writes ASCII); a model per group and placement, UVs, materials, textures beside it.
+    ExportFbx { path: String, #[serde(default)] binary: Option<bool> },
     /// Binary STL for 3D printing; `scale` 1000 gives millimeters.
     ExportStl { path: String, #[serde(default = "one")] scale: f64 },
     /// Animation through saved views (or a turntable): `path` .mp4/.mov
@@ -1290,6 +1301,48 @@ pub enum Command {
         #[serde(default)]
         closed: bool,
     },
+    /// Pull a whole wall (the one `face` is a side of) `by` metres along that face's outward normal (negative: back
+    /// the other way). Both sides move together so it keeps its thickness; its doors and windows ride along; walls
+    /// joined to it stretch or shrink to stay joined. Refused, with the model untouched, when it can't be done cleanly.
+    WallPull { face: Id, by: f64 },
+    /// What pulling the wall of `face` would involve: its faces, the pull direction, and each moving point's travel per
+    /// metre (the app previews with this). Read-only. A click on a wall's top (a plan view) gives a top face: pass the
+    /// point `at` and the wall side nearest to it is used.
+    WallInfo {
+        face: Id,
+        #[serde(default)]
+        at: Option<[f64; 3]>,
+    },
+    /// Room mode: a room dragged out from corner `from` to corner `to` (the wall centre lines, on the ground plane of
+    /// `from`): four walls and a floor in one group named "Room N" (on the tag "Rooms"; the walls on "Walls"). A side that
+    /// lines up with a neighbouring room's wall shares it instead of doubling it, a side within one wall thickness of a
+    /// neighbour's wall snaps onto it, and a room that would overlap another is refused with the model untouched.
+    RoomRect {
+        from: [f64; 3],
+        to: [f64; 3],
+        #[serde(default = "wall_t")]
+        thickness: f64,
+        #[serde(default = "wall_h")]
+        height: f64,
+        #[serde(default)]
+        name: Option<String>,
+        /// `new` (default): an overlap is refused. `combine`: join the room the box overlaps (outline = union).
+        /// `subtract`: cut the box out of the room it overlaps.
+        #[serde(default)]
+        mode: crate::room::RoomMode,
+    },
+    /// What `room_rect` would do for these corners, without doing it: the snapped rectangle, the inside size and area,
+    /// the rooms whose walls it would share, or why it would be refused. Read-only.
+    RoomPreview {
+        from: [f64; 3],
+        to: [f64; 3],
+        #[serde(default = "wall_t")]
+        thickness: f64,
+        #[serde(default)]
+        mode: crate::room::RoomMode,
+    },
+    /// The rooms in the model: name, inside rectangle, area (m²) and wall thickness. Read-only.
+    Rooms,
     /// A straight stair climbing `rise` along `direction` (degrees from +X).
     Stairs {
         at: [f64; 3],
@@ -1335,6 +1388,277 @@ pub enum Command {
     },
     /// List the built-in assets.
     Assets,
+    /// Projection mapping: lay a material's picture on faces (`faces`, or every face of the group `entity`) with a
+    /// projection: planar | box | cylinder | sphere, or `clear` to go back to the material's own placement.
+    /// `material` paints them with it first. `origin` [x,y,z]; `axis` [x,y,z] (planar: the direction the projector
+    /// shines; box, cylinder, sphere: the up axis); `scale` (size factor, 1); `rotation` (degrees); `fit` (cover the
+    /// selection once: default for cylinder and sphere). One undo step.
+    TextureProject {
+        #[serde(default)]
+        faces: Option<Vec<Id>>,
+        #[serde(default)]
+        entity: Option<Id>,
+        mode: String,
+        #[serde(default)]
+        material: Option<String>,
+        #[serde(default)]
+        origin: Option<[f64; 3]>,
+        #[serde(default)]
+        axis: Option<[f64; 3]>,
+        #[serde(default)]
+        scale: Option<f64>,
+        #[serde(default)]
+        rotation: Option<f64>,
+        #[serde(default)]
+        fit: Option<bool>,
+    },
+    /// The texture coordinates projection mapping gave these faces: per face, one [u, v] per corner of its outer loop
+    /// (null: the face has none). Read-only.
+    TextureUv { faces: Vec<Id> },
+    /// Vertex painting: one brush stroke on `faces` (or every face of the group `entity`). Every face corner within
+    /// `radius` metres of a stroke point (`points`, world [x,y,z]) blends toward `color` ([r,g,b] or [r,g,b,a], 0..1)
+    /// by `strength` (0..1, default 1) times the falloff (`smooth` default, `linear`, `hard`). Without `points` the whole
+    /// selection is filled. `erase` paints toward white (no tint) instead. One undo step.
+    VertexPaint {
+        #[serde(default)]
+        faces: Option<Vec<Id>>,
+        #[serde(default)]
+        entity: Option<Id>,
+        #[serde(default)]
+        color: Option<Vec<f32>>,
+        #[serde(default)]
+        points: Option<Vec<[f64; 3]>>,
+        #[serde(default)]
+        radius: Option<f64>,
+        #[serde(default)]
+        strength: Option<f64>,
+        #[serde(default)]
+        falloff: Option<String>,
+        #[serde(default)]
+        erase: bool,
+    },
+    /// Take vertex colours off faces (or every face of the group `entity`). One undo step.
+    VertexPaintClear {
+        #[serde(default)]
+        faces: Option<Vec<Id>>,
+        #[serde(default)]
+        entity: Option<Id>,
+    },
+    /// The vertex colours of these faces (or of a group or placed component: all its faces): per face, one [r,g,b,a] per corner of its outer loop (null: none). Read-only.
+    VertexColors { faces: Vec<Id> },
+    /// Position Texture: move, rotate, scale or skew the picture on faces (`face`, or `faces`). Either `transform`
+    /// ({offset [du, dv] metres, rotation degrees, scale n or [su, sv], skew degrees n or [along u, along v], pivot [u, v]
+    /// metres; default the face's middle}, applied in the picture's own plane), or `matrix` [a, b, c, d, e, f] (p' =
+    /// [a c; b d] p + [e f], picture metres), or `reset` (back to the material's own placement; with a transform or matrix too, the change is made from that placement). Rewrites the faces'
+    /// own texture coordinates, so it works on a painted-through or projected face alike. One undo step.
+    TexturePosition {
+        #[serde(default)]
+        face: Option<Id>,
+        #[serde(default)]
+        faces: Option<Vec<Id>>,
+        #[serde(default)]
+        transform: Option<TexTransform>,
+        #[serde(default)]
+        matrix: Option<[f64; 6]>,
+        #[serde(default)]
+        reset: bool,
+    },
+    /// What Position needs to draw its pins for one face: the corners' points, their picture-space coordinates (metres),
+    /// the tile size. Read-only.
+    /// `default`: as it would be after a reset (the material's own placement).
+    TextureFrame {
+        face: Id,
+        #[serde(default)]
+        default: bool,
+    },
+    /// Texture painting: make a paint texture (a new material with an embedded PNG, `size` pixels square, default 1024) and wear it
+    /// on `faces` (or the group `entity`). The faces need their own UVs that don't overlap and stay in 0..1; with `unwrap`
+    /// they are unwrapped first when they don't (otherwise the call is refused and says why). `base`: [r,g,b] 0..1 (default
+    /// white), or "material" to bake the faces' present picture or colour through the new UVs. `name`: the material's name.
+    /// One undo step.
+    TexturePaintNew {
+        #[serde(default)]
+        faces: Option<Vec<Id>>,
+        #[serde(default)]
+        entity: Option<Id>,
+        #[serde(default)]
+        size: Option<u32>,
+        #[serde(default)]
+        base: Option<serde_json::Value>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        unwrap: bool,
+    },
+    /// One brush stroke on a paint texture's pixels. Either `points` ([[x,y,z]...] world metres) with `radius` (metres): the brush
+    /// is projected in 3D onto the texels of `faces` / `entity` (default: every face wearing `material`), across UV seams; or
+    /// `uv_points` ([[u,v]...] tiles) with `uv_radius` (in tiles of the picture's width): painted straight on the picture.
+    /// `fill: true` paints every texel of the faces. `color` [r,g,b] 0..1; `hardness` 0..1 (default 0.5); `opacity` 0..1 (default 1);
+    /// `erase` paints back toward the material's base colour. The stroke's weight is the strongest dab, never a sum. One undo step.
+    TexturePaintStroke {
+        material: String,
+        #[serde(default)]
+        faces: Option<Vec<Id>>,
+        #[serde(default)]
+        entity: Option<Id>,
+        #[serde(default)]
+        points: Option<Vec<[f64; 3]>>,
+        #[serde(default)]
+        radius: Option<f64>,
+        #[serde(default)]
+        uv_points: Option<Vec<[f64; 2]>>,
+        #[serde(default)]
+        uv_radius: Option<f64>,
+        #[serde(default)]
+        fill: bool,
+        #[serde(default)]
+        color: Option<Vec<f32>>,
+        #[serde(default)]
+        hardness: Option<f64>,
+        #[serde(default)]
+        opacity: Option<f64>,
+        #[serde(default)]
+        erase: bool,
+    },
+    /// Can these faces be painted? Per the faces' own UVs: `without` (face ids with none), `overlap`, `outside` (leave 0..1), `paintable`. Read-only.
+    TexturePaintStatus {
+        #[serde(default)]
+        faces: Option<Vec<Id>>,
+        #[serde(default)]
+        entity: Option<Id>,
+    },
+    /// Read a block of a material's pixels: `x`, `y`, `w`, `h` (at most 4096 pixels; default the top-left 1 x 1) as [r,g,b,a] 0..255
+    /// rows, plus the picture's size and a `hash` of all its pixels. Read-only.
+    TexturePixels {
+        material: String,
+        #[serde(default)]
+        x: Option<u32>,
+        #[serde(default)]
+        y: Option<u32>,
+        #[serde(default)]
+        w: Option<u32>,
+        #[serde(default)]
+        h: Option<u32>,
+    },
+    /// Mark (`on`, default true) or clear UV seams. Either `edges`, or `auto` (degrees) with `faces` / `entity`: the edges
+    /// inside those faces whose faces meet at more than that angle. Seams are where an unwrap cuts. One undo step.
+    UvSeam {
+        #[serde(default)]
+        edges: Option<Vec<Id>>,
+        #[serde(default)]
+        faces: Option<Vec<Id>>,
+        #[serde(default)]
+        entity: Option<Id>,
+        #[serde(default)]
+        on: Option<bool>,
+        #[serde(default)]
+        auto: Option<f64>,
+    },
+    /// UV unwrap `faces` (or a group / placed component, `entity`): split into islands along seams (`seams`: "marked", the
+    /// default, or "auto": marked plus every hard edge past `angle`), flatten each island (`method`: "conformal" (default,
+    /// LSCM), "angle" (hard edges first, then LSCM), "planar_islands"), pack into 0..1 with `margin` (default 0.01).
+    /// `pins`: [[face, corner, u, v]...] hold those corners in place (two or more on an island). Writes `Face.uv`.
+    /// One undo step.
+    UvUnwrap {
+        #[serde(default)]
+        faces: Option<Vec<Id>>,
+        #[serde(default)]
+        entity: Option<Id>,
+        #[serde(default)]
+        method: Option<String>,
+        #[serde(default)]
+        seams: Option<String>,
+        #[serde(default)]
+        angle: Option<f64>,
+        #[serde(default)]
+        margin: Option<f64>,
+        #[serde(default)]
+        pins: Option<Vec<[f64; 4]>>,
+    },
+    /// Repack the islands of faces that already have UVs, as they are, as big as the sheet allows (`set`: 1, or 2 for the lightmap).
+    UvPack {
+        #[serde(default)]
+        faces: Option<Vec<Id>>,
+        #[serde(default)]
+        entity: Option<Id>,
+        #[serde(default)]
+        margin: Option<f64>,
+        #[serde(default)]
+        set: Option<u8>,
+    },
+    /// The lightmap UV channel (`Face.uv2`): an unwrap with no overlaps, packed into 0..1 with `margin` (default 0.02).
+    /// Exported as TEXCOORD_1 (glTF) and a second UV layer (FBX); never drawn. `clear: true` removes it.
+    UvLightmap {
+        #[serde(default)]
+        faces: Option<Vec<Id>>,
+        #[serde(default)]
+        entity: Option<Id>,
+        #[serde(default)]
+        margin: Option<f64>,
+        #[serde(default)]
+        angle: Option<f64>,
+        #[serde(default)]
+        clear: bool,
+    },
+    /// Set the UVs of faces: `uv` maps a face id to one [u, v] per corner (outer loop, then each hole), or to null to drop
+    /// them. `set` 1 (default) or 2 (lightmap). One undo step.
+    UvSet {
+        uv: std::collections::BTreeMap<String, Option<Vec<[f64; 2]>>>,
+        #[serde(default)]
+        set: Option<u8>,
+    },
+    /// Move UVs by an affine map (`matrix` [a, b, c, d, e, f]: p' = [a c; b d] p + [e f], in tiles) on `faces`; `vertices`
+    /// limits it to the corners at those model vertices. One undo step.
+    UvTransform {
+        faces: Vec<Id>,
+        #[serde(default)]
+        vertices: Option<Vec<Id>>,
+        matrix: [f64; 6],
+        #[serde(default)]
+        set: Option<u8>,
+    },
+    /// What the UV view draws for `faces` / `entity`: per face its corners' vertices and UVs, the island it belongs to, the
+    /// faces without UVs and the marked seams. Read-only.
+    UvInfo {
+        #[serde(default)]
+        faces: Option<Vec<Id>>,
+        #[serde(default)]
+        entity: Option<Id>,
+        #[serde(default)]
+        set: Option<u8>,
+    },
+}
+
+/// One number for both axes, or one per axis.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(untagged)]
+pub enum One2 {
+    One(f64),
+    Two([f64; 2]),
+}
+
+impl One2 {
+    pub fn pair(self) -> [f64; 2] {
+        match self {
+            One2::One(a) => [a, a],
+            One2::Two(p) => p,
+        }
+    }
+}
+
+/// The parts of a Position change; every part is optional.
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+pub struct TexTransform {
+    #[serde(default)]
+    pub offset: Option<[f64; 2]>,
+    #[serde(default)]
+    pub rotation: Option<f64>,
+    #[serde(default)]
+    pub scale: Option<One2>,
+    #[serde(default)]
+    pub skew: Option<One2>,
+    #[serde(default)]
+    pub pivot: Option<[f64; 2]>,
 }
 
 #[derive(Debug, Deserialize)]

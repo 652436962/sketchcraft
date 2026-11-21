@@ -38,6 +38,7 @@ impl Engine {
                 // ids from outside: the counter must be above every id in the file, or the next drawing overwrites something
                 opened.repair_ids();
                 opened.vet_pictures();
+                opened.vet_face_data();
                 let sheets_clamped = opened.vet_sheets();
                 if self.untrusted && opened.size_estimate() > crate::model::MAX_MODEL_BYTES_UNTRUSTED {
                     bail!("{path} is a model of about {} MB; an agent or a plugin can open models up to {} MB (the person can open larger ones)", opened.size_estimate() >> 20, crate::model::MAX_MODEL_BYTES_UNTRUSTED >> 20);
@@ -60,6 +61,10 @@ impl Engine {
                 v
             }
             Command::ExportGlb { path } => json!({"path": path, "triangles": export::write_glb(&self.model, &path)?}),
+            Command::ExportFbx { path, binary } => {
+                let r = crate::fbx_export::write_fbx(&self.model, &path, binary.unwrap_or(true))?;
+                json!({"path": path, "meshes": r.meshes, "triangles": r.triangles, "binary": binary.unwrap_or(true)})
+            }
             Command::ExportStl { path, scale } => json!({"path": path, "triangles": export::write_stl(&self.model, &path, scale)?}),
             Command::ImportDxf { path, text, units, at, name } => {
                 let text = match (text, &path) {
