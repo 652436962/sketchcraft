@@ -112,6 +112,7 @@ export default {
   "about.version": "Versione",
   "about.tagline": "Sempre gratis. Mai freemium. Mai a pagamento.",
   "about.promise": "È una promessa.",
+  "about.website": "Sito web: trysketchcraft.com",
   "about.github": "Codice sorgente su GitHub",
   "about.license": "Licenza MIT",
   "about.changelog": "Registro delle modifiche",

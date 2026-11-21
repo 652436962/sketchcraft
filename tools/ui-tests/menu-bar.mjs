@@ -395,7 +395,7 @@ const isMac = process.platform === 'darwin';
   const order = await dlg.locator('.about-head > *').evaluateAll((els) => els.map((e) => e.className));
   check(order.indexOf('about-name') < order.indexOf('about-tagline') && order.indexOf('about-tagline') < order.indexOf('about-promise'), 'in that order: name, tagline, promise');
   const links = await dlg.locator('.about-links a').evaluateAll((els) => els.map((e) => [e.textContent, e.getAttribute('href')]));
-  check(links.length === 3 && links.some(([, h]) => h === 'https://github.com/jasonsutter87/sketchcraft') && links.some(([, h]) => /LICENSE$/.test(h)) && links.some(([, h]) => /CHANGELOG\.md$/.test(h)), `it links the repository, the license and the changelog (${links.map((l) => l[0]).join(', ')})`);
+  check(links.length === 4 && links.some(([, h]) => h === 'https://trysketchcraft.com/') && links.some(([, h]) => h === 'https://github.com/jasonsutter87/sketchcraft') && links.some(([, h]) => /LICENSE$/.test(h)) && links.some(([, h]) => /CHANGELOG\.md$/.test(h)), `it links the website, the repository, the license and the changelog (${links.map((l) => l[0]).join(', ')})`);
   check((await dlg.getByRole('heading', { name: 'Thank you' }).count()) === 1, 'it has a Thank you section');
   const thanked = await dlg.locator('.about-thanks li').allInnerTexts();
   const { readContributors } = await import(path.join(ROOT, 'app/contributors.mjs'));

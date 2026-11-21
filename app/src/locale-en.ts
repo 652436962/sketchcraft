@@ -111,6 +111,7 @@ export default {
   "about.version": "Version",
   "about.tagline": "Always free. Never freemium. Never paid.",
   "about.promise": "It's a promise.",
+  "about.website": "Website: trysketchcraft.com",
   "about.github": "Source code on GitHub",
   "about.license": "MIT license",
   "about.changelog": "Changelog",
