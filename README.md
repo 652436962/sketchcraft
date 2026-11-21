@@ -168,4 +168,4 @@ What changed in each version: [CHANGELOG.md](CHANGELOG.md).
 MIT, see [LICENSE](LICENSE). SketchCraft is an independent, clean-room project.
 It is not affiliated with or endorsed by Trimble or SketchUp, or by ArtCraft.
 
-[![M8ven Score](https://m8ven.ai/badge/mcp/jasonsutter87-sketchcraft-1xpwc9?v=6c67d80421d7a08b4a053ea554cccf6f)](https://m8ven.ai/mcp/jasonsutter87-sketchcraft-1xpwc9?s=readme)
+[![M8ven Score](https://m8ven.ai/badge/mcp/jasonsutter87-sketchcraft-1xpwc9)](https://m8ven.ai/mcp/jasonsutter87-sketchcraft-1xpwc9?s=readme)
