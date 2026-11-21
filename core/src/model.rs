@@ -85,21 +85,97 @@ pub struct Face {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TexPlace {
     pub material: String,
+    #[serde(deserialize_with = "lenient::de3")]
     pub u: [f64; 3],
+    #[serde(deserialize_with = "lenient::de3")]
     pub v: [f64; 3],
+    #[serde(deserialize_with = "lenient::de3")]
     pub origin: [f64; 3],
+}
+
+impl TexPlace {
+    /// Every number finite and within `MAX_COORD` (a damaged file may hold others; see `Model::vet_face_data`).
+    pub fn sane(&self) -> bool {
+        self.u.iter().chain(&self.v).chain(&self.origin).all(|&x| sane(x))
+    }
+}
+
+/// Per-corner data (texture coordinates, vertex colours) is kept as f32: a value the model can hold is finite and
+/// within `MAX_COORD`.
+pub fn sane32(v: f32) -> bool {
+    v.is_finite() && (v as f64).abs() <= MAX_COORD
+}
+
+/// A texture coordinate worked out in f64, as the model keeps it (f32). Refused when it isn't a number or is out of
+/// range (a tiny projection scale or a huge transform can make one), so a model never holds one.
+pub fn uv32(p: [f64; 2]) -> Result<[f32; 2]> {
+    let q = [p[0] as f32, p[1] as f32];
+    if !sane32(q[0]) || !sane32(q[1]) {
+        bail!("that would put texture coordinates out of range (not a number, or more than {MAX_COORD:e} tiles), so it was not done");
+    }
+    Ok(q)
+}
+
+/// `uv32` for a whole loop of corners.
+pub fn uv32_ring(r: &[[f64; 2]]) -> Result<Vec<[f32; 2]>> {
+    r.iter().map(|p| uv32(*p)).collect()
+}
+
+/// Reading per-corner numbers from a file: a `null` (what JSON holds for a number that isn't one) is read as NaN instead
+/// of failing the whole file, so `Model::vet_face_data` can leave out just that face's data, with a notice.
+mod lenient {
+    use serde::{Deserialize, Deserializer};
+
+    fn nan_for_null<const N: usize>(a: [Option<f64>; N]) -> [f64; N] {
+        a.map(|x| x.unwrap_or(f64::NAN))
+    }
+
+    fn f32s<const N: usize>(a: [Option<f64>; N]) -> [f32; N] {
+        nan_for_null(a).map(|x| x as f32)
+    }
+
+    pub fn de3<'de, D: Deserializer<'de>>(d: D) -> Result<[f64; 3], D::Error> {
+        Ok(nan_for_null(<[Option<f64>; 3]>::deserialize(d)?))
+    }
+
+    pub fn ring2<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<[f32; 2]>, D::Error> {
+        Ok(Vec::<[Option<f64>; 2]>::deserialize(d)?.into_iter().map(f32s).collect())
+    }
+
+    pub fn rings2<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Vec<[f32; 2]>>, D::Error> {
+        Ok(Vec::<Vec<[Option<f64>; 2]>>::deserialize(d)?.into_iter().map(|r| r.into_iter().map(f32s).collect()).collect())
+    }
+
+    pub fn ring4<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<[f32; 4]>, D::Error> {
+        Ok(Vec::<[Option<f64>; 4]>::deserialize(d)?.into_iter().map(f32s).collect())
+    }
+
+    pub fn rings4<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Vec<[f32; 4]>>, D::Error> {
+        Ok(Vec::<Vec<[Option<f64>; 4]>>::deserialize(d)?.into_iter().map(|r| r.into_iter().map(f32s).collect()).collect())
+    }
 }
 
 /// Texture coordinates for a face's corners, in tiles (1 = one whole picture), v up the picture. One entry per vertex
 /// of each loop, in the loop's order. A face whose loops have changed size since ignores them.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct FaceUv {
+    #[serde(deserialize_with = "lenient::ring2")]
     pub outer: Vec<[f32; 2]>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "lenient::rings2")]
     pub holes: Vec<Vec<[f32; 2]>>,
 }
 
 impl FaceUv {
+    /// Every coordinate finite and within `MAX_COORD`.
+    pub fn sane(&self) -> bool {
+        self.outer.iter().chain(self.holes.iter().flatten()).flatten().all(|&x| sane32(x))
+    }
+
+    /// How many corners it holds.
+    pub fn corners(&self) -> usize {
+        self.outer.len() + self.holes.iter().map(Vec::len).sum::<usize>()
+    }
+
     /// Do the coordinates still fit the face's loops?
     pub fn fits(&self, f: &Face) -> bool {
         self.outer.len() == f.outer.len() && self.holes.len() == f.holes.len() && self.holes.iter().zip(&f.holes).all(|(a, b)| a.len() == b.len())
@@ -110,12 +186,23 @@ impl FaceUv {
 /// order. A face whose loops have changed size since ignores them.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct FaceColors {
+    #[serde(deserialize_with = "lenient::ring4")]
     pub outer: Vec<[f32; 4]>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "lenient::rings4")]
     pub holes: Vec<Vec<[f32; 4]>>,
 }
 
 impl FaceColors {
+    /// Every channel finite and within `MAX_COORD`.
+    pub fn sane(&self) -> bool {
+        self.outer.iter().chain(self.holes.iter().flatten()).flatten().all(|&x| sane32(x))
+    }
+
+    /// How many corners it holds.
+    pub fn corners(&self) -> usize {
+        self.outer.len() + self.holes.iter().map(Vec::len).sum::<usize>()
+    }
+
     /// Do the colours still fit the face's loops?
     pub fn fits(&self, f: &Face) -> bool {
         self.outer.len() == f.outer.len() && self.holes.len() == f.holes.len() && self.holes.iter().zip(&f.holes).all(|(a, b)| a.len() == b.len())
@@ -456,6 +543,24 @@ impl Face {
     pub fn loops(&self) -> impl Iterator<Item = &Vec<Id>> {
         std::iter::once(&self.outer).chain(self.holes.iter())
     }
+
+    /// Its per-corner data and painted-through placement hold only numbers the model can keep (see `sane`).
+    pub fn data_sane(&self) -> bool {
+        self.uv.as_ref().is_none_or(FaceUv::sane) && self.uv2.as_ref().is_none_or(FaceUv::sane) && self.vcol.as_ref().is_none_or(FaceColors::sane) && self.tex.as_ref().is_none_or(TexPlace::sane)
+    }
+
+    /// About how many bytes its texture coordinates, vertex colours and painted-through placement take in the file (on
+    /// the high side, like the rest of `Model::size_estimate`).
+    pub fn data_estimate(&self) -> usize {
+        let uv = |u: &FaceUv| 40 + 28 * u.corners() + 4 * u.holes.len();
+        self.uv.as_ref().map_or(0, uv) + self.uv2.as_ref().map_or(0, uv) + self.vcol.as_ref().map_or(0, |c| 40 + 52 * c.corners() + 4 * c.holes.len()) + self.tex.as_ref().map_or(0, |t| 300 + jl(&t.material))
+    }
+
+    /// About how many bytes the same take in memory (for the undo budget).
+    pub fn data_bytes(&self) -> usize {
+        let uv = |u: &FaceUv| 48 + 8 * u.corners() + 24 * u.holes.len();
+        self.uv.as_ref().map_or(0, uv) + self.uv2.as_ref().map_or(0, uv) + self.vcol.as_ref().map_or(0, |c| 48 + 16 * c.corners() + 24 * c.holes.len()) + self.tex.as_ref().map_or(0, |t| 96 + t.material.len())
+    }
     pub fn uses_edge(&self, a: Id, b: Id) -> bool {
         self.loops().any(|l| pairs(l).any(|(x, y)| (x == a && y == b) || (x == b && y == a)))
     }
@@ -482,6 +587,83 @@ impl Face {
                 h.reverse();
             }
         }
+    }
+}
+
+/// A vertex and where it is.
+type Placed = (Id, DVec3);
+
+/// Vertices by place and edges by their ends, for commands that add many of them: the answers are the ones `vertex_in`
+/// and `find_edge` give (the lowest id that fits), without going over the whole model each time. Ids only grow, so it
+/// takes in whatever was added since it last looked; nothing may be moved or removed while one is in use. One Lookup
+/// serves one command, which may look at only so many listed points in all (`LOOKS`).
+#[derive(Default)]
+pub(crate) struct Lookup {
+    vertices_to: Option<Id>,
+    /// each cell's points in id order, with where they are
+    cells: HashMap<(Option<Id>, [i64; 3]), Vec<Placed>>,
+    edges_to: Option<Id>,
+    ends: HashMap<(Id, Id), Id>,
+    looks: u64,
+}
+
+impl Lookup {
+    /// Cells a few times the weld distance across, so two points within it are at most one cell apart on each axis.
+    const CELL: f64 = 4.0 * WELD;
+
+    fn cell(p: DVec3) -> [i64; 3] {
+        (p / Self::CELL).floor().to_array().map(|x| x as i64)
+    }
+
+    fn after(last: Option<Id>) -> (std::ops::Bound<Id>, std::ops::Bound<Id>) {
+        use std::ops::Bound::*;
+        (last.map_or(Unbounded, Excluded), Unbounded)
+    }
+
+    /// How many listed points one command may look at in all. Points in ordinary models are far apart next to the
+    /// weld distance, so one search looks at a handful; this leaves room for millions of searches through dense spots.
+    const LOOKS: u64 = 1 << 26;
+
+    fn vertex(&mut self, m: &Model, p: DVec3, group: Option<Id>) -> Result<Option<Id>> {
+        for (&id, v) in m.vertices.range(Self::after(self.vertices_to)) {
+            self.cells.entry((v.group, Self::cell(v.p))).or_default().push((id, v.p));
+            self.vertices_to = Some(id);
+        }
+        let c = Self::cell(p);
+        let mut best: Option<Id> = None;
+        for dx in -1..=1i64 {
+            for dy in -1..=1i64 {
+                for dz in -1..=1i64 {
+                    let k = [c[0].saturating_add(dx), c[1].saturating_add(dy), c[2].saturating_add(dz)];
+                    let Some(list) = self.cells.get(&(group, k)) else { continue };
+                    // in id order: once past the best so far, nothing further in this cell can beat it
+                    let mut seen = 0u64;
+                    for &(id, q) in list {
+                        if best.is_some_and(|b| id >= b) {
+                            break;
+                        }
+                        seen += 1;
+                        if q.distance(p) < WELD {
+                            best = Some(id);
+                            break;
+                        }
+                    }
+                    self.looks += seen;
+                    if self.looks > Self::LOOKS {
+                        bail!("too many coincident points to weld; spread the copies apart or copy fewer at once");
+                    }
+                }
+            }
+        }
+        Ok(best)
+    }
+
+    fn edge(&mut self, m: &Model, a: Id, b: Id) -> Option<Id> {
+        for (&id, e) in m.edges.range(Self::after(self.edges_to)) {
+            self.ends.entry((e.a.min(e.b), e.a.max(e.b))).or_insert(id);
+            self.edges_to = Some(id);
+        }
+        self.ends.get(&(a.min(b), a.max(b))).copied().filter(|id| m.edges.get(id).is_some_and(|e| (e.a == a && e.b == b) || (e.a == b && e.b == a)))
     }
 }
 
@@ -516,6 +698,32 @@ impl Model {
         }
         let id = self.new_id();
         self.vertices.insert(id, Vertex { p, group });
+        id
+    }
+
+    /// `vertex_in` through `look`: the same vertex, found without going over every vertex.
+    pub(crate) fn vertex_with(&mut self, p: DVec3, group: Option<Id>, look: &mut Lookup) -> Result<Id> {
+        if let Some(id) = look.vertex(self, p, group)? {
+            return Ok(id);
+        }
+        let id = self.new_id();
+        self.vertices.insert(id, Vertex { p, group });
+        Ok(id)
+    }
+
+    /// `find_edge` through `look`.
+    pub(crate) fn find_edge_with(&self, a: Id, b: Id, look: &mut Lookup) -> Option<Id> {
+        look.edge(self, a, b)
+    }
+
+    /// `edge` through `look`: the same edge, found without going over every edge.
+    pub(crate) fn edge_with(&mut self, a: Id, b: Id, look: &mut Lookup) -> Id {
+        if let Some(id) = look.edge(self, a, b) {
+            return id;
+        }
+        let id = self.new_id();
+        let group = self.vertices[&a].group;
+        self.edges.insert(id, Edge { a, b, group, ..Default::default() });
         id
     }
 
@@ -725,6 +933,18 @@ impl Model {
         for l in face.loops().cloned().collect::<Vec<_>>() {
             for (a, b) in pairs(&l) {
                 self.edge(a, b);
+            }
+        }
+        let id = self.new_id();
+        self.faces.insert(id, face);
+        id
+    }
+
+    /// `insert_face` through `look`.
+    pub(crate) fn insert_face_with(&mut self, face: Face, look: &mut Lookup) -> Id {
+        for l in face.loops() {
+            for (a, b) in pairs(l) {
+                self.edge_with(a, b, look);
             }
         }
         let id = self.new_id();
@@ -1325,21 +1545,83 @@ impl Model {
                 }
             }
         }
+        if scope == "all" {
+            // every face of the seeds' groups that wears a seed's material: one pass, however many seeds
+            let keys: std::collections::HashSet<(Option<Id>, Option<&str>)> = seeds.iter().map(|s| (self.faces[s].group, self.faces[s].material.as_deref())).collect();
+            out.extend(self.faces.iter().filter(|(_, f)| !f.hidden && keys.contains(&(f.group, f.material.as_deref()))).map(|(&k, _)| k));
+            return Ok(out.into_iter().collect());
+        }
+        if scope == "object" {
+            // each connected piece is walked once, however many seeds (and materials) it holds; then every face of a
+            // seed's piece that wears that seed's material is kept
+            let mut piece: HashMap<Id, usize> = HashMap::new();
+            let mut members: Vec<Vec<Id>> = Vec::new();
+            let mut wanted: BTreeMap<usize, std::collections::HashSet<Option<&str>>> = BTreeMap::new();
+            for &s in &seeds {
+                let sf = &self.faces[&s];
+                let mat = sf.material.as_deref();
+                // a hidden seed is kept itself and reaches the pieces next to it
+                let starts: Vec<Id> = if sf.hidden {
+                    out.insert(s);
+                    let mut next = Vec::new();
+                    for l in sf.loops() {
+                        for (a, b) in pairs(l) {
+                            next.extend(by_edge.get(&(sf.group, a.min(b), a.max(b))).into_iter().flatten().copied());
+                        }
+                    }
+                    next
+                } else {
+                    vec![s]
+                };
+                for start in starts {
+                    let k = match piece.get(&start) {
+                        Some(&k) => k,
+                        None => {
+                            let k = members.len();
+                            let group = self.faces[&start].group;
+                            piece.insert(start, k);
+                            let mut all = vec![start];
+                            let mut todo = vec![start];
+                            while let Some(id) = todo.pop() {
+                                for l in self.faces[&id].loops() {
+                                    for (a, b) in pairs(l) {
+                                        for &n in by_edge.get(&(group, a.min(b), a.max(b))).into_iter().flatten() {
+                                            if let std::collections::hash_map::Entry::Vacant(v) = piece.entry(n) {
+                                                v.insert(k);
+                                                all.push(n);
+                                                todo.push(n);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            members.push(all);
+                            k
+                        }
+                    };
+                    wanted.entry(k).or_default().insert(mat);
+                }
+            }
+            for (k, mats) in &wanted {
+                out.extend(members[*k].iter().copied().filter(|id| mats.contains(&self.faces[id].material.as_deref())));
+            }
+            return Ok(out.into_iter().collect());
+        }
         for &s in &seeds {
-            let sf = &self.faces[&s];
-            let (group, mat) = (sf.group, sf.material.clone());
-            if scope == "all" {
-                out.extend(self.faces.iter().filter(|(_, f)| f.group == group && f.material == mat && !f.hidden).map(|(&k, _)| k));
+            // a seed already reached from an earlier one gives the same faces again (the walk stays in its group, and
+            // a face it kept wears the same material)
+            if out.contains(&s) {
                 continue;
             }
-            let through_other = scope == "object";
+            let sf = &self.faces[&s];
+            let (group, mat) = (sf.group, sf.material.clone());
             let mut seen: BTreeSet<Id> = BTreeSet::from([s]);
             let mut todo = vec![s];
             while let Some(id) = todo.pop() {
                 for l in self.faces[&id].loops() {
                     for (a, b) in pairs(l) {
                         for &n in by_edge.get(&(group, a.min(b), a.max(b))).into_iter().flatten() {
-                            if (through_other || self.faces[&n].material == mat) && seen.insert(n) {
+                            if self.faces[&n].material == mat && seen.insert(n) {
                                 todo.push(n);
                             }
                         }
@@ -1714,6 +1996,9 @@ impl Model {
         if !self.vertices.values().all(|v| sane3(v.p)) {
             return bad("a point");
         }
+        if let Some(id) = self.faces.iter().find(|(_, f)| !f.data_sane()).map(|(id, _)| *id) {
+            return bad(&format!("the texture coordinates or vertex colours of face {id}"));
+        }
         if !self.guides.iter().all(|g| sane3(g.p) && g.dir.is_none_or(sane3)) {
             return bad("a guide");
         }
@@ -1791,6 +2076,50 @@ impl Model {
             out.push(format!("and {more} more"));
         }
         out
+    }
+
+    /// Take out per-face data (texture coordinates, the second set, vertex colours, a painted-through placement) that
+    /// holds something that isn't a number or is out of range, which only a damaged file can hold (one written with
+    /// `null`s, say): those faces fall back to their material's own placement and colour, and the rest of the model
+    /// opens as it was. Components' models too. A notice says how many faces lost it.
+    pub fn vet_face_data(&mut self) {
+        let n = self.drop_bad_face_data();
+        if n > 0 {
+            crate::safety::note_skipped(&format!("{n} face{}", if n == 1 { "" } else { "s" }), "held texture coordinates or vertex colours that weren't numbers (a damaged file), so those were left out; the faces keep their material");
+        }
+    }
+
+    fn drop_bad_face_data(&mut self) -> usize {
+        let mut n = 0;
+        for f in self.faces.values_mut() {
+            if f.data_sane() {
+                continue;
+            }
+            n += 1;
+            if f.uv.as_ref().is_some_and(|u| !u.sane()) {
+                f.uv = None;
+            }
+            if f.uv2.as_ref().is_some_and(|u| !u.sane()) {
+                f.uv2 = None;
+            }
+            if f.vcol.as_ref().is_some_and(|c| !c.sane()) {
+                f.vcol = None;
+            }
+            if f.tex.as_ref().is_some_and(|t| !t.sane()) {
+                f.tex = None;
+            }
+        }
+        for d in self.definitions.values_mut() {
+            if !d.model.face_data_sane() {
+                n += std::sync::Arc::make_mut(&mut d.model).drop_bad_face_data();
+            }
+        }
+        n
+    }
+
+    /// Every face's per-corner data is sane, components' too.
+    fn face_data_sane(&self) -> bool {
+        self.faces.values().all(Face::data_sane) && self.definitions.values().all(|d| d.model.face_data_sane())
     }
 
     fn drop_oversize_pictures(&mut self) -> Vec<String> {
@@ -1879,7 +2208,7 @@ impl Model {
     /// which is why every command can afford it. The constants are on the high side of what the writer produces (a
     /// test compares them with real files), so the open limit has room over this limit.
     pub fn size_estimate(&self) -> usize {
-        let faces: usize = self.faces.values().map(|f| 80 + 10 * f.outer.len() + f.holes.iter().map(|h| 10 * h.len() + 4).sum::<usize>() + f.material.as_ref().map_or(0, |m| jl(m) + 4)).sum();
+        let faces: usize = self.faces.values().map(|f| 80 + 10 * f.outer.len() + f.holes.iter().map(|h| 10 * h.len() + 4).sum::<usize>() + f.material.as_ref().map_or(0, |m| jl(m) + 4) + f.data_estimate()).sum();
         let mats: usize = self.materials.iter().map(|(k, m)| jl(k) + 200 + m.texture.as_ref().map_or(0, |t| jl(&t.data) + 200)).sum();
         let clouds: usize = self.clouds.values().map(|c| jl(&c.name) + 128 + (4 * c.points.len() + c.colors.len()) * 4 / 3 + 8).sum();
         let views: usize = self.views.iter().map(|v| 320 + jl(&v.name) + v.photo.as_ref().map_or(0, |p| jl(p)) + v.style.as_ref().map_or(0, jsz) + v.tags.as_ref().map_or(0, |t| t.keys().map(|k| jl(k) + 12).sum()) + v.hidden.as_ref().map_or(0, |h| 12 * h.len())).sum();
@@ -2118,9 +2447,133 @@ impl Model {
     /// component geometry isn't counted, since undo steps share it).
     pub fn approx_bytes(&self) -> usize {
         let tex: usize = self.materials.values().map(|m| 64 + m.texture.as_ref().map_or(0, |t| t.data.len())).sum();
-        let faces: usize = self.faces.values().map(|f| 96 + 4 * (f.outer.len() + f.holes.iter().map(Vec::len).sum::<usize>())).sum();
+        let faces: usize = self.faces.values().map(|f| 96 + 4 * (f.outer.len() + f.holes.iter().map(Vec::len).sum::<usize>()) + f.data_bytes()).sum();
         let photos: usize = self.views.iter().map(|v| 160 + v.photo.as_ref().map_or(0, String::len)).sum();
         let clouds: usize = self.clouds.values().map(|c| 64 + 4 * c.points.len() + c.colors.len()).sum();
         self.text_bytes() + clouds + self.vertices.len() * 64 + self.edges.len() * 72 + faces + self.groups.len() * 96 + self.instances.len() * 200 + self.definitions.len() * 128 + tex + photos + self.annotations.len() * 120 + self.guides.len() * 80 + self.sheets.len() * 160 + self.sheet_items.len() * 160
+    }
+}
+
+#[cfg(test)]
+mod lookup_tests {
+    use super::*;
+
+    /// A small deterministic stream of numbers in 0..1.
+    fn stream(seed: u64) -> impl FnMut() -> f64 {
+        let mut s = seed;
+        move || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (s >> 11) as f64 / (1u64 << 53) as f64
+        }
+    }
+
+    #[test]
+    fn the_lookup_finds_the_vertex_and_edge_a_full_scan_finds() {
+        let mut m = Model::default();
+        let mut r = stream(7);
+        // points packed closer than the weld distance, in two groups and at large and small coordinates
+        let place = |r: &mut dyn FnMut() -> f64, k: usize| {
+            let base = [DVec3::ZERO, DVec3::splat(-3.0), DVec3::new(1e7, -2e6, 0.5)][k % 3];
+            base + DVec3::new(r(), r(), r()) * 6e-6
+        };
+        let mut look = Lookup::default();
+        for round in 0..4 {
+            for k in 0..300 {
+                let id = m.new_id();
+                let p = place(&mut r, k);
+                m.vertices.insert(id, Vertex { p, group: (k % 5 == 0).then_some(9) });
+            }
+            let ids: Vec<Id> = m.vertices.keys().copied().collect();
+            for k in 0..200 {
+                let (a, b) = (ids[(r() * ids.len() as f64) as usize], ids[(r() * ids.len() as f64) as usize]);
+                let id = m.new_id();
+                m.edges.insert(id, Edge { a, b, group: None, ..Default::default() });
+                if k % 3 == 0 {
+                    // the same ends again, and reversed
+                    let id = m.new_id();
+                    m.edges.insert(id, Edge { a: b, b: a, group: None, ..Default::default() });
+                }
+            }
+            for k in 0..2000 {
+                let p = place(&mut r, k);
+                let group = (k % 4 == 0).then_some(9);
+                let scan = m.vertices.iter().find(|(_, v)| v.group == group && v.p.distance(p) < WELD).map(|(&id, _)| id);
+                assert_eq!(look.vertex(&m, p, group).unwrap(), scan, "round {round} point {k}");
+                let (a, b) = (ids[(r() * ids.len() as f64) as usize], ids[(r() * ids.len() as f64) as usize]);
+                assert_eq!(look.edge(&m, a, b), m.find_edge(a, b));
+            }
+            // edges from the stream's earlier picks are found too
+            let some: Vec<(Id, Id)> = m.edges.values().map(|e| (e.a, e.b)).collect();
+            for (a, b) in some {
+                assert_eq!(look.edge(&m, b, a), m.find_edge(b, a));
+            }
+        }
+    }
+
+    /// `duplicate` of loose faces the plain way: a full scan for every corner and side.
+    fn duplicate_by_scan(m: &mut Model, ids: &[Id], by: DVec3) {
+        let mut map: HashMap<Id, Id> = HashMap::new();
+        for fid in ids {
+            let f = m.faces[fid].clone();
+            let mut remap = |m: &mut Model, l: &[Id]| -> Vec<Id> {
+                l.iter()
+                    .map(|v| {
+                        *map.entry(*v).or_insert_with(|| {
+                            let p = m.p(*v) + by;
+                            if by.length() < WELD {
+                                let id = m.new_id();
+                                m.vertices.insert(id, Vertex { p, group: f.group });
+                                id
+                            } else {
+                                m.vertex_in(p, f.group)
+                            }
+                        })
+                    })
+                    .collect()
+            };
+            let outer = remap(m, &f.outer);
+            let holes = f.holes.iter().map(|h| remap(m, h)).collect();
+            m.insert_face(Face { outer, holes, ..f.clone() });
+        }
+    }
+
+    fn tables(m: &Model) -> String {
+        serde_json::to_string(&(&m.vertices, &m.edges, &m.faces)).unwrap()
+    }
+
+    #[test]
+    fn copies_through_the_lookup_match_copies_by_full_scan() {
+        let mut r = stream(11);
+        for seed in 0..40 {
+            let mut a = Model::default();
+            // a few unit squares side by side, some in a group, each piled a few times in place
+            let mut faces = Vec::new();
+            for k in 0..4 {
+                let group = (k % 3 == 2).then_some(5);
+                let x = k as f64 + [0.0, 1e9 - 7.0, -12345.678][seed % 3];
+                let c = [DVec3::new(x, 0.0, 0.0), DVec3::new(x + 1.0, 0.0, 0.0), DVec3::new(x + 1.0, 1.0, 0.0), DVec3::new(x, 1.0, 0.0)];
+                let outer = c.iter().map(|p| a.vertex_in(*p, group)).collect();
+                faces.push(a.insert_face(Face { outer, group, ..Default::default() }));
+            }
+            let mut b = a.clone();
+            for step in 0..5 {
+                let pick: Vec<Id> = faces.iter().copied().filter(|_| r() < 0.7).collect();
+                let noise = [0.0, 1e-9, 0.999e-6, 1.001e-6, 1.5e-6, 3.999e-6, 4.001e-6][(r() * 7.0) as usize];
+                let by = match step % 3 {
+                    0 => DVec3::new(noise, 0.0, 0.0),
+                    1 => DVec3::new(1.0 + noise, -noise, 0.0),
+                    _ => DVec3::new(-noise, 1.0, noise),
+                };
+                let count = if step == 4 { 3 } else { 1 };
+                let new = if count > 1 { a.array(&pick, by, count).unwrap() } else { a.duplicate(&pick, by).unwrap() };
+                let before: BTreeSet<Id> = b.faces.keys().copied().collect();
+                for k in 1..=count {
+                    duplicate_by_scan(&mut b, &pick, by * k as f64);
+                }
+                assert_eq!(tables(&a), tables(&b), "seed {seed} step {step} by {by}");
+                assert_eq!(new, b.faces.keys().copied().filter(|f| !before.contains(f)).collect::<Vec<_>>());
+                faces.extend(new);
+            }
+        }
     }
 }

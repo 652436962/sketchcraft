@@ -355,8 +355,9 @@ impl Model {
         let lo = verts.iter().map(|v| self.p(*v)).fold(DVec3::splat(f64::MAX), |a, p| a.min(p));
         let mut def = Model::default();
         let mut map: HashMap<Id, Id> = HashMap::new();
+        let mut look = crate::model::Lookup::default();
         for v in &verts {
-            map.insert(*v, def.vertex_in(self.p(*v) - lo, None));
+            map.insert(*v, def.vertex_with(self.p(*v) - lo, None, &mut look)?);
         }
         for f in &faces {
             let face = &self.faces[f];
@@ -367,13 +368,13 @@ impl Model {
                     def.materials.insert(m.clone(), mat.clone());
                 }
             }
-            def.insert_face(Face { outer, holes, material: face.material.clone(), ..Default::default() });
+            def.insert_face_with(Face { outer, holes, material: face.material.clone(), ..Default::default() }, &mut look);
         }
         // carry soft edges over
         for e in self.edges.values() {
             if e.soft {
                 if let (Some(&a), Some(&b)) = (map.get(&e.a), map.get(&e.b)) {
-                    if let Some(id) = def.find_edge(a, b) {
+                    if let Some(id) = def.find_edge_with(a, b, &mut look) {
                         def.edges.get_mut(&id).unwrap().soft = true;
                     }
                 }
@@ -503,6 +504,7 @@ impl Model {
 
     pub fn soften(&mut self, ids: &[Id], soft: bool) -> Result<usize> {
         let mut n = 0;
+        let mut look = crate::model::Lookup::default();
         for id in ids {
             if let Some(e) = self.edges.get_mut(id) {
                 e.soft = soft;
@@ -511,7 +513,7 @@ impl Model {
                 // a face: soften its edges shared with coplanar neighbours
                 for l in f.loops() {
                     for (a, b) in crate::model::pairs(l) {
-                        if let Some(e) = self.find_edge(a, b) {
+                        if let Some(e) = self.find_edge_with(a, b, &mut look) {
                             self.edges.get_mut(&e).unwrap().soft = soft;
                             n += 1;
                         }

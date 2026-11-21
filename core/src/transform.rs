@@ -191,6 +191,10 @@ impl Model {
 
     /// Copy faces, groups or instances, offset by `by`. Returns the new ids.
     pub fn duplicate(&mut self, ids: &[Id], by: DVec3) -> Result<Vec<Id>> {
+        self.duplicate_with(ids, by, &mut crate::model::Lookup::default())
+    }
+
+    fn duplicate_with(&mut self, ids: &[Id], by: DVec3, look: &mut crate::model::Lookup) -> Result<Vec<Id>> {
         self.check_room(self.copy_cost(ids))?;
         let mut out = Vec::new();
         let mut loose = Vec::new();
@@ -211,27 +215,30 @@ impl Model {
         let mut map: HashMap<Id, Id> = HashMap::new();
         for fid in loose {
             let f = self.faces[&fid].clone();
-            let mut remap = |m: &mut Model, l: &[Id]| -> Vec<Id> {
+            let mut remap = |m: &mut Model, l: &[Id]| -> Result<Vec<Id>> {
                 l.iter()
                     .map(|v| {
-                        *map.entry(*v).or_insert_with(|| {
-                            let p = m.p(*v) + by;
-                            if by.length() < crate::model::WELD {
-                                // a copy in place (to rotate, or paste): its own
-                                // vertices, or moving it would drag the original
-                                let id = m.new_id();
-                                m.vertices.insert(id, crate::model::Vertex { p, group: f.group });
-                                id
-                            } else {
-                                m.vertex_in(p, f.group)
-                            }
-                        })
+                        if let Some(&id) = map.get(v) {
+                            return Ok(id);
+                        }
+                        let p = m.p(*v) + by;
+                        let id = if by.length() < crate::model::WELD {
+                            // a copy in place (to rotate, or paste): its own
+                            // vertices, or moving it would drag the original
+                            let id = m.new_id();
+                            m.vertices.insert(id, crate::model::Vertex { p, group: f.group });
+                            id
+                        } else {
+                            m.vertex_with(p, f.group, look)?
+                        };
+                        map.insert(*v, id);
+                        Ok(id)
                     })
                     .collect()
             };
-            let outer = remap(self, &f.outer);
-            let holes = f.holes.iter().map(|h| remap(self, h)).collect();
-            out.push(self.insert_face(Face { outer, holes, ..f.clone() }));
+            let outer = remap(self, &f.outer)?;
+            let holes = f.holes.iter().map(|h| remap(self, h)).collect::<Result<_>>()?;
+            out.push(self.insert_face_with(Face { outer, holes, ..f.clone() }, look));
         }
         Ok(out)
     }
@@ -245,8 +252,9 @@ impl Model {
         // by what is inside the ids, not how many ids there are
         self.check_room(self.copy_cost(ids).saturating_mul(count))?;
         let mut out = Vec::new();
+        let mut look = crate::model::Lookup::default();
         for k in 1..=count {
-            out.extend(self.duplicate(ids, by * k as f64)?);
+            out.extend(self.duplicate_with(ids, by * k as f64, &mut look)?);
         }
         Ok(out)
     }

@@ -6,7 +6,17 @@ What changed in each SketchCraft release, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.3.9] - 2026-11-20
+
 ### Added
+- **A SketchUp-like Classic look, and a right-click that always works.** New models start in a **Classic** style: a light
+  blue sky over a grey-green ground, thick dark profiles on outlines, thin dark edges elsewhere, no line weights, off-white
+  front faces and blue-grey backs. It is the first entry in **Style > Preset** (the earlier look is **Default**, and every
+  other preset is still there); the look you pick is remembered, and a saved scene keeps its own style.
+  Right-clicking now opens the context menu even when the mouse jitters, a touchpad two-finger tap raises only a
+  context-menu event, or the pointer is captured by the view; a real right-drag still pans. **Shift+F10** and the Menu key
+  open it for the current selection. The menu on a selection now always says **Make group** (it used to say
+  "Group these (nest them)" for groups).
 - **Texture painting.** **Tools > Texture Paint** paints straight onto a model's texture picture. Select faces (or a group),
   make a **New paint texture** (512, 1024 or 2048 pixels, starting from a flat colour or from what the faces look like now;
   if they have no UVs, or UVs that overlap, one click unwraps them first) and drag over the model: the brush reaches every
@@ -131,9 +141,11 @@ What changed in each SketchCraft release, newest first. The format follows
   as `wall_pull`. Italian wording for the new tool is welcome from Italian speakers.
 
 ### Fixed
+- On Linux, right-dragging to pan no longer opens the context menu, and clicking a submenu's name after hovering it no longer shuts it again.
 - **The top bar fits a 1366-pixel laptop screen.** On wider system fonts (Linux) the menus ran under the workspace
   switch at that width. The product name now steps aside below 1400 pixels, and a long file name is shortened with an
   ellipsis before it can crowd the menus. Wider windows look as before.
+- Security: hardened limits on texture painting, UV editing and texture export (WildLeopard).
 
 ## [0.3.8] - 2026-11-18
 
@@ -767,7 +779,8 @@ The first build with installers (never published as a release).
   import and export, and PNG renders with dimensions and labels.
 - Installers for macOS, Windows and Linux, and the CLI for each.
 
-[Unreleased]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.8...HEAD
+[Unreleased]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.9...HEAD
+[0.3.9]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/jasonsutter87/sketchcraft/compare/v0.3.5...v0.3.6
